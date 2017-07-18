@@ -1817,7 +1817,7 @@ from desktop.views import _ko
         self.lastOpenPanelType = ko.observable();
         self.apiHelper.withTotalStorage('assist', 'last.open.panel', self.lastOpenPanelType);
 
-        huePubSub.subscribeOnce('cluster.config.set.config', function (clusterConfig) {
+        huePubSub.subscribe('cluster.config.set.config', function (clusterConfig) {
           if (clusterConfig && clusterConfig['app_config']) {
             var panels = [];
             var appConfig = clusterConfig['app_config'];
