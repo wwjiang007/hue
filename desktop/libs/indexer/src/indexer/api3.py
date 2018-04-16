@@ -50,6 +50,11 @@ try:
 except ImportError, e:
   LOG.warn('Hive and HiveServer2 interfaces are not enabled')
 
+try:
+  from filebrowser.views import detect_parquet
+except ImportError, e:
+  LOG.warn('File Browser interfaces are not enabled')
+
 
 def _escape_white_space_characters(s, inverse = False):
   MAPPINGS = {
@@ -84,13 +89,17 @@ def guess_format(request):
       raise PopupException(_('Path %(path)s is not a file') % file_format)
 
     stream = request.fs.open(file_format["path"])
-    format_ = indexer.guess_format({
-      "file": {
-        "stream": stream,
-        "name": file_format['path']
-      }
-    })
-    _convert_format(format_)
+    if detect_parquet(stream):
+      format_ = {"type": "parquet", "fieldSeparator": "", "hasHeader": False, "quoteChar": "", "recordSeparator": ""}
+    else:
+      stream.seek(0)
+      format_ = indexer.guess_format({
+        "file": {
+          "stream": stream,
+          "name": file_format['path']
+        }
+      })
+      _convert_format(format_)
   elif file_format['inputFormat'] == 'table':
     db = dbms.get(request.user)
     try:
