@@ -28,6 +28,7 @@ from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.i18n import smart_unicode
 from desktop.models import Document2
 from librdbms.server import dbms as rdbms
+from libsentry.conf import is_enabled
 from notebook.connectors.base import get_api, Notebook
 from notebook.decorators import api_error_handler
 from notebook.models import make_notebook, MockedDjangoRequest, escape_rows
@@ -87,8 +88,10 @@ def guess_format(request):
     indexer = MorphlineIndexer(request.user, request.fs)
     if not request.fs.isfile(file_format["path"]):
       raise PopupException(_('Path %(path)s is not a file') % file_format)
-    # If using Sentry and parent dir not writable
-    # add flag alert that parent is not 777
+    if is_enabled():
+      parent_path = request.fs.parent_path(file_format["path"])
+      if request.fs.stats(parent_path)["mode"] & 0700 != 0700:
+        print 'not good ' + parent_path
 
     stream = request.fs.open(file_format["path"])
     if detect_parquet(stream):
