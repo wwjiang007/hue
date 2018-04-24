@@ -1826,11 +1826,6 @@ ${ assist.assistPanel() }
         return self.outputFormat() == 'table' && self.name().indexOf('.') > 0 ? self.name().split('.', 2)[0] : (self.name() !== '' ? self.name() : 'default');
       });
       self.tableFormat = ko.observable('text');
-      self.tableFormat.subscribe(function(newVal) {
-        if (newVal == 'kudu' && self.kuduPartitionColumns().length == 0) {
-          self.kuduPartitionColumns.push(ko.mapping.fromJS(self.KUDU_DEFAULT_PARTITION_COLUMN));
-        }
-      });
       self.KUDU_DEFAULT_RANGE_PARTITION_COLUMN = {values: [{value: ''}], name: 'VALUES', lower_val: 0, include_lower_val: '<=', upper_val: 1, include_upper_val: '<='};
       self.KUDU_DEFAULT_PARTITION_COLUMN = {columns: [], range_partitions: [self.KUDU_DEFAULT_RANGE_PARTITION_COLUMN], name: 'HASH', int_val: 16};
 
@@ -1981,7 +1976,7 @@ ${ assist.assistPanel() }
         );
         var isTargetAlreadyExisting = ! self.destination.isTargetExisting() || self.destination.outputFormat() == 'index';
         var isValidTable = self.destination.outputFormat() != 'table' || (
-          self.destination.tableFormat() != 'kudu' || (self.destination.kuduPartitionColumns().length > 0 &&
+          self.destination.tableFormat() != 'kudu' || (
               $.grep(self.destination.kuduPartitionColumns(), function(partition) { return partition.columns().length > 0 }).length == self.destination.kuduPartitionColumns().length && self.destination.primaryKeys().length > 0)
         );
         var validIndexFields = self.destination.outputFormat() != 'index' || ($.grep(self.destination.columns(), function(column) {
