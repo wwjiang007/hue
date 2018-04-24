@@ -360,7 +360,7 @@ ${ assist.assistPanel() }
                 </label>
   
                 <label class="control-label"><div>${ _('Password') }</div>
-                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.publicStreamsPassword">
+                  <input type="password" class="input-xxlarge" data-bind="value: createWizard.source.publicStreamsPassword">
                 </label>
   
                 <label class="control-label"><div>${ _('Token') }</div>
@@ -374,6 +374,12 @@ ${ assist.assistPanel() }
                 <label class="control-label"><div>${ _('Object') }</div>
                   <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.publicStreamsObject">
                 </label>
+              </div>
+
+              <div class="control-group">
+                <button class="btn" data-bind="click: createWizard.source.publicStreamsCheckConnection">
+                  ${_('Test')}
+                </button>
               </div>
             <!-- /ko -->
           <!-- /ko -->
@@ -1499,10 +1505,10 @@ ${ assist.assistPanel() }
         $.post("${ url('indexer:get_db_component') }", {
           "source": ko.mapping.toJSON(self)
         }, function (resp) {
-          if(resp.status == 0 && resp.data) {
+          if (resp.status == 0 && resp.data) {
             self.rdbmsDbIsValid(true);
             self.rdbmsDatabaseNames(resp.data);
-          } else if(resp.status == 1) {
+          } else if (resp.status == 1) {
             $(document).trigger("error", "${ _('Connection Failed: ') }" + resp.message);
             self.rdbmsDbIsValid(false);
           }
@@ -1560,6 +1566,18 @@ ${ assist.assistPanel() }
       self.publicStreamsToken = ko.observable('');
       self.publicStreamsEndpointUrl = ko.observable('');
       self.publicStreamsObject = ko.observable('');
+      self.publicStreamsCheckConnection = function() {
+        $.post("${ url('indexer:get_db_component') }", {
+          "source": ko.mapping.toJSON(self)
+        }, function (resp) {
+          if (resp.status == 0 && resp.data) {
+            huePubSub.publish('notebook.task.submitted', resp.history_uuid);
+          } else if (resp.status == 1) {
+            $(document).trigger("error", "${ _('Connection Failed: ') }" + resp.message);
+            self.rdbmsDbIsValid(false);
+          }
+        });
+      };
 
 
       self.format = ko.observable();
