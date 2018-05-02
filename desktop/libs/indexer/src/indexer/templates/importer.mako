@@ -208,7 +208,7 @@ ${ assist.assistPanel() }
         <div>
           <div class="control-group" data-bind="visible: createWizard.prefill.target_type().length == 0 || createWizard.prefill.source_type() == 'all'">
             <label for="sourceType" class="control-label"><div>${ _('Type') }</div>
-              <select id="sourceType" data-bind="selectize: createWizard.source.inputFormats, value: createWizard.source.inputFormat, optionsText: 'name', optionsValue: 'value'"></select>
+              <select id="sourceType" data-bind="selectize: createWizard.source.inputFormats, value: createWizard.source.inputFormat, optionsText: 'name', optionsValue: 'value', selectizeOptions: { dropdownParent: 'body' }"></select>
             </label>
           </div>
           <div class="control-group" data-bind="visible: createWizard.source.inputFormat() == 'rdbms'">
