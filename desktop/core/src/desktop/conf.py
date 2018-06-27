@@ -815,6 +815,16 @@ SASL_MAX_BUFFER = Config(
   type=int
 )
 
+ENABLE_SMART_THRIFT_POOL = Config(
+  key="enable_smart_thrift_pool",
+  help=_("Hue will try to get the actual host of the Service, even if it resides behind a load balancer. "
+         "This will enable an automatic configuration of the service without requiring custom configuration of the service load balancer. "
+         "This is available for the Impala service only currently. It is highly recommended to only point to a series of coordinator-only nodes only."),
+  type=coerce_bool,
+  default=False
+)
+
+
 # See python's documentation for time.tzset for valid values.
 TIME_ZONE = Config(
   key="time_zone",
@@ -1255,6 +1265,109 @@ OAUTH = ConfigSection(
   )
 )
 
+OIDC = ConfigSection(
+  key='oidc',
+  help=_('Configuration options for OpenID Connect authentication'),
+  members=dict(
+    OIDC_RP_CLIENT_ID = Config(
+      key="oidc_rp_client_id",
+      help=_("The client ID as relay party set in OpenID provider."),
+      type=str,
+      default="XXXXXXXXXXXXXXXXXXXXX"
+    ),
+
+    OIDC_RP_CLIENT_SECRET = Config(
+      key="oidc_rp_client_secret",
+      help=_("The client secret as relay party set in OpenID provider."),
+      type=str,
+      default="XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    ),
+
+    OIDC_OP_AUTHORIZATION_ENDPOINT = Config(
+      key="oidc_op_authorization_endpoint",
+      help=_("The OpenID provider authoriation endpoint."),
+      type=str,
+      default="https://keycloak.example.com/auth/realms/Cloudera/protocol/openid-connect/auth"
+    ),
+
+    OIDC_OP_TOKEN_ENDPOINT = Config(
+      key="oidc_op_token_endpoint",
+      help=_("The OpenID provider token endpoint."),
+      type=str,
+      default="https://keycloak.example.com/auth/realms/cloudera/protocol/openid-connect/token"
+    ),
+
+    AUTHENTICATE_URL = Config(
+      key="authenticate_url",
+      help=_("The Authorize URL."),
+      type=str,
+      default="https://api.twitter.com/oauth/authorize"
+    ),
+
+    OIDC_OP_USER_ENDPOINT=Config(
+      key="oidc_op_user_endpoint",
+      help=_("The OpenID provider user info endpoint."),
+      type=str,
+      default="https://keycloak.example.com/auth/realms/cloudera/protocol/openid-connect/userinfo"
+    ),
+
+    OIDC_RP_IDP_SIGN_KEY=Config(
+      key="oidc_rp_idp_sign_key",
+      help=_("The OpenID provider signing key in PEM or DER format."),
+      type=str,
+      default=None
+    ),
+
+    OIDC_OP_JWKS_ENDPOINT=Config(
+      key="oidc_op_jwks_endpoint",
+      help=_("The OpenID provider authoriation endpoint."),
+      type=str,
+      default="https://keycloak.example.com/auth/realms/Cloudera/protocol/openid-connect/certs"
+    ),
+
+    OIDC_VERIFY_SSL=Config(
+      key="oidc_verify_ssl",
+      help=_("Whether Hue as OpenID Connect client verify SSL cert."),
+      type=coerce_bool,
+      default=False
+    ),
+
+    LOGIN_REDIRECT_URL=Config(
+      key="login_redirect_url",
+      help=_("As relay party Hue URL path to redirect to after login."),
+      type=str,
+      default="https://localhost:8888/oidc/callback/"
+    ),
+
+    LOGOUT_REDIRECT_URL=Config(
+      key="logout_redirect_url",
+      help=_("The OpenID provider URL path to redirect to after logout."),
+      type=str,
+      default="https://keycloak.example.com/auth/realms/cloudera/protocol/openid-connect/logout"
+    ),
+
+    LOGIN_REDIRECT_URL_FAILURE=Config(
+      key="login_redirect_url_failure",
+      help=_("As relay party Hue URL path to redirect to after login."),
+      type=str,
+      default="https://localhost:8888/hue/oidc_failed/"
+    ),
+
+    CREATE_USERS_ON_LOGIN=Config(
+      key="create_users_on_login",
+      help=_("Create a new user from OpenID Connect on login if it doesn't exist."),
+      type=coerce_bool,
+      default=True
+    ),
+
+    SUPERUSER_GROUP=Config(
+      key="superuser_group",
+      help=_("The group of users will be created and updated as superuser."),
+      type=str,
+      default=""
+    ),
+  )
+)
 
 LOCAL_FILESYSTEMS = UnspecifiedConfigSection(
   key="local_filesystems",
@@ -1305,7 +1418,7 @@ DJANGO_ADMINS = UnspecifiedConfigSection(
 
 DJANGO_DEBUG_MODE = Config(
   key="django_debug_mode",
-  help=_("Enable or disable Django debug mode."),
+  help=_("Enable or disable debug mode."),
   type=coerce_bool,
   default=True
 )
@@ -1412,9 +1525,23 @@ USE_NEW_EDITOR = Config( # To remove in Hue 4
 
 ENABLE_DOWNLOAD = Config(
   key="enable_download",
-  help=_('Global setting to allow or disable end user downloads in all Hue (e.g. Query result in editors and dashboard, file in File Browser browsers...).'),
+  help=_(
+    'Global setting to allow or disable end user downloads in all Hue (e.g. Query result in editors and dashboard, file in File Browser browsers...).'),
   type=coerce_bool,
   default=True)
+
+ENABLE_DJANGO_DEBUG_TOOL = Config(
+  key="enable_django_debug_tool",
+  help=_('Allow use django debug tool with Chrome browser for debugging issue, django_debug_mode must be true also'),
+  type=coerce_bool,
+  default=False)
+
+DJANGO_DEBUG_TOOL_USERS = Config(
+  key='django_debug_tool_users',
+  default='',
+  type=coerce_csv,
+  help=_('Comma separated list of users that allow to use django debug tool. If it is empty, all users are allowed.')
+)
 
 def is_hue4():
   """Hue is configured to show version 4."""
@@ -1465,18 +1592,14 @@ def get_clusters():
       (i, {
         'name': i,
         'type': cluster_config[i].TYPE.get(),
-        'interfaces': [{'name': i, 'type': cluster_config[i].TYPE.get(), 'interface': interface} for interface in cluster_config[i].INTERFACES.get()]
+        'interfaces': [
+            {'name': i, 'type': cluster_config[i].TYPE.get(), 'interface': interface}
+            for interface in cluster_config[i].INTERFACES.get()
+        ]
       }) for i in cluster_config]
     )
   else:
-    if IS_EMBEDDED.get():
-      clusters = OrderedDict([('Default', {'name': 'Analytic DB', 'type': 'analyticdb', 'interfaces': []})])
-    else:
-      clusters = OrderedDict([('Default', {'name': 'Default', 'type': 'ini', 'interfaces': []})])
-
-  if 'Data Eng' in clusters:
-    clusters['Data Eng']['interfaces'].append({'name': 'Data Eng', 'type': 'dataeng', 'interface': 'c1'})
-    clusters['Data Eng']['interfaces'].append({'name': 'Data Eng', 'type': 'dataeng', 'interface': 'c2'})
+    clusters = OrderedDict([('Default', {'name': 'Default', 'type': 'ini', 'interfaces': []})])
 
   return clusters
 
@@ -1571,11 +1694,11 @@ def validate_database(user):
     res.append(('SQLITE_NOT_FOR_PRODUCTION_USE', unicode(_('SQLite is only recommended for development environments. '
         'It might cause the "Database is locked" error. Migrating to MySQL, Oracle or PostgreSQL is strongly recommended.'))))
 
-  # Check if south_migrationhisotry table is up to date
+  # Check if django_migrations table is up to date
   try:
     from desktop import appmanager
 
-    cursor.execute('''SELECT * from south_migrationhistory''')
+    cursor.execute('''SELECT * from django_migrations''')
     migration_history_entries = [(entry[1], entry[2]) for entry in cursor.fetchall()]
 
     apps = appmanager.get_apps(user)
@@ -1589,10 +1712,10 @@ def validate_database(user):
               missing_migration_entries.append((app.name, migration_name))
 
     if missing_migration_entries:
-      res.append(('SOUTH_MIGRATION_HISTORY', unicode(_('''south_migrationhistory table seems to be corrupted or incomplete.
+      res.append(('django_migrations', unicode(_('''django_migrations table seems to be corrupted or incomplete.
                                                         %s entries are missing in the table: %s''') % (len(missing_migration_entries), missing_migration_entries))))
   except Exception:
-    LOG.exception("Error in config validation of SOUTH_MIGRATION_HISTORY")
+    LOG.exception("Error in config validation of django_migrations")
 
   return res
 

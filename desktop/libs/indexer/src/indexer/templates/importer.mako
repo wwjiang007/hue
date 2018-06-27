@@ -20,7 +20,7 @@
   from desktop import conf
   from desktop.views import commonheader, commonfooter, commonshare, commonimportexport, _ko
 
-  from indexer.conf import ENABLE_NEW_INDEXER, ENABLE_SQOOP, CONFIG_INDEXER_LIBS_PATH, ENABLE_SCALABLE_INDEXER
+  from indexer.conf import ENABLE_NEW_INDEXER, ENABLE_SQOOP, ENABLE_KAFKA, CONFIG_INDEXER_LIBS_PATH, ENABLE_SCALABLE_INDEXER
   from notebook.conf import ENABLE_SQL_INDEXER
 %>
 
@@ -165,7 +165,18 @@ ${ assist.assistPanel() }
           </div>
           <div class="caption">
             <!-- ko if: createWizard.source.inputFormat() != 'manual' -->
-            ${ _('Pick data from ') }<span data-bind="text: createWizard.source.inputFormat"></span> <span data-bind="text: createWizard.source.path"></span>
+              ${ _('Pick data from ') }<span data-bind="text: createWizard.source.inputFormat"></span>
+              <!-- ko if: createWizard.source.inputFormat() == 'file' -->
+                <span data-bind="text: createWizard.source.path"></span>
+              <!-- /ko -->
+              <!-- ko if: createWizard.source.inputFormat() == 'stream' -->
+                <!-- ko if: createWizard.source.streamSelection() == 'kafka' -->
+                  <span data-bind="text: createWizard.source.kafkaSelectedTopics"></span>
+                <!-- /ko -->
+                <!-- ko if: createWizard.source.streamSelection() != 'kafka' -->
+                  <span data-bind="text: createWizard.source.streamSelection"></span>
+                <!-- /ko -->
+              <!-- /ko -->
             <!-- /ko -->
             <!-- ko if: createWizard.source.inputFormat() == 'manual' -->
             ${ _('No source data') }
@@ -231,7 +242,7 @@ ${ assist.assistPanel() }
               <input type="text" class="form-control path filechooser-input input-xxlarge" data-bind="value: createWizard.source.path, filechooser: createWizard.source.path, filechooserOptions: { linkMarkup: true, skipInitialPathIfEmpty: true, openOnFocus: true, selectFolder: false }" placeholder="${ _('Click or drag from the assist') }">
             </label>
             <!-- ko if: createWizard.source.path().length > 0 -->
-              <a data-bind="hueLink: '/filebrowser/view=' + createWizard.source.path()" title="${ _('Open') }" style="font-size: 14px" class="margin-left-10">
+              <a data-bind="storageContextPopover: { path: createWizard.source.path(), offset: { right: 5 } }" title="${ _('Open') }" style="font-size: 14px" class="margin-left-10">
                 <i class="fa fa-external-link-square"></i>
               </a>
             <!-- /ko -->
@@ -248,14 +259,14 @@ ${ assist.assistPanel() }
             <!-- /ko -->
 
             <!-- ko if: createWizard.source.rdbmsMode() == 'customRdbms' -->
-              <div class="control-group input-append">
+              <div class="control-group">
                 <label for="rdbmsHostname" class="control-label"><div>${ _('Hostname') }</div>
-                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.rdbmsHostname" placeholder="${ _('Enter host/ip here eg. mysql.domain.com or 123.123.123.123') }">
+                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.rdbmsHostname" placeholder="${ _('Enter host/ip here e.g. mysql.domain.com or 123.123.123.123') }">
                 </label>
               </div>
 
               <!-- ko if: createWizard.source.rdbmsType() == 'jdbc' -->
-              <div class="control-group input-append">
+              <div class="control-group">
                 <label for="rdbmsJdbcDriver" class="control-label"><div>${ _('JDBC Driver') }</div>
                   <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.rdbmsJdbcDriver">
                 </label>
@@ -265,7 +276,7 @@ ${ assist.assistPanel() }
               <!-- ko if: createWizard.source.rdbmsType() != 'jdbc' -->
               <div class="control-group">
                 <label for="rdbmsPort" class="control-label"><div>${ _('Port') }</div>
-                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.rdbmsPort" placeholder="${ _('Enter port number here eg. 3306') }">
+                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.rdbmsPort" placeholder="${ _('Enter port number here e.g. 3306') }">
                 </label>
               </div>
               <!-- /ko -->
@@ -280,7 +291,6 @@ ${ assist.assistPanel() }
                   <input type="password" class="input-xxlarge" data-bind="value: createWizard.source.rdbmsPassword" placeholder="${ _('Enter password here') }">
                 </label>
               </div>
-
 
               <div class="control-group">
                 <button class="btn" data-bind="click: createWizard.source.rdbmsCheckConnection">
@@ -320,6 +330,96 @@ ${ assist.assistPanel() }
               <!-- /ko -->
             <!-- /ko -->
 
+          <!-- /ko -->
+
+          <!-- ko if: createWizard.source.inputFormat() == 'stream' -->
+            <div class="control-group">
+              <label class="control-label"><div>${ _('List') }</div>
+                <select data-bind="selectize: createWizard.source.publicStreams, value: createWizard.source.streamSelection, optionsText: 'name', optionsValue: 'value'" placeholder="${ _('The list of streams to consume, e.g. SFDC, Jiras...') }"></select>
+              </label>
+            </div>
+
+            <!-- ko if: createWizard.source.streamSelection() == 'kafka' -->
+              <div class="control-group">
+                <label class="control-label"><div>${ _('Topics') }</div>
+                  <select class="input-xxlarge" data-bind="options: createWizard.source.kafkaTopics,
+                         value: createWizard.source.kafkaSelectedTopics,
+                         optionsCaption: '${ _("Choose...") }'"
+                         placeholder="${ _('The list of topics to consume, e.g. orders,returns') }"></select>
+                  ## <select data-bind="selectize: createWizard.source.kafkaTopics, value: createWizard.source.kafkaSelectedTopics" placeholder="${ _('The list of topics to consume, e.g. orders,returns') }"></select>
+                </label>
+
+                <br/>
+
+                <div class="control-group" data-bind="visible: createWizard.source.kafkaSelectedTopics">
+                  <label class="control-label"><div>${ _('Schema') }</div>
+                    <label class="checkbox inline-block">
+                      <input type="radio" name="kafkaSchemaManual" value="manual" data-bind="checked: createWizard.source.kafkaSchemaManual" /> ${_('Manual')}
+                    </label>
+                    <label class="checkbox inline-block">
+                      <input type="radio" name="kafkaSchemaManual" value="detect" data-bind="checked: createWizard.source.kafkaSchemaManual" /> ${_('Guess')}
+                    </label>
+                  </label>
+
+                  <label class="control-label" data-bind="visible: createWizard.source.kafkaSchemaManual() == 'manual'">
+                  ##<label class="control-label"><div>${ _('Encoding') }</div>
+                  ##  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.kafkaFieldType">
+                  ##</label>
+                  <label class="control-label"><div>${ _('Type') }</div>
+                    <select class="input-medium" data-bind="options: ['delimited', 'bitarray'], value: createWizard.source.kafkaFieldType"></select>
+                  </label>
+                  <label class="control-label"><div>${ _('Delimiter') }</div>
+                    <input type="text" class="input-small" data-bind="value: createWizard.source.kafkaFieldDelimiter">
+                  </label>
+
+                  <br/>
+
+                  <label class="control-label"><div>${ _('Field names') }</div>
+                    <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.kafkaFieldNames" placeholder="${ _('The list of fields to consume, e.g. orders,returns') }">
+                  </label>
+                  <label class="control-label"><div>${ _('Field types') }</div>
+                    <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.kafkaFieldTypes" placeholder="${ _('The list of field typs, e.g. string,int') }">
+                  </label>
+                </label>
+
+                <div class="control-group" data-bind="visible: createWizard.source.hasStreamSelected">
+                  <button class="btn" data-bind="click: createWizard.source.streamCheckConnection">
+                    ${_('Test')}
+                  </button>
+                </div>
+                </div>
+              </div>
+            <!-- /ko -->
+
+            <!-- ko if: createWizard.source.streamSelection() == 'sfdc' -->
+              <div class="control-group">
+                <label class="control-label"><div>${ _('Username') }</div>
+                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.streamUsername" placeholder="user@company.com">
+                </label>
+
+                <label class="control-label"><div>${ _('Password') }</div>
+                  <input type="password" class="input-xxlarge" data-bind="value: createWizard.source.streamPassword">
+                </label>
+
+                <label class="control-label"><div>${ _('Token') }</div>
+                  <input type="password" class="input-xxlarge" data-bind="value: createWizard.source.streamToken">
+                </label>
+
+                <label class="control-label"><div>${ _('End point URL') }</div>
+                  <input type="text" class="input-xxlarge" data-bind="value: createWizard.source.streamEndpointUrl">
+                </label>
+
+                <br/>
+                <!-- ko if: createWizard.source.streamUsername() && createWizard.source.streamPassword() && createWizard.source.streamToken() -->
+                <label class="control-label"><div>${ _('Object') }</div>
+                  <select class="input-xxlarge" data-bind="options: createWizard.source.streamObjects,
+                         value: createWizard.source.streamObject,
+                         optionsCaption: '${ _("Choose...") }'"
+                         placeholder="${ _('The SFDC object to import, e.g. Account, Opportunity') }"></select>
+                </label>
+                <!-- /ko -->
+              </div>
+            <!-- /ko -->
           <!-- /ko -->
 
           <div class="control-group" data-bind="visible: createWizard.source.inputFormat() == 'table'">
@@ -415,19 +515,25 @@ ${ assist.assistPanel() }
           <div class="control-group">
             <label for="collectionName" class="control-label "><div>${ _('Name') }</div></label>
             <!-- ko if: outputFormat() == 'file' -->
-              <input type="text" class="form-control name input-xlarge" id="collectionName" data-bind="value: name, filechooser: name, filechooserOptions: { linkMarkup: true, skipInitialPathIfEmpty: true, openOnFocus: true, selectFolder: true, displayOnlyFolders: true, uploadFile: false}" placeholder="${ _('Name') }" title="${ _('Directory must not exist in the path') }">
+              <input type="text" class="form-control name input-xxlarge" id="collectionName" data-bind="value: name, filechooser: name, filechooserOptions: { linkMarkup: true, skipInitialPathIfEmpty: true, openOnFocus: true, selectFolder: true, displayOnlyFolders: true, uploadFile: false}" placeholder="${ _('Name') }" title="${ _('Directory must not exist in the path') }">
             <!-- /ko -->
             <!-- ko if: outputFormat() == 'index' -->
               <input type="text" class="form-control input-xlarge" id="collectionName" data-bind="value: name, valueUpdate: 'afterkeydown'" placeholder="${ _('Name') }">
             <!-- /ko -->
             <!-- ko if: ['table', 'database'].indexOf(outputFormat()) != -1 -->
-              <input type="text" data-bind="value: name, hivechooser: name, skipColumns: true, skipTables: outputFormat() == 'database', valueUpdate: 'afterkeydown', apiHelperUser: '${ user }', apiHelperType: apiHelperType, mainScrollable: $(MAIN_SCROLLABLE), attr: { 'placeholder': outputFormat() == 'table' ? '${  _ko('Table name or <database>.<table>') }' : '${  _ko('Database name') }' }" pattern="^([a-zA-Z0-9_]+\.)?[a-zA-Z0-9_]*$" title="${ _('Only alphanumeric and underscore characters') }">
+              <input type="text" class="input-xlarge" data-bind="value: name, hivechooser: name, skipColumns: true, skipTables: outputFormat() == 'database', valueUpdate: 'afterkeydown', apiHelperUser: '${ user }', apiHelperType: apiHelperType, mainScrollable: $(MAIN_SCROLLABLE), attr: { 'placeholder': outputFormat() == 'table' ? '${  _ko('Table name or <database>.<table>') }' : '${  _ko('Database name') }' }" pattern="^([a-zA-Z0-9_]+\.)?[a-zA-Z0-9_]*$" title="${ _('Only alphanumeric and underscore characters') }">
             <!-- /ko -->
             <span class="help-inline muted" data-bind="visible: !isTargetExisting() && isTargetChecking()">
               <i class="fa fa-spinner fa-spin"></i>
             </span>
-            <span class="help-inline muted" data-bind="visible: ! $parent.createWizard.isValidDestination()">
-              <i class="fa fa-warning" style="color: #c09853"></i> ${ _('Empty name or invalid characters') }
+            <span class="help-inline muted" data-bind="visible: !$parent.createWizard.isValidDestination()">
+              <i class="fa fa-warning" style="color: #c09853"></i>
+              <!-- ko if: name() -->
+                ${ _('Invalid characters') }
+              <!-- /ko -->
+              <!-- ko if: !name() -->
+                ${ _('Empty name') }
+              <!-- /ko -->
             </span>
             <span class="help-inline muted" data-bind="visible: isTargetExisting()">
               <i class="fa fa-warning" style="color: #c09853"></i> ${ _('Already existing') } <span data-bind="text: outputFormat"></span>
@@ -449,26 +555,26 @@ ${ assist.assistPanel() }
             </div>
 
             <div class="control-group">
-              <label class="checkbox inline-block" data-bind="visible: tableFormat() != 'kudu'">
-                <input type="checkbox" data-bind="checked: useDefaultLocation"> ${_('Store in Default location')}
-              </label>
-            </div>
-
-            <div class="control-group" data-bind="visible: !useDefaultLocation()">
-              <label for="path" class="control-label"><div>${ _('External location') }</div>
-                <input type="text" class="form-control path filechooser-input input-xxlarge" data-bind="value: nonDefaultLocation, filechooser: nonDefaultLocation, filechooserOptions: { linkMarkup: true, skipInitialPathIfEmpty: true }, valueUpdate: 'afterkeydown'">
-              </label>
-            </div>
-
-            <div class="control-group">
               <label class="control-label"><div>${ _('Extras') }</div>
-                <a href="javascript:void(0)" data-bind="css: { 'inactive-action': !showProperties() }, click: function() { showProperties(!showProperties()) }" title="${ _('Show extra properties') }">
+                <a href="javascript:void(0)" data-bind="css: { 'inactive-action': !showProperties() }, toggle: showProperties" title="${ _('Show extra properties') }">
                   <i class="fa fa-sliders fa-padding-top"></i>
                 </a>
               </label>
             </div>
 
             <span data-bind="visible: showProperties">
+              <div class="control-group">
+                <label class="checkbox inline-block" data-bind="visible: tableFormat() != 'kudu'">
+                  <input type="checkbox" data-bind="checked: useDefaultLocation"> ${_('Store in Default location')}
+                </label>
+              </div>
+
+              <div class="control-group" data-bind="visible: !useDefaultLocation()">
+                <label for="path" class="control-label"><div>${ _('External location') }</div>
+                  <input type="text" class="form-control path filechooser-input input-xxlarge" data-bind="value: nonDefaultLocation, filechooser: nonDefaultLocation, filechooserOptions: { linkMarkup: true, skipInitialPathIfEmpty: true }, valueUpdate: 'afterkeydown'">
+                </label>
+              </div>
+
               <div class="control-group">
                 <label class="checkbox inline-block" data-bind="visible: $root.createWizard.source.inputFormat() != 'manual'">
                   <input type="checkbox" data-bind="checked: importData, disable: !useDefaultLocation() && $parent.createWizard.source.path() == nonDefaultLocation();"> ${_('Import data')}
@@ -615,7 +721,7 @@ ${ assist.assistPanel() }
 
             <div class="control-group">
               <label class="control-label"><div>${ _('Extras') }</div>
-                <a href="javascript:void(0)" data-bind="css: { 'inactive-action': !showProperties() }, click: function() { showProperties(!showProperties()) }" title="${ _('Show extra properties') }">
+                <a href="javascript:void(0)" data-bind="css: { 'inactive-action': !showProperties() }, toggle: showProperties" title="${ _('Show extra properties') }">
                   <i class="fa fa-sliders fa-padding-top"></i>
                 </a>
               </label>
@@ -679,7 +785,7 @@ ${ assist.assistPanel() }
 
           <div class="control-group">
             <label class="control-label"><div>${ _('Extras') }</div>
-              <a href="javascript:void(0)" data-bind="css: { 'inactive-action': !showProperties() }, click: function() { showProperties(!showProperties()) }" title="${ _('Show extra properties') }">
+              <a href="javascript:void(0)" data-bind="css: { 'inactive-action': !showProperties() }, toggle: showProperties" title="${ _('Show extra properties') }">
                 <i class="fa fa-sliders fa-padding-top"></i>
               </a>
             </label>
@@ -717,10 +823,59 @@ ${ assist.assistPanel() }
         </div>
         <!-- /ko -->
 
-        <!-- ko if: ['table', 'index', 'file', 'hbase'].indexOf(outputFormat()) != -1 -->
+        <!-- ko if: $root.createWizard.source.inputFormat() == 'kafka' -->
+        <div class="card step">
+          <h4>${_('Properties')}</h4>
+
+          <div class="card-body">
+            <label class="control-label"><div>${ _('Libs') }</div>
+              <div class="inline-table">
+                <ul data-bind="sortable: { data: sqoopJobLibPaths, options: { axis: 'y', containment: 'parent', handle: '.move-widget' }}, visible: sqoopJobLibPaths().length" class="unstyled">
+                  <li>
+                    <div class="input-append" style="margin-bottom: 4px">
+                      <input type="text" class="filechooser-input input-xxlarge" data-bind="value: path, valueUpdate:'afterkeydown', filechooser: { value: path, isAddon: true }, filechooserOptions: { skipInitialPathIfEmpty: true }" placeholder="${ _('Path to the file, e.g. hdfs://localhost:8020/user/hue/file.hue') }"/>
+                      <span class="add-on move-widget muted" data-bind="visible: $parent.sqoopJobLibPaths().length > 1"><i class="fa fa-arrows"></i></span>
+                      <a class="add-on muted" href="javascript: void(0);" data-bind="click: function(){ $parent.removeSqoopJobLibPath($data); }"><i class="fa fa-minus"></i></a>
+                    </div>
+                  </li>
+                </ul>
+                <div class="config-property-add-value" style="margin-top: 5px;">
+                  <a class="inactive-action pointer" style="padding: 3px 10px 3px 3px;;" data-bind="click: addSqoopJobLibPath">
+                    <i class="fa fa-plus"></i>
+                  </a>
+                </div>
+              </div>
+            </label>
+          </div>
+        </div>
+        <!-- /ko -->
+
+        <!-- ko if: ['table', 'index', 'hbase'].indexOf(outputFormat()) != -1 -->
           <div class="card step">
-            <h4 class="show-edit-on-hover">${_('Fields')} <!-- ko if: $root.createWizard.isGuessingFieldTypes --><i class="fa fa-spinner fa-spin"></i><!-- /ko --> <a class="inactive-action pointer" data-bind="visible: columns().length > 0" href="#fieldsBulkEditor" data-toggle="modal"><i class="fa fa-edit"></i></a></h4>
+            <h4>
+              <!-- ko if: useFieldEditor -->
+              <a class="inactive-action" href="javascript:void(0);" data-bind="toggle: useFieldEditor">${_('Fields')} /</a> ${_('Editor')}
+              <!-- /ko -->
+              <!-- ko ifnot: useFieldEditor -->
+              ${_('Fields')} <!-- ko if: $root.createWizard.isGuessingFieldTypes --><i class="fa fa-spinner fa-spin"></i><!-- /ko --> <a class="inactive-action pointer" data-bind="visible: columns().length > 0" href="#fieldsBulkEditor" data-toggle="modal"><i class="fa fa-edit"></i></a> <!-- ko if: fieldEditorEnabled --><a class="inactive-action" href="javascript:void(0);" data-bind="toggle: useFieldEditor">/ ${_('Editor')}</a><!-- /ko -->
+              <!-- /ko -->
+            </h4>
             <div class="card-body no-margin-top columns-form">
+              <!-- ko if: useFieldEditor -->
+              <div data-bind="component: { name: 'hue-simple-ace-editor-multi', params: {
+                  value: fieldEditorValue,
+                  placeHolder: '${ _ko('Example: SELECT a, b FROM c') }',
+                  autocomplete: { type: 'hiveQuery' },
+                  lines: 5,
+                  aceOptions: {
+                    minLines: 10,
+                    maxLines: 25
+                  },
+                  database: fieldEditorDatabase,
+                  mode: 'hive'
+                }}"></div>
+              <!-- /ko -->
+              <!-- ko ifnot: useFieldEditor -->
               <!-- ko if: $root.createWizard.source.inputFormat() === 'manual' -->
                 <form class="form-inline inline-table" data-bind="foreach: columns">
                   <!-- ko if: $parent.outputFormat() == 'table' -->
@@ -731,7 +886,7 @@ ${ assist.assistPanel() }
 
                   <!-- ko if: $parent.outputFormat() == 'index' -->
                     <a class="pointer pull-right margin-top-20" data-bind="click: function() { $parent.columns.remove($data); }"><i class="fa fa-minus"></i></a>
-                    <div data-bind="template: { name: 'index-field-template', data: $data }, css:{ 'disabled': !keep() }" class="margin-top-10 field inline-block index-field"></div>
+                    <div data-bind="template: { name: 'index-field-template', data: $data }, css: { 'disabled': !keep() }" class="margin-top-10 field inline-block index-field"></div>
                     <div class="clearfix"></div>
                   <!-- /ko -->
                 </form>
@@ -750,11 +905,12 @@ ${ assist.assistPanel() }
                 <!-- /ko -->
 
                 <!-- ko if: (['file', 'table', 'hbase'].indexOf($parent.outputFormat()) != -1 && $root.createWizard.source.inputFormat() == 'rdbms') || $parent.outputFormat() == 'index' -->
-                  <div data-bind="template: { name: 'index-field-template', data: $data }, css:{ 'disabled': !keep() }" class="margin-top-10 field index-field"></div>
+                  <div data-bind="template: { name: 'index-field-template', data: $data }, css: { 'disabled': !keep() }" class="margin-top-10 field index-field"></div>
                 <!-- /ko -->
               </form>
 
               <div class="clearfix"></div>
+              <!-- /ko -->
               <!-- /ko -->
             </div>
           </div>
@@ -863,6 +1019,9 @@ ${ assist.assistPanel() }
 
       <span data-bind="visible: showProperties">
         <input type="text" class="input-medium margin-left-5" placeholder="${ _('Field comment') }" data-bind="value: comment">
+        <label class="checkbox" data-bind="visible: $root.createWizard.destination.tableFormat() == 'kudu'">
+         <input type="checkbox" data-bind="checked: keep"> ${_('Keep')}
+        </label>
       </span>
     </span>
 
@@ -1243,10 +1402,20 @@ ${ assist.assistPanel() }
         self.path('');
         resizeElements();
         self.rdbmsMode('customRdbms');
+        if (val == 'stream') {
+          if (self.streamSelection() == 'kafka') {
+            wizard.guessFormat();
+            wizard.destination.tableFormat('kudu');
+          } else {
+            wizard.destination.tableFormat('text');
+          }
+        }
       });
       self.inputFormatsAll = ko.observableArray([
           {'value': 'file', 'name': 'File'},
-          {'value': 'manual', 'name': 'Manually'},
+          % if ENABLE_KAFKA.get():
+          {'value': 'stream', 'name': 'Stream'},
+          % endif
           % if ENABLE_SQOOP.get():
           {'value': 'rdbms', 'name': 'External Database'},
           % endif
@@ -1254,6 +1423,7 @@ ${ assist.assistPanel() }
           {'value': 'query', 'name': 'SQL Query'},
           ##{'value': 'table', 'name': 'Table'},
           % endif
+          {'value': 'manual', 'name': 'Manually'}
           ##{'value': 'text', 'name': 'Paste Text'},
       ]);
       self.inputFormatsManual = ko.observableArray([
@@ -1282,6 +1452,7 @@ ${ assist.assistPanel() }
       self.isObjectStore.subscribe(function(newVal) {
         wizard.destination.useDefaultLocation(!newVal);
       });
+
       // Rdbms
       self.rdbmsMode = ko.observable('customRdbms');
       self.rdbmsMode.subscribe(function (val) {
@@ -1408,15 +1579,16 @@ ${ assist.assistPanel() }
         $.post("${ url('indexer:get_db_component') }", {
           "source": ko.mapping.toJSON(self)
         }, function (resp) {
-          if(resp.status == 0 && resp.data) {
+          if (resp.status == 0 && resp.data) {
             self.rdbmsDbIsValid(true);
             self.rdbmsDatabaseNames(resp.data);
-          } else if(resp.status == 1) {
+          } else if (resp.status == 1) {
             $(document).trigger("error", "${ _('Connection Failed: ') }" + resp.message);
             self.rdbmsDbIsValid(false);
           }
         });
       };
+
       // Table
       self.table = ko.observable('');
       self.tableName = ko.computed(function() {
@@ -1442,6 +1614,79 @@ ${ assist.assistPanel() }
         }
       });
       self.draggedQuery = ko.observable();
+
+      // Streams, Kafka
+      self.publicStreams = ko.observable([
+        {'value': 'kafka', 'name': 'Kafka Topics'},
+        {'value': 'sfdc', 'name': 'SFDC'}
+      ]);
+      self.streamSelection = ko.observable(self.publicStreams()[0]['value']);
+
+      self.kafkaTopics = ko.observableArray();
+      self.kafkaSelectedTopics = ko.observable(''); // Currently designed just for one
+      self.kafkaSelectedTopics.subscribe(function(newValue) {
+        if (newValue) {
+          viewModel.createWizard.guessFieldTypes();
+          self.kafkaFieldNames($.totalStorage('pai' + '_kafka_topics_' + newValue + '_kafkaFieldNames'));
+          self.kafkaFieldTypes($.totalStorage('pai' + '_kafka_topics_' + newValue + '_kafkaFieldTypes'));
+        }
+      });
+      self.kafkaSchemaManual = ko.observable('manual');
+      self.kafkaFieldType = ko.observable('delimited');
+      self.kafkaFieldDelimiter = ko.observable(',');
+      self.kafkaFieldNames = ko.observable('');
+      self.kafkaFieldNames.subscribe(function(newValue) {
+        $.totalStorage('pai' + '_kafka_topics_' + self.kafkaSelectedTopics() + '_kafkaFieldNames', newValue);
+        viewModel.createWizard.guessFieldTypes();
+      });
+      self.kafkaFieldTypes = ko.observable('');
+      self.kafkaFieldTypes.subscribe(function(newValue) {
+        $.totalStorage('pai' + '_kafka_topics_' + self.kafkaSelectedTopics() + '_kafkaFieldTypes', newValue)
+        viewModel.createWizard.guessFieldTypes();
+      });
+      self.kafkaFieldSchemaPath = ko.observable('');
+
+      self.streamUsername = ko.observable('');
+      self.streamPassword = ko.observable('');
+      self.streamToken = ko.observable('');
+      self.streamToken.subscribe(function(newVal) {
+        if (newVal) {
+          wizard.guessFormat(); // Todo
+        }
+      });
+      self.streamEndpointUrl = ko.observable('https://login.salesforce.com/services/Soap/u/42.0');
+      self.streamObjects = ko.observableArray();
+      self.streamObject = ko.observable('');
+      self.streamObject.subscribe(function(newValue) {
+        if (newValue) {
+          wizard.guessFieldTypes();
+        }
+      });
+      self.hasStreamSelected = ko.pureComputed(function() {
+        return (self.streamSelection() == 'kafka' && self.kafkaSelectedTopics()) ||
+           (self.streamSelection() == 'sfdc' && self.streamObject())
+      });
+      self.hasStreamSelected.subscribe(function(newValue) {
+        if (newValue) {
+          wizard.guessFormat();
+          if (newValue == 'kafka') {
+            wizard.destination.tableFormat('kudu');
+          }
+        }
+      });
+      self.streamCheckConnection = function() {
+        $.post("${ url('indexer:get_db_component') }", {
+          "source": ko.mapping.toJSON(self)
+        }, function (resp) {
+          if (resp.status == 0 && resp.data) {
+            huePubSub.publish('notebook.task.submitted', resp.history_uuid);
+          } else if (resp.status == 1) {
+            $(document).trigger("error", "${ _('Connection Failed: ') }" + resp.message);
+            self.rdbmsDbIsValid(false);
+          }
+        });
+      };
+
 
       self.format = ko.observable();
       self.format.subscribe(function(newVal) {
@@ -1472,6 +1717,18 @@ ${ assist.assistPanel() }
           return self.query();
         } else if (self.inputFormat() == 'manual') {
           return true;
+        } else if (self.inputFormat() == 'stream') {
+          if (self.streamSelection() == 'kafka') {
+            return self.kafkaSelectedTopics() && self.kafkaSelectedTopics().length > 0;
+          } else {
+            return self.streamSelection() == 'sfdc' &&
+                self.streamUsername().length > 0 &&
+                self.streamPassword().length > 0 &&
+                self.streamToken().length > 0 &&
+                self.streamEndpointUrl().length > 0 &&
+                self.streamObject()
+              ;
+          }
         } else if (self.inputFormat() == 'rdbms') {
           return self.rdbmsDatabaseName().length > 0 && (self.rdbmsTableName().length > 0 || self.rdbmsAllTablesSelected());
         }
@@ -1570,8 +1827,10 @@ ${ assist.assistPanel() }
           {'name': 'Search index', 'value': 'index'},
           % endif
           {'name': 'Database', 'value': 'database'},
-          % if ENABLE_SQOOP.get():
+          % if ENABLE_SQOOP.get() or ENABLE_KAFKA.get():
           {'name': 'File', 'value': 'file'},
+          % endif
+          % if ENABLE_SQOOP.get():
           {'name': 'HBase Table', 'value': 'hbase'},
           % endif
       ]);
@@ -1580,10 +1839,10 @@ ${ assist.assistPanel() }
           if (format.value == 'database' && wizard.source.inputFormat() != 'manual') {
             return false;
           }
-          if (format.value == 'file' && ['manual', 'rdbms'].indexOf(wizard.source.inputFormat()) == -1) {
+          if (format.value == 'file' && ['manual', 'rdbms', 'stream'].indexOf(wizard.source.inputFormat()) == -1) {
             return false;
           }
-          else if (format.value == 'index' && ['file', 'query', 'table'].indexOf(wizard.source.inputFormat()) == -1) {
+          else if (format.value == 'index' && ['file', 'query', 'table', 'stream', 'manual'].indexOf(wizard.source.inputFormat()) == -1) {
             return false;
           }
           if (format.value == 'hbase' && wizard.source.inputFormat() != 'rdbms') {
@@ -1603,11 +1862,17 @@ ${ assist.assistPanel() }
       self.defaultName = ko.computed(function() {
         var name = ''
 
-        if (wizard.source.inputFormat() == 'file') {
+        if (wizard.source.inputFormat() == 'file' || wizard.source.inputFormat() == 'stream') {
           if (self.outputFormat() == 'table') {
             name = wizard.prefill.target_path().length > 0 ? wizard.prefill.target_path() : 'default';
 
-            if (wizard.source.path()) {
+            if (wizard.source.inputFormat() == 'stream') {
+              if (wizard.source.streamSelection() == 'kafka') {
+                name += '.' + wizard.source.kafkaSelectedTopics();
+              } else {
+                name += '.' + wizard.source.streamObject();
+              }
+            } else if (wizard.source.path()) {
               name += '.' + wizard.source.path().split('/').pop().split('.')[0];
             }
           } else { // Index
@@ -1692,32 +1957,43 @@ ${ assist.assistPanel() }
         return self.outputFormat() == 'table' && self.name().indexOf('.') > 0 ? self.name().split('.', 2)[1] : self.name();
       });
       self.databaseName = ko.computed(function() {
-        return self.outputFormat() == 'table' && self.name().indexOf('.') > 0 ? self.name().split('.', 2)[0] : (self.name() !== '' ? self.name() : 'default');
+        return self.outputFormat() == 'database' ? self.name() : (self.outputFormat() == 'table' && self.name().indexOf('.') > 0 ? self.name().split('.', 2)[0] : 'default');
       });
       self.tableFormat = ko.observable('text');
-      self.tableFormat.subscribe(function(newVal) {
-        if (newVal == 'kudu' && self.kuduPartitionColumns().length == 0) {
-          self.kuduPartitionColumns.push(ko.mapping.fromJS(self.KUDU_DEFAULT_PARTITION_COLUMN));
-        }
-      });
       self.KUDU_DEFAULT_RANGE_PARTITION_COLUMN = {values: [{value: ''}], name: 'VALUES', lower_val: 0, include_lower_val: '<=', upper_val: 1, include_upper_val: '<='};
       self.KUDU_DEFAULT_PARTITION_COLUMN = {columns: [], range_partitions: [self.KUDU_DEFAULT_RANGE_PARTITION_COLUMN], name: 'HASH', int_val: 16};
 
-      self.tableFormats = ko.observableArray([
-          {'value': 'text', 'name': 'Text'},
-          {'value': 'parquet', 'name': 'Parquet'},
-          {'value': 'kudu', 'name': 'Kudu'},
-          {'value': 'csv', 'name': 'Csv'},
-          {'value': 'avro', 'name': 'Avro'},
-          {'value': 'json', 'name': 'Json'},
-          {'value': 'regexp', 'name': 'Regexp'},
-          {'value': 'orc', 'name': 'ORC'},
-      ]);
+      self.tableFormats = ko.pureComputed(function() {
+        if (wizard.source.inputFormat() === 'kafka') {
+          return [{'value': 'kudu', 'name': 'Kudu'}];
+        } else {
+          return [
+            {'value': 'text', 'name': 'Text'},
+            {'value': 'parquet', 'name': 'Parquet'},
+            {'value': 'kudu', 'name': 'Kudu'},
+            {'value': 'csv', 'name': 'Csv'},
+            {'value': 'avro', 'name': 'Avro'},
+            {'value': 'json', 'name': 'Json'},
+            {'value': 'regexp', 'name': 'Regexp'},
+            {'value': 'orc', 'name': 'ORC'},
+          ]
+        }
+      });
 
       self.partitionColumns = ko.observableArray();
       self.kuduPartitionColumns = ko.observableArray();
       self.primaryKeys = ko.observableArray();
       self.primaryKeyObjects = ko.observableArray();
+
+      self.useFieldEditor = ko.observable(false);
+      // TODO: Figure out the database to use for field editor autocomplete
+      self.fieldEditorDatabase = ko.observable('default');
+      // TODO: Do something with the editor value
+      self.fieldEditorValue = ko.observable();
+      self.fieldEditorEnabled = ko.pureComputed(function () {
+        // TODO: Decide when the editor should be enabled
+        return false; // Disabled for now
+      });
 
       self.importData = ko.observable(true);
       self.useDefaultLocation = ko.observable(true);
@@ -1844,7 +2120,7 @@ ${ assist.assistPanel() }
         );
         var isTargetAlreadyExisting = ! self.destination.isTargetExisting() || self.destination.outputFormat() == 'index';
         var isValidTable = self.destination.outputFormat() != 'table' || (
-          self.destination.tableFormat() != 'kudu' || (self.destination.kuduPartitionColumns().length > 0 &&
+          self.destination.tableFormat() != 'kudu' || (
               $.grep(self.destination.kuduPartitionColumns(), function(partition) { return partition.columns().length > 0 }).length == self.destination.kuduPartitionColumns().length && self.destination.primaryKeys().length > 0)
         );
         var validIndexFields = self.destination.outputFormat() != 'index' || ($.grep(self.destination.columns(), function(column) {
@@ -1890,7 +2166,17 @@ ${ assist.assistPanel() }
           } else {
             var newFormat = ko.mapping.fromJS(new FileType(resp['type'], resp));
             self.source.format(newFormat);
-            self.guessFieldTypes();
+            if (self.source.inputFormat() == 'stream') {
+              if (self.source.streamSelection() == 'kafka') {
+                self.source.kafkaTopics(resp['topics']);
+              } else if (self.source.streamSelection() == 'sfdc') {
+                self.source.streamObjects(resp['objects']);
+              }
+            }
+
+            if (self.source.inputFormat() != 'stream' || self.source.streamSelection() != 'sfdc') {
+              self.guessFieldTypes();
+            }
           }
 
           self.isGuessingFormat(false);
@@ -2029,13 +2315,13 @@ ${ assist.assistPanel() }
                       if (match) {
                         var db = match[1];
                         DataCatalog.getEntry({ sourceType: snippet.type(), path: [ db ]}).done(function (dbEntry) {
-                          dbEntry.clear('invalidate').done(function () {
+                          dbEntry.clearCache({ invalidate: 'invalidate', silenceErrors: true }).done(function () {
                             window.location.href = self.editorVM.selectedNotebook().onSuccessUrl();
                           })
                         });
                       } else {
                         DataCatalog.getEntry({ sourceType: snippet.type(), path: []}).done(function (sourceEntry) {
-                          sourceEntry.clear().done(function () {
+                          sourceEntry.clearCache({ silenceErrors: true }).done(function () {
                             window.location.href = self.editorVM.selectedNotebook().onSuccessUrl();
                           })
                         });

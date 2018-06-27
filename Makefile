@@ -162,6 +162,7 @@ INSTALL_CORE_FILES = \
 	ext \
 	tools/app_reg \
 	tools/virtual-bootstrap \
+	tools/enable-python27.sh \
 	tools/relocatable.sh \
 	VERS* LICENSE* README*
 
@@ -205,8 +206,6 @@ install-env:
 	$(MAKE) -C $(INSTALL_DIR)/desktop env-install
 	@echo --- Setting up Applications
 	$(MAKE) -C $(INSTALL_DIR)/apps env-install
-	@echo --- Setting up Desktop database
-	$(MAKE) -C $(INSTALL_DIR)/desktop syncdb
 
 ###################################
 # Internationalization

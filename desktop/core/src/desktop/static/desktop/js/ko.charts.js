@@ -15,7 +15,14 @@
 // limitations under the License.
 
 (function () {
-
+	var MS = 1,
+  SECOND_MS = 1000 * MS,
+  MINUTE_MS = SECOND_MS * 60,
+  HOUR_MS = MINUTE_MS * 60,
+  DAY_MS = HOUR_MS * 24,
+  WEEK_MS = DAY_MS * 7,
+  MONTH_MS = DAY_MS * 30.5,
+  YEAR_MS = DAY_MS * 365;
   ko.HUE_CHARTS = {
     TYPES: {
       COUNTER: "counter",
@@ -118,7 +125,7 @@
             _d3.selectAll(".nv-slice").on("click",
                 function (d, i) {
                   if (typeof _options.onClick != "undefined") {
-                    chartsUpdatingState();
+                    huePubSub.publish('charts.state', { updating: true });
                     _options.onClick(d);
                   }
                 });
@@ -149,7 +156,7 @@
               }
             });
           }
-        chartsNormalState();
+        huePubSub.publish('charts.state');
       }
       else if (_data.length > 0) {
         ko.bindingHandlers.pieChart.init(element, valueAccessor);
@@ -193,29 +200,29 @@
       }
       var _datum = _options.transformer(_options.datum);
       var _chart = $(element).data("chart");
+      var _isPivot = _options.isPivot != null ? _options.isPivot : false;
 
       if (_chart) {
         if (_chart.multibar){
           _chart.multibar.stacked(typeof _options.stacked != "undefined" ? _options.stacked : false);
         }
-
-        var _isDiscrete = false;
-        for (var j = 0; j < _datum.length; j++) {
-          for (var i = 0; i < _datum[j].values.length; i++) {
-            if (isNaN(_datum[j].values[i].x * 1)) {
-              _isDiscrete = true;
-              break;
+       if (numeric(_datum)) {
+          _chart.xAxis.showMaxMin(false).tickFormat(d3v3.format(",0f"));
+          if (_chart.multibar) {
+            _chart.multibar.barColor(null);
+          }
+        } else {
+          _chart.xAxis.tickFormat(function(s){ return s; });
+          if (_chart.multibar) {
+            if (!_isPivot) {
+              _chart.multibar.barColor(nv.utils.defaultColor());
+            } else {
+              _chart.multibar.barColor(null);
             }
           }
         }
-
-        var _isPivot = _options.isPivot != null ? _options.isPivot : false;
-
-        if ((_isDiscrete && $(element).data('chart_type') !== 'discrete_bar') || (!_isDiscrete && $(element).data('chart_type') === 'discrete_bar') || (_isPivot && !$(element).data('chart_pivot')) || (!_isPivot && $(element).data('chart_pivot'))){
-          ko.bindingHandlers.barChart.init(element, valueAccessor);
-        }
-        else {
-          window.setTimeout(function () {
+        window.setTimeout(function () {
+          handleSelection(_chart, _options, _datum);
           var _d3 = d3v3.select($(element).find("svg")[0]);
           _d3.datum(_datum)
             .transition().duration(150)
@@ -224,50 +231,11 @@
                 _options.onComplete();
               }
             }).call(_chart);
-
-          if (_chart.selectBars) {
-            var _field = (typeof _options.field == "function") ? _options.field() : _options.field;
-            $.each(_options.fqs(), function (cnt, item) {
-              if (item.id() == _options.datum.widget_id) {
-                if (item.field() == _field) {
-                  if (item.properties) {
-                    _chart.selectBars({
-                      singleValues: $.map(item.filter(), function (it) {
-                        return it.value();
-                      }),
-                      rangeValues: $.map(item.properties(), function (it) {
-                        return {from: it.from(), to: it.to()};
-                      })
-                    });
-                  }
-                  else {
-                    _chart.selectBars($.map(item.filter(), function (it) {
-                      return it.value();
-                    }));
-                  }
-                }
-                if (Array.isArray(item.field())) {
-                  _chart.selectBars({
-                    field: item.field(),
-                    selected: $.map(item.filter(), function (it) {
-                      return {values: it.value()};
-                    })
-                  });
-                }
-              }
-            });
-          }
-          chartsNormalState();
+          huePubSub.publish('charts.state');
         }, 0);
-
-        }
-      }
-      else if (_datum.length > 0) {
-        ko.bindingHandlers.barChart.init(element, valueAccessor);
       }
     }
   };
-
   ko.bindingHandlers.timelineChart = {
     init: function (element, valueAccessor) {
       if (valueAccessor().type && valueAccessor().type() == "line"){
@@ -301,23 +269,14 @@
         }
         $(element).data("type", valueAccessor().type());
       }
-      var _datum = _options.transformer(_options.datum);
+      var _datum = _options.transformer(_options.datum, true);
       var _chart = $(element).data("chart");
       if (_chart) {
         window.setTimeout(function () {
           if (_chart.multibar) {
             _chart.multibar.stacked(typeof _options.stacked != "undefined" ? _options.stacked : false);
           }
-          var enableSelection = true;
-          if (typeof _options.enableSelection !== 'undefined') {
-            enableSelection = _options.enableSelection;
-          }
-          if (_datum.length > 0 && _datum[0].values.length > 10 && enableSelection) {
-            _chart.enableSelection();
-          }
-          else {
-            _chart.disableSelection();
-          }
+          handleSelection(_chart, _options, _datum);
           var _d3 = d3v3.select($(element).find("svg")[0]);
           _d3.datum(_datum)
             .transition().duration(150)
@@ -327,33 +286,10 @@
               }
             }).call(_chart);
           _d3.selectAll("g.nv-x.nv-axis g text").each(function (d) {
-            insertLinebreaks(d, this);
+            insertLinebreaks(_chart, d, this);
           });
-          if (_chart.selectBars) {
-            var _field = (typeof _options.field == "function") ? _options.field() : _options.field;
-            $.each(_options.fqs(), function (cnt, item) {
-              if (item.id() == _options.datum.widget_id) {
-                if (item.field() == _field) {
-                  _chart.selectBars($.map(item.filter(), function (it) {
-                    return it.value();
-                  }));
-                }
-                if (Array.isArray(item.field())) {
-                  _chart.selectBars({
-                    field: item.field(),
-                    selected: $.map(item.filter(), function (it) {
-                      return {values: it.value()};
-                    })
-                  });
-                }
-              }
-            });
-          }
-          chartsNormalState();
+          huePubSub.publish('charts.state');
         }, 0);
-      }
-      else if (_datum.length > 0) {
-        ko.bindingHandlers.timelineChart.init(element, valueAccessor);
       }
     }
   };
@@ -375,7 +311,7 @@
             _chart.xAxis.tickFormat(function(d) { return d3v3.time.format("%Y-%m-%d %H:%M:%S")(new Date(d)); })
             _chart.onChartUpdate(function () {
               _d3.selectAll("g.nv-x.nv-axis g text").each(function (d){
-                insertLinebreaks(d, this);
+                insertLinebreaks(_chart, d, this);
               });
             });
           }
@@ -386,7 +322,7 @@
                 _options.onComplete();
               }
             }).call(_chart);
-          chartsNormalState();
+          huePubSub.publish('charts.state');
         }, 0);
       }
       else if (_datum.length > 0) {
@@ -579,7 +515,7 @@
           legendData: _legend,
           onClick: function (data) {
             if (typeof options.onClick != "undefined") {
-              chartsUpdatingState();
+              huePubSub.publish('charts.state', { updating: true });
               options.onClick(data);
             }
           },
@@ -656,7 +592,7 @@
         }, 200);
       });
 
-      chartsNormalState();
+      huePubSub.publish('charts.state');
     },
     init: function (element, valueAccessor) {
       ko.bindingHandlers.mapChart.render(element, valueAccessor);
@@ -732,11 +668,11 @@
     }
   };
 
-  var insertLinebreaks = function (d, ref) {
+  var insertLinebreaks = function (_chart, d, ref) {
     var _el = d3v3.select(ref);
     var _mom = moment(d);
     if (_mom != null && _mom.isValid()) {
-      var _words = _mom.format("HH:mm:ss YYYY-MM-DD").split(" ");
+      var _words = _el.text().split(" ");
       _el.text("");
       for (var i = 0; i < _words.length; i++) {
         var tspan = _el.append("tspan").text(_words[i]);
@@ -746,6 +682,114 @@
       }
     }
   };
+  function multi(xAxis, _chart) {
+    var previous = new Date(9999,11,31);
+    var minDiff = 5.1;
+    return d3v3.time.format.utc.multi([
+      ["%H:%M:%S %Y-%m-%d", function(d) {
+        var domain = xAxis.domain();
+        var isFirst = (previous > d || d == domain[0]) && moment(d).utc().seconds();
+        var result = isFirst;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%H:%M %Y-%m-%d", function(d) {
+        var domain = xAxis.domain();
+        var isFirst = (previous > d || d == domain[0]);
+        var result = isFirst;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%S %H:%M", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().minutes() !== moment(d).utc().minutes() && previousDiff < MINUTE_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%S", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().seconds() !== moment(d).utc().seconds() && previousDiff < MINUTE_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%H:%M:%S %Y-%m-%d", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().date() !== moment(d).utc().date() && previousDiff < WEEK_MS && moment(d).utc().seconds();
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%H:%M %Y-%m-%d", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().date() !== moment(d).utc().date() && previousDiff < WEEK_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%H:%M:%S", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = (moment(previous).utc().hours() !== moment(d).utc().hours() || moment(previous).utc().minutes() !== moment(d).utc().minutes()) && previousDiff < WEEK_MS && moment(d).utc().seconds();
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%H:%M", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = (moment(previous).utc().hours() !== moment(d).utc().hours() || moment(previous).utc().minutes() !== moment(d).utc().minutes()) && previousDiff < WEEK_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%d %Y-%m", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().months() !== moment(d).utc().months() && previousDiff < MONTH_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%d", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().date() !== moment(d).utc().date() && previousDiff < MONTH_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%m %Y", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().years() !== moment(d).utc().years() && previousDiff < YEAR_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%m", function(d) {
+        var previousDiff = Math.abs(d - previous);
+        var result = moment(previous).utc().months() !== moment(d).utc().months() && previousDiff < YEAR_MS;
+        if (result) {
+          previous = d;
+        }
+        return result;
+      }],
+      ["%Y", function(d) {
+        previous = d;
+        return true;
+      }]
+    ]);
+  }
 
   function lineChartBuilder(element, options, isTimeline) {
     var _datum = options.transformer(options.datum);
@@ -758,44 +802,56 @@
       $(element).find("svg").empty();
     }
 
-    var _hideSelection = options.hideSelection != null ? options.hideSelection : false;
-
     if ($(element).is(":visible")) {
       nv.addGraph(function () {
         var _chart = nv.models.lineWithBrushChart();
         $(element).data("chart", _chart);
         _chart.transitionDuration(0);
-        var enableSelection = true;
-        if (typeof options.enableSelection !== 'undefined') {
-          enableSelection = options.enableSelection;
-        }
-        if (_datum.length > 0 && _datum[0].values.length > 10 && enableSelection) {
-          _chart.enableSelection();
-        }
-        if (_hideSelection) {
-          _chart.hideSelection();
-        }
+        _chart.convert = function (d) {
+          return isTimeline ? new Date(moment(values1[0].obj.from).valueOf()) : parseFloat(d);
+        };
         if (options.showControls != null) {
           _chart.showControls(false);
         }
         _chart.onSelectRange(function (from, to) {
-          chartsUpdatingState();
-          options.onSelectRange($.isNumeric(from) ? new Date(moment(from).valueOf()) : from, $.isNumeric(to) ? new Date(moment(to).valueOf()) : to);
+          huePubSub.publish('charts.state', { updating: true });
+          options.onSelectRange($.isNumeric(from) && isTimeline ? new Date(moment(from).valueOf()) : parseInt(from), $.isNumeric(to) && isTimeline ? new Date(moment(to).valueOf()) : parseInt(to)); // FIXME when using pdouble we should not parseInt.
         });
+        if (options.selectedSerie) {
+          _chart.onLegendChange(function (state) {
+            var selectedSerie = options.selectedSerie();
+            var _datum = d3v3.select($(element).find("svg")[0]).datum();
+            for (var i = 0; i < state.disabled.length; i++) {
+              selectedSerie[_datum[i].key] = !state.disabled[i];
+            }
+            options.selectedSerie(selectedSerie);
+          });
+        }
         _chart.xAxis.showMaxMin(false);
         if (isTimeline){
-          _chart.xAxis.tickFormat(function(d) { return d3v3.time.format("%Y-%m-%d %H:%M:%S")(new Date(d)); })
+          _chart.xScale(d3v3.time.scale.utc());
+          _chart.tooltipContent(function(values){
+            return values.map(function (value) {
+              value = JSON.parse(JSON.stringify(value));
+              value.x = moment(value.x).utc().format("YYYY-MM-DD HH:mm:ss");
+              value.y = _chart.yAxis.tickFormat()(value.y);
+              return value;
+            });
+          });
+          _chart.xAxis.tickFormat(multi(_chart.xAxis, _chart));
           _chart.onChartUpdate(function () {
             _d3.selectAll("g.nv-x.nv-axis g text").each(function (d){
-              insertLinebreaks(d, this);
+              insertLinebreaks(_chart, d, this);
             });
           });
         }
 
-        _chart.yAxis
-            .tickFormat(d3v3.format(",0f"));
-
+        _chart.yAxis.tickFormat(d3v3.format("s"));
+        handleSelection(_chart, options, _datum);
         var _d3 = ($(element).find("svg").length > 0) ? d3v3.select($(element).find("svg")[0]) : d3v3.select($(element)[0]).insert("svg", ":first-child");
+        if ($(element).find("svg").length < 2) {
+          addLegend(element);
+        }
         _d3.datum(_datum)
             .transition().duration(150)
             .each("end", function () {
@@ -804,7 +860,7 @@
               }
               if (isTimeline) {
                 _d3.selectAll("g.nv-x.nv-axis g text").each(function (d){
-                  insertLinebreaks(d, this);
+                  insertLinebreaks(_chart, d, this);
                 });
               }
             }).call(_chart);
@@ -820,47 +876,150 @@
         $(element).on("forceUpdate", function () {
           _chart.update();
         });
+        _chart.lines.dispatch.on('elementClick', function(d){
+          if (typeof options.onClick != "undefined") {
+            huePubSub.publish('charts.state', { updating: true });
+            options.onClick(d.point);
+          }
+        });
 
         return _chart;
-      }, function () {
-        if ($(element).find("svg").length > 0) {
-          _d3 = d3v3.select($(element).find("svg")[0]);
-          if ($(element).find("svg").length < 2) {
-            addLegend(element);
-          }
-        } else {
-          _d3 = d3v3.select($(element)[0]).append("svg");
-          addLegend(element);
-        }
-        _d3.selectAll(".nv-line").on("click",
-            function (d, i) {
-              if (typeof options.onClick != "undefined") {
-                chartsUpdatingState();
-                options.onClick(d);
-              }
-            });
       });
     }
   }
 
   function addLegend(element) {
-    d3v3.select($(element)[0])
-      .append("div")
+    var $el = d3v3.select($(element)[0]);
+    var $div = $el.select('div');
+    if (!$div.size()) {
+      $el.append("div")
         .style("position", "absolute")
         .style("overflow", "auto")
-        .style("top", "0px")
+        .style("top", "20px")
         .style("right", "0px")
         .style("width", "175px")
-        .style("height", "100%")
+        .style("height", "calc(100% - 20px)")
       .append("svg");
+    } else {
+      $div.append("svg");
+    }
+  }
+  function numeric(_datum) {
+    for (var j = 0; j < _datum.length; j++) {
+      for (var i = 0; i < _datum[j].values.length; i++) {
+        if (isNaN(_datum[j].values[i].x * 1)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+  function handleSelection(_chart, _options, _datum) {
+    var i, j;
+    var serieEnabled = {};
+    if (_options.selectedSerie) {
+      var selectedSerie = _options.selectedSerie();
+      var enabledCount = 0;
+      for (i = 0; i < _datum.length; i++) {
+        if (!selectedSerie[_datum[i].key]) {
+          _datum[i].disabled = true;
+        } else {
+          enabledCount++;
+        }
+      }
+      if (enabledCount === 0) {
+        // Get the 5 series with the most non zero elements on x axis & total value.
+        var stats = {};
+        for (i = 0; i < _datum.length; i++) {
+          if (!stats[_datum[i].key]) {
+            stats[_datum[i].key] = {count: 0, total: 0};
+          }
+          for (j = 0; j < _datum[i].values.length; j++) {
+            stats[_datum[i].key].count += Math.min(_datum[i].values[j].y, 1);
+            stats[_datum[i].key].total += _datum[i].values[j].y;
+          }
+        }
+        var aStats = Object.keys(stats).map(function(key) {
+          return {key: key, stat: stats[key]};
+        });
+        aStats.sort(function (a, b) {
+          return a.stat.count - b.stat.count || a.stat.total - b.stat.total;
+        });
+        for (i = aStats.length - 1; i >= Math.max(aStats.length - 5, 0); i--) {
+          _datum[i].disabled = false;
+          selectedSerie[_datum[i].key] = true;
+        }
+      }
+    }
+    var _isPivot = _options.isPivot != null ? _options.isPivot : false;
+    var _hideSelection = typeof _options.hideSelection !== 'undefined' ? typeof _options.hideSelection === 'function' ? _options.hideSelection() : _options.hideSelection : false;
+    var _enableSelection = typeof _options.enableSelection !== 'undefined' ? typeof _options.enableSelection === 'function' ? _options.enableSelection() : _options.enableSelection : true;
+    _enableSelection = _enableSelection && numeric(_datum);
+    var _hideStacked = _options.hideStacked !== null ? typeof _options.hideStacked === 'function' ? _options.hideStacked() : _options.hideStacked : false;
+    var _displayValuesInLegend = _options.displayValuesInLegend !== null ? typeof _options.displayValuesInLegend === 'function' ? _options.displayValuesInLegend() : _options.displayValuesInLegend : false;
+    var fHideSelection = _isPivot || _hideSelection ? _chart.hideSelection : _chart.showSelection;
+    if (fHideSelection) {
+      fHideSelection.call(_chart);
+    }
+    var fEnableSelection = _enableSelection ? _chart.enableSelection : _chart.disableSelection;
+    if (fEnableSelection) {
+      fEnableSelection.call(_chart);
+    }
+    var fHideStacked = _hideStacked ? _chart.hideStacked : _chart.showStacked;
+    if (fHideStacked) {
+      fHideStacked.call(_chart);
+    }
+    var fDisplayValuesInLegend = _displayValuesInLegend ? _chart.hideStacked : _chart.showStacked;
+    if (_chart.displayValuesInLegend) {
+      _chart.displayValuesInLegend(_displayValuesInLegend);
+    }
+    if (_chart.selectBars) {
+      var _field = (typeof _options.field == "function") ? _options.field() : _options.field;
+      var bHasSelection = false;
+      $.each(_options.fqs ? _options.fqs() : [], function (cnt, item) {
+        if (item.id() == _options.datum.widget_id) {
+          if (item.field() == _field) {
+            if (item.properties) {
+              bHasSelection = true;
+              _chart.selectBars({
+                singleValues: $.map(item.filter(), function (it) {
+                  return it.value();
+                }),
+                rangeValues: $.map(item.properties(), function (it) {
+                  return {from: it.from(), to: it.to()};
+                })
+              });
+            }
+            else {
+              bHasSelection = true;
+              _chart.selectBars($.map(item.filter(), function (it) {
+                return it.value();
+              }));
+            }
+          }
+          if (Array.isArray(item.field())) {
+            bHasSelection = true;
+            _chart.selectBars({
+              field: item.field(),
+              selected: $.map(item.filter(), function (it) {
+                return {values: it.value()};
+              })
+            });
+          }
+        }
+      });
+      if (!bHasSelection) {
+        _chart.selectBars({field: '', selected:[]});
+      }
+    }
   }
 
   function barChartBuilder(element, options, isTimeline) {
-    var _datum = options.transformer(options.datum);
+    var _datum = options.transformer(options.datum, isTimeline);
     $(element).height(300);
 
     var _isPivot = options.isPivot != null ? options.isPivot : false;
-    var _hideSelection = options.hideSelection != null ? options.hideSelection : false;
+    var _hideSelection = typeof options.hideSelection !== 'undefined' ? typeof options.hideSelection === 'function' ? options.hideSelection() : options.hideSelection : false;
 
     if ($(element).find("svg").length > 0 && (_datum.length == 0 || _datum[0].values.length == 0)) {
       $(element).find("svg").remove();
@@ -873,112 +1032,62 @@
 
     nv.addGraph(function () {
       var _chart;
-      if (isTimeline) {
-        if ($(element).find("svg").length > 0 && $(element).find(".nv-discreteBarWithAxes").length > 0) {
-          $(element).find("svg").empty();
+      if ($(element).find("svg").length > 0 && $(element).find(".nv-discreteBarWithAxes").length > 0) {
+        $(element).find("svg").empty();
+      }
+      _chart = nv.models.multiBarWithBrushChart();
+      if (_datum.length > 0) $(element).data('chart_type', 'multibar_brush');
+      _chart.onSelectRange(function (from, to) {
+        huePubSub.publish('charts.state', { updating: true });
+        options.onSelectRange(from, to);
+      });
+      _chart.multibar.dispatch.on('elementClick', function(d){
+        if (typeof options.onClick != "undefined") {
+          huePubSub.publish('charts.state', { updating: true });
+          options.onClick(d.point);
         }
-        _chart = nv.models.multiBarWithBrushChart();
-        if (_datum.length > 0) $(element).data('chart_type', 'multibar_brush');
-        var enableSelection = true;
-        if (typeof options.enableSelection !== 'undefined') {
-          enableSelection = options.enableSelection;
-        }
-        if (_datum.length > 0 && _datum[0].values.length > 10 && enableSelection) {
-          _chart.enableSelection();
-        }
-        else {
-          _chart.disableSelection();
-        }
-        if (_hideSelection) {
-          _chart.hideSelection();
-        }
-        _chart.onSelectRange(function (from, to) {
-          chartsUpdatingState();
-          options.onSelectRange(from, to);
+      });
+      _chart.onStateChange(options.onStateChange);
+      if (options.selectedSerie) {
+        _chart.onLegendChange(function (state) {
+          var selectedSerie = options.selectedSerie();
+          var _datum = d3v3.select($(element).find("svg")[0]).datum();
+          for (var i = 0; i < state.disabled.length; i++) {
+            selectedSerie[_datum[i].key] = !state.disabled[i];
+          }
+          options.selectedSerie(selectedSerie);
         });
+      }
+      _chart.multibar.hideable(true);
+      _chart.multibar.stacked(typeof options.stacked != "undefined" ? options.stacked : false);
+      if (isTimeline) {
+        _chart.convert = function (d) {
+          return isTimeline ? new Date(moment(values1[0].obj.from).valueOf()) : parseFloat(d);
+        };
         _chart.staggerLabels(false);
-        _chart.xAxis.tickFormat(d3v3.time.format("%Y-%m-%d %H:%M:%S"));
-        _chart.multibar.hideable(true);
+        _chart.tooltipContent(function(values){
+          return values.map(function (value) {
+            value = JSON.parse(JSON.stringify(value));
+            value.x = moment(value.x).utc().format("YYYY-MM-DD HH:mm:ss");
+            value.y = _chart.yAxis.tickFormat()(value.y);
+            return value;
+          });
+        });
+        _chart.xAxis.tickFormat(multi(_chart.xAxis));
         _chart.multibar.stacked(typeof options.stacked != "undefined" ? options.stacked : false);
-        _chart.onStateChange(options.onStateChange);
         _chart.onChartUpdate(function () {
           _d3.selectAll("g.nv-x.nv-axis g text").each(function (d) {
-            insertLinebreaks(d, this);
+            insertLinebreaks(_chart, d, this);
           });
         });
       }
       else {
-        var _isDiscrete = false;
-        for (var j = 0; j < _datum.length; j++) {
-          for (var i = 0; i < _datum[j].values.length; i++) {
-            if (isNaN(_datum[j].values[i].x * 1)) {
-              _isDiscrete = true;
-              break;
-            }
-          }
-        }
-        if (_isDiscrete && !_isPivot) {
-          if ($(element).find("svg").length > 0 && $(element).find(".nv-multiBarWithLegend").length > 0) {
-            $(element).find("svg").remove();
-          }
-          if (_datum.length > 0) $(element).data('chart_type', 'discrete_bar');
-          $(element).data('chart_pivot', false);
-          _chart = nv.models.growingDiscreteBarChart()
-            .x(function (d) {
-              return d.x
-            })
-            .y(function (d) {
-              return d.y
-            })
-            .staggerLabels(true)
-            .tooltipContent(function (key, x, y) {
-              return '<h3>' + key + '</h3><p>' + y + ' on ' + hueUtils.htmlEncode(x) + '</p>'
-            });
-        }
-        else if (_isDiscrete && _isPivot) {
-          if ($(element).find("svg").length > 0 && $(element).find(".nv-discreteBarWithAxes").length > 0) {
-            $(element).find("svg").remove();
-          }
-          if (_datum.length > 0) $(element).data('chart_type', 'discrete_bar');
-          $(element).data('chart_pivot', true);
-          _chart = nv.models.growingMultiBarChart()
-            .x(function (d) {
-              return d.x
-            })
-            .y(function (d) {
-              return d.y
-            })
-            .tooltipContent(function (key, x, y) {
-              return '<h3>' + key + '</h3><p>' + y + ' on ' + hueUtils.htmlEncode(x) + '</p>'
-            });
-        }
-        else {
-          if ($(element).find("svg").length > 0 && $(element).find(".nv-discreteBarWithAxes").length > 0) {
-            $(element).find("svg").remove();
-          }
-          if (_datum.length > 0) $(element).data('chart_type', 'multibar_brush');
-          _chart = nv.models.multiBarWithBrushChart();
-          _chart.tooltipContent(function (key, x, y) {
-            return '<h3>' + hueUtils.htmlEncode(key) + '</h3><p>' + y + ' on ' + hueUtils.htmlEncode(x) + '</p>'
-          });
-          if (_datum.length > 0 && _datum[0].values.length > 10) {
-            _chart.enableSelection();
-          }
-
-          if (_isPivot || _hideSelection) {
-            _chart.hideSelection();
-          }
-          else {
-            _chart.xAxis.showMaxMin(false).tickFormat(d3v3.format(",0f"));
-          }
+        if (numeric(_datum)) {
+          _chart.xAxis.showMaxMin(false).tickFormat(d3v3.format(",0f"));
+          _chart.staggerLabels(false);
+        } else if (!_isPivot) {
+          _chart.multibar.barColor(nv.utils.defaultColor());
           _chart.staggerLabels(true);
-          _chart.multibar.hideable(true);
-          _chart.multibar.stacked(typeof options.stacked != "undefined" ? options.stacked : false);
-          _chart.onStateChange(options.onStateChange);
-          _chart.onSelectRange(function (from, to) {
-            chartsUpdatingState();
-            options.onSelectRange(from, to);
-          });
         }
       }
       if ($(element).width() < 300 && typeof _chart.showLegend != "undefined") {
@@ -986,12 +1095,14 @@
       }
       _chart.transitionDuration(0);
 
-      _chart.yAxis
-        .tickFormat(d3v3.format("s"));
+      _chart.yAxis.tickFormat(d3v3.format("s"));
 
       $(element).data("chart", _chart);
-
+      handleSelection(_chart, options, _datum);
       var _d3 = ($(element).find("svg").length > 0) ? d3v3.select($(element).find("svg")[0]) : d3v3.select($(element)[0]).insert("svg",":first-child");
+      if ($(element).find("svg").length < 2) {
+        addLegend(element);
+      }
       _d3.datum(_datum)
         .transition().duration(150)
         .each("end", function () {
@@ -1000,31 +1111,14 @@
           }
           if (isTimeline) {
             _d3.selectAll("g.nv-x.nv-axis g text").each(function (d) {
-              insertLinebreaks(d, this);
+              insertLinebreaks(_chart, d, this);
             });
+          }
+          if (options.slot && _chart.recommendedTicks) {
+            options.slot(_chart.recommendedTicks());
           }
         }).call(_chart);
 
-      if (_chart.selectBars && options.fqs) {
-        var _field = (typeof options.field == "function") ? options.field() : options.field;
-        $.each(options.fqs(), function (cnt, item) {
-          if (item.id() == options.datum.widget_id) {
-            if (item.field() == _field) {
-              _chart.selectBars($.map(item.filter(), function (it) {
-                return it.value();
-              }));
-            }
-            if (Array.isArray(item.field())) {
-              _chart.selectBars({
-                field: item.field(),
-                selected: $.map(item.filter(), function (it) {
-                  return {values: it.value()};
-                })
-              });
-            }
-          }
-        });
-      }
 
       if (!options.skipWindowResize) {
         var _resizeTimeout = -1;
@@ -1041,30 +1135,12 @@
       });
 
       return _chart;
-    }, function () {
-      var _d3;
-      if ($(element).find("svg").length > 0) {
-        _d3 = d3v3.select($(element).find("svg")[0]);
-        if ($(element).find("svg").length < 2) {
-          addLegend(element);
-        }
-      } else {
-        _d3 = d3v3.select($(element)[0]).append("svg");
-        addLegend(element);
-      }
-      _d3.selectAll(".nv-bar").on("click",
-        function (d, i) {
-          if (typeof options.onClick != "undefined") {
-            chartsUpdatingState();
-            options.onClick(d);
-          }
-        });
     });
   }
 
   ko.bindingHandlers.partitionChart = {
     render: function (element, valueAccessor) {
-      chartsNormalState();
+      huePubSub.publish('charts.state');
       var MIN_HEIGHT_FOR_TOOLTIP = 24;
 
       var _options = valueAccessor();
@@ -1139,7 +1215,7 @@
         g.on("click", click)
           .on("dblclick", function (d, i) {
             if (typeof _options.onClick != "undefined" && d.depth > 0) {
-              chartsUpdatingState();
+              huePubSub.publish('charts.state', { updating: true });
               _options.onClick(d);
             }
           });
@@ -1147,7 +1223,7 @@
       else {
         g.on("click", function (d, i) {
           if (typeof _options.onClick != "undefined" && d.depth > 0) {
-            chartsUpdatingState();
+            huePubSub.publish('charts.state', { updating: true });
             _options.onClick(d);
           }
         });
@@ -1251,17 +1327,10 @@
     }
   };
 
-  function chartsUpdatingState() {
-    $('.nvd3').parents('svg').css('opacity', '0.5');
-  }
-
-  window.chartsUpdatingState = chartsUpdatingState;
-
-  function chartsNormalState() {
-    $('.nvd3').parents('svg').css('opacity', '1');
-  }
-
-  window.chartsNormalState = chartsNormalState;
+  huePubSub.subscribe('charts.state', function(state) {
+    var opacity = state && state.updating ? '0.5' : '1';
+    $('.nvd3').parents('svg').css('opacity', opacity);
+  });
 
   var tipBuilder = function () {
     var direction = d3_tip_direction,

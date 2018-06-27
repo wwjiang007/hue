@@ -25,7 +25,7 @@ from django.forms.formsets import formset_factory
 from django.http import HttpResponse
 from django.utils.functional import wraps
 from django.utils.translation import ugettext as _
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.shortcuts import redirect
 
 from desktop.conf import TIME_ZONE
@@ -395,6 +395,11 @@ def list_oozie_workflow(request, job_id):
     }
     return JsonResponse(return_obj, encoder=JSONEncoderForHTML)
 
+  if request.GET.get('format') == 'svg':
+    oozie_api = get_oozie(request.user, api_version="v2")
+    svg_data = oozie_api.get_job_graph(job_id)
+    return HttpResponse(svg_data)
+
   if request.GET.get('graph'):
     return render('dashboard/list_oozie_workflow_graph.mako', request, {
       'oozie_workflow': oozie_workflow,
@@ -634,7 +639,7 @@ def list_oozie_sla(request):
 
     job_name = request.POST.get('job_name')
 
-    if re.match('.*-oozie-oozi-[WCB]', job_name):
+    if re.match('.*-oozie-\w+-[WCB]', job_name):
       params['id'] = job_name
       params['parent_id'] = job_name
     else:
@@ -651,7 +656,7 @@ def list_oozie_sla(request):
   else:
     oozie_slas = [] # or get latest?
 
-  if request.REQUEST.get('format') == 'json':
+  if request.GET.get('format') == 'json':
     massaged_slas = []
     for sla in oozie_slas:
       massaged_slas.append(massaged_sla_for_json(sla))
@@ -762,7 +767,7 @@ def rerun_oozie_job(request, job_id, app_path=None):
     if sum([rerun_form.is_valid(), params_form.is_valid()]) == 2:
       args = {}
 
-      if request.POST['rerun_form_choice'] == 'fail_nodes':
+      if request.POST.get('rerun_form_choice') == 'fail_nodes':
         args['fail_nodes'] = 'true'
       else:
         args['skip_nodes'] = ','.join(rerun_form.cleaned_data['skip_nodes'])

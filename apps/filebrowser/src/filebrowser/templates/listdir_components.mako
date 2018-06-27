@@ -636,7 +636,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
         <a href="#" data-bind="click: $root.viewFile"><i class="fa fa-level-up"></i></a>
         <!-- /ko -->
         <!-- ko if: name != '..' -->
-        <strong><a href="#" class="draggable-fb" data-bind="drag: { enabled: (!$root.isS3() || ($root.isS3() && !$root.isS3Root())), value: $data }, click: $root.viewFile, text: name, attr: { 'draggable': $.inArray(name, ['.', '..', '.Trash']) === -1 && !$root.isS3()}"></a></strong>
+        <strong><a href="#" class="draggable-fb" data-bind="drag: { enabled: (!$root.isS3() || ($root.isS3() && !$root.isS3Root())), value: $data }, click: $root.viewFile, text: name, attr: { 'draggable': $.inArray(name, ['.', '..', '.Trash']) === -1 && !isBucket()}"></a></strong>
         <!-- /ko -->
       </td>
       <td>
@@ -790,6 +790,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
     }
 
     var updateHash = function (hash) {
+      hash = encodeURI(hash);
       %if not is_embeddable:
       window.location.hash = hash;
       %else:
@@ -828,7 +829,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
       return {
         name: file.name,
         path: file.path,
-        url: file.url,
+        url: encodeURI(file.url),
         type: file.type,
         permissions: file.rwx,
         mode: file.mode,
@@ -841,7 +842,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
           replication: file.stats.replication
         },
         isBucket: ko.pureComputed(function(){
-          return file.path.toLowerCase().indexOf('s3a://') == 0 && file.path.substr(5).indexOf('/') == -1
+          return file.path.toLowerCase().indexOf('s3a://') == 0 && file.path.substr(6).indexOf('/') == -1
         }),
         selected: ko.observable(file.highlighted && viewModel.isArchive(file.name) || false),
         highlighted: ko.observable(file.highlighted || false),
@@ -871,7 +872,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
           }
 
           // display context menu and ensure it is on-screen
-          if ($.inArray(row.name, ['..', '.', '.Trash']) === -1) {
+          if ($.inArray(row.name, ['..', '.Trash']) === -1) {
             this.selected(true);
             var verticalCorrection = 0;
             %if is_embeddable:
@@ -1139,7 +1140,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
       self.showSummary = function () {
         self.isLoadingSummary(true);
         $("#contentSummaryModal").modal("show");
-        $.getJSON("${url('filebrowser.views.content_summary', path='')}" + self.selectedFile().path, function (data) {
+        $.getJSON("${url('content_summary', path='')}" + self.selectedFile().path, function (data) {
           if (data.status == 0) {
             self.contentSummary(ko.mapping.fromJS(data.summary));
             self.isLoadingSummary(false);
@@ -1329,7 +1330,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
           self.searchQuery("");
           self.targetPath("${url('filebrowser.views.view', path='')}" + stripHashes(file.path));
           updateHash(stripHashes(file.path));
-        } else {   
+        } else {
           %if is_embeddable:
           huePubSub.publish('open.link', file.url);
           %else:
@@ -1339,11 +1340,11 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
       };
 
       self.editFile = function () {
-        window.location.href = "${url('filebrowser.views.edit', path='')}" + self.selectedFile().path;
+        window.location.href = "${url('filebrowser_views_edit', path='')}" + encodeURI(self.selectedFile().path);
       };
 
       self.downloadFile = function () {
-        window.location.href = "${url('filebrowser.views.download', path='')}" + self.selectedFile().path;
+        window.location.href = "${url('filebrowser_views_download', path='')}" + encodeURI(self.selectedFile().path);
       };
 
       self.renameFile = function () {
@@ -1422,6 +1423,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
             error: function(xhr){
               $.jHueNotify.error(xhr.responseText);
               resetPrimaryButtonsStatus();
+              $('#moveDestination').val('');
             }
           });
 
@@ -1455,6 +1457,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
         }
         else {
           $.jHueNotify.warn("${ _('You cannot copy a folder into itself.') }");
+          $('#moveDestination').val('');
         }
       };
 
@@ -2069,7 +2072,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
           catch (exc) {
           }
           var options = {
-            url: '/filebrowser/upload/file?dest=' + ops.path,
+            url: '/filebrowser/upload/file?dest=' + encodeURI(ops.path),
             paramName: 'hdfs_file',
             params: {
               dest: ops.path
@@ -2103,7 +2106,7 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
                 newDest = ops.path + '/' + file.fullPath.substr(0, file.fullPath.length - file.name.length);
               }
               this.options.params.dest = newDest;
-              this.options.url = '/filebrowser/upload/file?dest=' + newDest;
+              this.options.url = '/filebrowser/upload/file?dest=' + encodeURI(newDest);
             },
             uploadprogress: function (file, progress) {
               $('[data-dz-name]').each(function (cnt, item) {
@@ -2252,6 +2255,18 @@ from filebrowser.conf import ENABLE_EXTRACT_UPLOADED_ARCHIVE
           $("#moveNameRequiredAlert").show();
           $("#moveForm").find("input[name='*dest_path']").addClass("fieldError");
           resetPrimaryButtonsStatus(); //globally available
+          return false;
+        }
+        var isMoveOnSelf = false;
+        $(viewModel.selectedFiles()).each(function (index, file) {
+          if (file.path == $('#moveDestination').val()) {
+            isMoveOnSelf = true;
+            return false;
+          }
+        });
+        if(isMoveOnSelf){
+          $.jHueNotify.warn("${ _('You cannot copy a folder into itself.') }");
+          $('#moveDestination').val('');
           return false;
         }
         return true;

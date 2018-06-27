@@ -54,7 +54,7 @@ class LdapSynchronizationMiddleware(object):
     if not user or not user.is_authenticated():
       return
 
-    if not User.objects.filter(username=user.username, userprofile__creation_method=str(UserProfile.CreationMethod.EXTERNAL)).exists():
+    if not User.objects.filter(username=user.username, userprofile__creation_method=UserProfile.CreationMethod.EXTERNAL.name).exists():
       LOG.warn("User %s is not an Ldap user" % user.username)
       return
 
@@ -91,7 +91,7 @@ class LastActivityMiddleware(object):
       logout = True
 
     # Save last activity for user except when polling
-    if not (request.path.strip('/') == 'jobbrowser/jobs' and request.POST.get('format') == 'json') and not (request.path == '/desktop/debug/is_idle'):
+    if not (request.path.strip('/') == 'jobbrowser/api/jobs') and not (request.path.strip('/') == 'jobbrowser/jobs' and request.POST.get('format') == 'json') and not (request.path == '/desktop/debug/is_idle'):
       try:
         profile.last_activity = datetime.now()
         profile.save()

@@ -1512,10 +1512,13 @@
         $element.popover('show');
         var $tip = $element.data('popover').$tip;
         if (HUE_CONTAINER !== 'body') {
+          $tip.css({ 'position': 'fixed', 'z-index': 2000 });
           $tip.appendTo(HUE_CONTAINER);
-          var tipOffset = $tip.offset();
-          var containerOffset = $(HUE_CONTAINER).offset();
-          $tip.offset({ left: tipOffset.left - containerOffset.left, top: tipOffset.top - containerOffset.top });
+
+          $tip.offset({
+            left: $element.offset().left + $element.outerWidth(true) + 10,
+            top: $element.offset().top + ($element.outerHeight(true) / 2) - ($tip.outerHeight(true) / 2)
+          });
         }
         ko.cleanNode($tip.get(0));
         ko.applyBindings(viewModel, $tip.get(0));
@@ -3165,26 +3168,27 @@
   };
 
   ko.bindingHandlers.chosen = {
-      init: function(element, valueAccessor, allBindings, viewModel, bindingContext){
-          var $element = $(element);
-          var options = ko.unwrap(valueAccessor());
+    init: function(element, valueAccessor, allBindings, viewModel, bindingContext){
+      var $element = $(element);
+      var options = ko.unwrap(valueAccessor());
 
-          if (typeof options === 'object')
-              $element.chosen(options);
-          else
-              $element.chosen();
-
-          ['options', 'selectedOptions', 'value'].forEach(function(propName){
-              if (allBindings.has(propName)){
-                  var prop = allBindings.get(propName);
-                  if (ko.isObservable(prop)){
-                      prop.subscribe(function(){
-                          $element.trigger('chosen:updated');
-                      });
-                  }
-              }
-          });
+      if (typeof options === 'object') {
+        $element.chosen(options);
+      } else {
+        $element.chosen();
       }
+
+      ['options', 'selectedOptions', 'value'].forEach(function(propName){
+        if (allBindings.has(propName)){
+          var prop = allBindings.get(propName);
+          if (ko.isObservable(prop)) {
+            prop.subscribe(function(){
+              $element.trigger('chosen:updated');
+            });
+          }
+        }
+      });
+    }
   };
 
   ko.bindingHandlers.tooltip = {
@@ -5279,7 +5283,8 @@
                     huePubSub.publish('context.popover.show', {
                       data: {
                         type: 'storageEntry',
-                        storageEntry: entry
+                        storageEntry: entry,
+                        editorLocation: token.parseLocation.location
                       },
                       pinEnabled: true,
                       source: source
@@ -5619,28 +5624,28 @@
       var menu = ko.bindingHandlers.contextMenu.initContextMenu($tableDropMenu, $('.content-panel'));
 
       $tableDropMenu.find('.editor-drop-value').click(function () {
-        insertSqlAtCursor(lastMeta.database + '.' + lastMeta.table + ' ', 0, menu);
+        insertSqlAtCursor(SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) + '.' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) + ' ', 0, menu);
       });
 
       $tableDropMenu.find('.editor-drop-select').click(function () {
-        insertSqlAtCursor('SELECT * FROM ' + lastMeta.database + '.' + lastMeta.table + ' LIMIT 100;', -1, menu);
+        insertSqlAtCursor('SELECT * FROM ' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) + '.' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) + ' LIMIT 100;', -1, menu);
         $tableDropMenu.hide();
       });
 
       $tableDropMenu.find('.editor-drop-insert').click(function () {
-        insertSqlAtCursor('INSERT INTO ' + lastMeta.database + '.' + lastMeta.table + ' VALUES ();', -2, menu);
+        insertSqlAtCursor('INSERT INTO ' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) + '.' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) + ' VALUES ();', -2, menu);
       });
 
       $tableDropMenu.find('.editor-drop-update').click(function () {
-        insertSqlAtCursor('UPDATE ' + lastMeta.database + '.' + lastMeta.table + ' SET ', 0, menu);
+        insertSqlAtCursor('UPDATE ' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) + '.' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) + ' SET ', 0, menu);
       });
 
       $tableDropMenu.find('.editor-drop-view').click(function () {
-        insertSqlAtCursor('DROP VIEW ' + lastMeta.database + '.' + lastMeta.table + ';', -1, menu);
+        insertSqlAtCursor('DROP VIEW ' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) + '.' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) + ';', -1, menu);
       });
 
       $tableDropMenu.find('.editor-drop-drop').click(function () {
-        insertSqlAtCursor('DROP TABLE ' + lastMeta.database + '.' + lastMeta.table + ';', -1, menu);
+        insertSqlAtCursor('DROP TABLE ' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) + '.' + SqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) + ';', -1, menu);
       });
 
       $el.droppable({
@@ -6532,6 +6537,7 @@
       var options = valueAccessor() || {};
       var scrollable = options.scrollable ? options.scrollable : window;
       var triggerAdjust = options.triggerAdjust || 0;
+      var zIndex = options.zIndex || 1000;
       $(element).addClass('dockable');
 
       var initialTopPosition = -1;
@@ -6548,7 +6554,7 @@
           ghost.height($(element).outerHeight() + (options.jumpCorrection || 0));
         }
         if ($(scrollable).scrollTop() + triggerAdjust > initialTopPosition) {
-          $(element).attr('style', 'position: fixed!important; top: ' + options.topSnap + '; width: ' + initialSize.w + 'px!important');
+          $(element).attr('style', 'position: fixed!important; top: ' + options.topSnap + '; width: ' + initialSize.w + 'px!important; z-index: ' + zIndex);
           ghost.show();
         }
         else {
@@ -7204,6 +7210,11 @@
       $.extend(options, value);
 
       $(element).addClass('dropzone');
+      
+      $(element).on('click', function (e) {
+        e.stopPropagation();
+      });
+
       new Dropzone(element, options);
     }
   };

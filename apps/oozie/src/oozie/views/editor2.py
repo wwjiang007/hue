@@ -18,7 +18,7 @@
 import json
 import logging
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.forms.formsets import formset_factory
 from django.shortcuts import redirect
 from django.utils.translation import ugettext as _
@@ -27,7 +27,7 @@ from desktop.conf import USE_NEW_EDITOR
 from desktop.lib import django_mako
 from desktop.lib.django_util import JsonResponse, render
 from desktop.lib.exceptions_renderable import PopupException
-from desktop.lib.i18n import smart_str
+from desktop.lib.i18n import smart_str, force_unicode
 from desktop.lib.rest.http_client import RestException
 from desktop.lib.json_utils import JSONEncoderForHTML
 from desktop.models import Document, Document2
@@ -680,7 +680,11 @@ def submit_coordinator(request, doc_id):
       mapping = dict([(param['name'], param['value']) for param in params_form.cleaned_data])
       mapping['dryrun'] = request.POST.get('dryrun_checkbox') == 'on'
       jsonify = request.POST.get('format') == 'json'
-      job_id = _submit_coordinator(request, coordinator, mapping)
+      try:
+        job_id = _submit_coordinator(request, coordinator, mapping)
+      except Exception, e:
+        message = force_unicode(str(e))
+        return JsonResponse({'status': -1, 'message': message}, safe=False)
       if jsonify:
         return JsonResponse({'status': 0, 'job_id': job_id, 'type': 'schedule'}, safe=False)
       else:
@@ -796,7 +800,7 @@ def save_bundle(request):
   if bundle_data['coordinators']:
     dependencies = Document2.objects.filter(type='oozie-coordinator2', uuid__in=[c['coordinator'] for c in bundle_data['coordinators']])
     for doc in dependencies:
-      doc.doc.get().can_read_or_exception(request.user)
+      doc._get_doc1(doc2_type='coordinator2').can_read_or_exception(request.user)
     bundle_doc.dependencies = dependencies
 
   bundle_doc1 = bundle_doc.doc.get()

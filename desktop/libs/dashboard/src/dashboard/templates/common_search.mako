@@ -25,7 +25,7 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
 
 <%namespace name="dashboard" file="common_dashboard.mako" />
 
-<%def name="page_structure(is_mobile=False, is_embeddable=False)">
+<%def name="page_structure(is_mobile=False, is_embeddable=False, is_report=False)">
 
 <script type="text/javascript">
   SLIDER_LABELS = {
@@ -51,7 +51,7 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
     </div>
   </form>
 %else:
-<div class="search-bar" data-bind="visible: !$root.isPlayerMode(), dockable: { scrollable: '.page-content', jumpCorrection: 0, topSnap: '${ conf.CUSTOM.BANNER_TOP_HTML.get() and "78px" or "50px" }', triggerAdjust: 50 }, event: { mouseover: function(){ if (columns().length && isGridster()) { showPlusButtonHint(true); } } }">
+<div class="search-bar" data-bind="visible: !$root.isPlayerMode(), dockable: { scrollable: '.page-content', jumpCorrection: 0, topSnap: '${ conf.CUSTOM.BANNER_TOP_HTML.get() and "78px" or "50px" }', triggerAdjust: 50, zIndex: 1001 }, event: { mouseover: function(){ if (columns().length && isGridster()) { showPlusButtonHint(true); } } }">
   <div class="search-bar-header">
     <div class="search-bar-logo">
       <div class="app-header">
@@ -90,11 +90,12 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
 
       <form class="form-search" style="margin: 0" data-bind="submit: searchBtn, visible: columns().length != 0">
         <div class="search-bar-query-container">
-          <div class="search-bar-collection">
+          <div class="search-bar-collection" data-bind="visible: $root.collection.engine() != 'report'">
             <div class="selectMask">
               <span data-bind="editable: collection.label, editableOptions: { enabled: true, placement: 'right' }"></span>
             </div>
           </div>
+          <!-- ko if: $root.collection.engine() !== 'report' -->
           <div class="search-bar-query" data-bind="foreach: query.qs">
 
             <div data-bind="component: { name: 'hue-simple-ace-editor', params: {
@@ -103,6 +104,9 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
               placeHolder: $root.collection.engine() === 'solr' ? '${ _ko('Example: field:value, or press CTRL + space') }' : '${ _ko('Example: col = value, or press CTRL + space') }',
               autocomplete: { type: $root.collection.engine() + 'Query', support: { collection: $root.collection } },
               mode: $root.collection.engine(),
+              fixedPrefix: $root.collection.engine() !== 'solr' ? function() { return 'SELECT * FROM ' +  $root.collection.name() + ' WHERE '; } : undefined,
+              fixedPostfix: $root.collection.engine() !== 'solr' ? function() { return ' GROUP BY 1;' } : undefined,
+              database: function () { return $root.collection.name().split('.')[0] },
               singleLine: true }
             }"></div>
 ##             <input data-bind="clearable: q, valueUpdate:'afterkeydown', typeahead: { target: q, nonBindableSource: queryTypeahead, multipleValues: true, multipleValuesSeparator: ':', extraKeywords: 'AND OR TO', completeSolrRanges: true }, css: {'input-small': $root.query.qs().length > 1, 'flat-left': $index() === 0, 'input-xlarge': $root.collection.supportAnalytics()}" maxlength="4096" type="text" class="search-query">
@@ -110,10 +114,13 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
               <a class="btn flat-left" href="javascript:void(0)" data-bind="click: $root.query.removeQ"><i class="fa fa-minus"></i></a>
             <!-- /ko -->
           </div>
+          <!-- /ko -->
           <div class="search-bar-query-operations">
+            <!-- ko if: $root.collection.engine() !== 'report' -->
             <a class="btn" href="javascript:void(0)" data-bind="click: $root.query.addQ, css: { 'flat-left': $root.query.qs().length === 1}, style: { 'margin-left': $root.query.qs().length > 1 ? '10px' : '0' }, visible: ! collection.supportAnalytics()">
               <i class="fa fa-plus"></i>
             </a>
+            <!-- /ko -->
 
             <button type="submit" id="search-btn" class="btn btn-primary disable-feedback" style="margin-left:10px; margin-right:10px">
               <i class="fa fa-search" data-bind="visible: ! isRetrievingResults()"></i>
@@ -139,9 +146,15 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
           <i class="fa fa-plus"></i>
         </a>
         % else:
-        <a class="btn" title="${ _('Toggle the widget toolbar') }" rel="tooltip" data-placement="bottom" data-bind="visible: columns().length, click: function() { isToolbarVisible(!isToolbarVisible()) }, css: {'btn': true, 'btn-inverse': isToolbarVisible }">
-          <i class="fa fa-plus"></i>
-        </a>
+          %if is_report:
+            <a class="btn draggable-plus-button move-cursor" title="${ _('Drag to add a widget') }" rel="tooltip" data-placement="bottom" data-bind="draggable: {data: draggableDocument(), options: getDraggableOptions({ data: draggableDocument(), plusButton: true })}, visible: columns().length">
+              <i class="fa fa-plus"></i>
+            </a>
+          % else:
+            <a class="btn" title="${ _('Toggle the widget toolbar') }" rel="tooltip" data-placement="bottom" data-bind="visible: columns().length, click: function() { isToolbarVisible(!isToolbarVisible()) }, css: {'btn': true, 'btn-inverse': isToolbarVisible }">
+              <i class="fa fa-plus"></i>
+            </a>
+          %endif
         % endif:
       </div>
       <!-- /ko -->
@@ -226,6 +239,7 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
 </div>
 %endif
 
+% if not is_report:
 <%dashboard:layout_toolbar>
   <%def name="results()">
     <div data-bind="css: { 'draggable-widget': true, 'disabled': !availableDraggableResultset() },
@@ -325,15 +339,6 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
                        <i class="fa fa-bar-chart"></i>
          </a>
     </div>
-    <div data-bind="visible: !$root.collection.supportAnalytics(),
-                    css: { 'draggable-widget': true, 'disabled': !availableDraggableNumbers() },
-                    draggable: {data: draggableLine(), isEnabled: availableDraggableNumbers,
-                    options: getDraggableOptions({ data: draggableLine() }) }"
-         title="${_('Line Chart')}" rel="tooltip" data-placement="top">
-         <a data-bind="style: { cursor: $root.availableDraggableNumbers() ? 'move' : 'default' }">
-                       <i class="hcha hcha-line-chart"></i>
-         </a>
-    </div>
     <div data-bind="visible: !$root.collection.supportAnalytics(), css: { 'draggable-widget': true, 'disabled': false },
                     draggable: {data: draggableTree(), isEnabled: true,
                     options: getDraggableOptions({ data: draggableTree() }) }"
@@ -369,20 +374,20 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
                        <i class="hcha hcha-timeline-chart"></i>
          </a>
     </div>
-    <div data-bind="visible: $root.collection.supportAnalytics(), css: { 'draggable-widget': true, 'disabled': ! availableTimeline() },
-                    draggable: {data: draggableTimeline(), isEnabled: availableTimeline,
-                    options: getDraggableOptions({ data: draggableTimeline() }) }"
-         title="${_('Timeline')}" rel="tooltip" data-placement="top">
-         <a data-bind="style: { cursor: $root.availableTimeline() ? 'move' : 'default' }">
-                       <i class="fa fa-line-chart"></i>
-         </a>
-    </div>
     <div data-bind="visible: !$root.collection.supportAnalytics(), css: { 'draggable-widget': true, 'disabled': ! availableDraggableMap() },
                     draggable: {data: draggableMap(), isEnabled: availableDraggableMap,
                     options: getDraggableOptions({ data: draggableMap() }) }"
          title="${_('Gradient Map')}" rel="tooltip" data-placement="top">
          <a data-bind="style: { cursor: $root.availableDraggableMap() ? 'move' : 'default' }">
                        <i class="hcha hcha-map-chart"></i>
+         </a>
+    </div>
+    <div data-bind="visible: $root.collection.supportAnalytics(), css: { 'draggable-widget': true, 'disabled': ! availableTimeline() },
+                    draggable: {data: draggableTimeline(), isEnabled: availableTimeline,
+                    options: getDraggableOptions({ data: draggableTimeline() }) }"
+         title="${_('Timeline')}" rel="tooltip" data-placement="top">
+         <a data-bind="style: { cursor: $root.availableTimeline() ? 'move' : 'default' }">
+                       <i class="fa fa-line-chart"></i>
          </a>
     </div>
     <div data-bind="visible: $root.collection.supportAnalytics(), css: { 'draggable-widget': true, 'disabled': ! availableDraggableMap() },
@@ -393,19 +398,10 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
                        <i class="hcha hcha-map-chart"></i>
          </a>
     </div>
-    % if HAS_REPORT_ENABLED.get():
-    <div data-bind="visible: $root.collection.supportAnalytics(),
-                    css: { 'draggable-widget': true, 'disabled': false },
-                    draggable: {data: draggableDocument(), isEnabled: true,
-                    options: getDraggableOptions({ data: draggableDocument() }) }"
-         title="${_('Document')}" rel="tooltip" data-placement="top">
-         <a data-bind="style: { cursor: true ? 'move' : 'default' }">
-                       <i class="fa fa-file-o"></i>
-         </a>
-    </div>
-    % endif
+
       </%def>
 </%dashboard:layout_toolbar>
+% endif
 
 <div class="player-toolbar" data-bind="visible: $root.isPlayerMode">
   <div class="pull-right pointer" data-bind="visible: $root.isPlayerMode, click: function(){ hueUtils.exitFullScreen(); $root.isPlayerMode(false); }"><i class="fa fa-times"></i></div>
@@ -876,57 +872,57 @@ ${ dashboard.layout_skeleton(suffix='search') }
 
 
 <script type="text/html" id="grid-chart-settings">
-<!-- ko if: $parent.widgetType() == 'resultset-widget' -->
-  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: [ko.HUE_CHARTS.TYPES.TIMELINECHART, ko.HUE_CHARTS.TYPES.BARCHART].indexOf(chartType()) >= 0">
+<!-- ko if: $parent.widgetType() === 'resultset-widget' || $parent.widgetType() === 'document-widget' -->
+  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: [ko.HUE_CHARTS.TYPES.TIMELINECHART, ko.HUE_CHARTS.TYPES.BARCHART].indexOf(chartSettings.chartType()) >= 0">
     <li class="nav-header">${_('Chart Type')}</li>
   </ul>
-  <div data-bind="visible: [ko.HUE_CHARTS.TYPES.TIMELINECHART, ko.HUE_CHARTS.TYPES.BARCHART].indexOf(chartType()) >= 0">
+  <div data-bind="visible: [ko.HUE_CHARTS.TYPES.TIMELINECHART, ko.HUE_CHARTS.TYPES.BARCHART].indexOf(chartSettings.chartType()) >= 0">
     <select class="input-medium" data-bind="options: $root.timelineChartTypes,
                  optionsText: 'label',
                  optionsValue: 'value',
-                 value: $root.collection.template.chartSettings.chartSelectorType">
+                 value: chartSettings.chartSelectorType">
     </select>
   </div>
-  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartType() != ''">
-    <li data-bind="visible: [ko.HUE_CHARTS.TYPES.MAP, ko.HUE_CHARTS.TYPES.GRADIENTMAP, ko.HUE_CHARTS.TYPES.PIECHART].indexOf(chartType()) == -1" class="nav-header">${_('x-axis')}</li>
-    <li data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.GRADIENTMAP" class="nav-header">${_('region')}</li>
-    <li data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.MAP" class="nav-header">${_('latitude')}</li>
-    <li data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.PIECHART" class="nav-header">${_('legend')}</li>
+  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartSettings.chartType() != ''">
+    <li data-bind="visible: [ko.HUE_CHARTS.TYPES.MAP, ko.HUE_CHARTS.TYPES.GRADIENTMAP, ko.HUE_CHARTS.TYPES.PIECHART].indexOf(chartSettings.chartType()) == -1" class="nav-header">${_('x-axis')}</li>
+    <li data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.GRADIENTMAP" class="nav-header">${_('region')}</li>
+    <li data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP" class="nav-header">${_('latitude')}</li>
+    <li data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.PIECHART" class="nav-header">${_('legend')}</li>
   </ul>
-  <div data-bind="visible: chartType() != ''">
-    <select data-bind="options: (chartType() == ko.HUE_CHARTS.TYPES.BARCHART || chartType() == ko.HUE_CHARTS.TYPES.PIECHART) ? $root.collection.template.cleanedMeta : $root.collection.template.cleanedNumericMeta, value: chartX, optionsText: 'name', optionsValue: 'name', optionsCaption: '${_ko('Choose a column...')}', select2: { width: '100%', placeholder: '${ _ko("Choose a column...") }', update: chartX}" class="input-medium"></select>
+  <div data-bind="visible: chartSettings.chartType() != ''">
+    <select data-bind="options: (chartSettings.chartType() == ko.HUE_CHARTS.TYPES.BARCHART || chartSettings.chartType() == ko.HUE_CHARTS.TYPES.PIECHART) ? cleanedMeta : chartSettings.chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART ? cleanedDateTimeMeta : cleanedNumericMeta, value: chartSettings.chartX, optionsText: 'name', optionsValue: 'name', optionsCaption: '${_ko('Choose a column...')}', select2: { width: '100%', placeholder: '${ _ko("Choose a column...") }', update: chartSettings.chartX}" class="input-medium"></select>
   </div>
 
-  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartType() != ''">
-    <li data-bind="visible: [ko.HUE_CHARTS.TYPES.MAP, ko.HUE_CHARTS.TYPES.GRADIENTMAP, ko.HUE_CHARTS.TYPES.PIECHART].indexOf(chartType()) == -1" class="nav-header">${_('y-axis')}</li>
-    <li data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.MAP" class="nav-header">${_('longitude')}</li>
-    <li data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.PIECHART" class="nav-header">${_('value')}</li>
+  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartSettings.chartType() != ''">
+    <li data-bind="visible: [ko.HUE_CHARTS.TYPES.MAP, ko.HUE_CHARTS.TYPES.GRADIENTMAP, ko.HUE_CHARTS.TYPES.PIECHART].indexOf(chartSettings.chartType()) == -1" class="nav-header">${_('y-axis')}</li>
+    <li data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP" class="nav-header">${_('longitude')}</li>
+    <li data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.PIECHART" class="nav-header">${_('value')}</li>
   </ul>
 
-  <div style="overflow-y: auto; max-height: 220px" data-bind="visible: chartType() != '' && (chartType() == ko.HUE_CHARTS.TYPES.BARCHART || chartType() == ko.HUE_CHARTS.TYPES.LINECHART)">
-    <ul class="unstyled" data-bind="foreach: $root.collection.template.cleanedNumericMeta">
-      <li><input type="checkbox" data-bind="checkedValue: name, checked: $parent.chartYMulti" /> <span data-bind="text: $data.name"></span></li>
+  <div style="overflow-y: auto; max-height: 220px" data-bind="visible: chartSettings.chartType() != '' && ([ko.HUE_CHARTS.TYPES.TIMELINECHART, ko.HUE_CHARTS.TYPES.BARCHART, ko.HUE_CHARTS.TYPES.LINECHART].indexOf(chartSettings.chartType()) >= 0 )">
+    <ul class="unstyled" data-bind="foreach: cleanedNumericMeta">
+      <li><input type="checkbox" data-bind="checkedValue: name, checked: $parent.chartSettings.chartYMulti" /> <span data-bind="text: $data.name"></span></li>
     </ul>
   </div>
-  <div data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.PIECHART || chartType() == ko.HUE_CHARTS.TYPES.MAP">
-    <select data-bind="options: chartType() == ko.HUE_CHARTS.TYPES.GRADIENTMAP ? $root.collection.template.cleanedMeta : $root.collection.template.cleanedNumericMeta, value: chartYSingle, optionsText: 'name', optionsValue: 'name', optionsCaption: '${_ko('Choose a column...')}', select2: { width: '100%', placeholder: '${ _ko("Choose a column...") }', update: chartYSingle}" class="input-medium"></select>
+  <div data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.PIECHART || chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP">
+    <select data-bind="options: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.GRADIENTMAP ? cleanedMeta : cleanedNumericMeta, value: chartSettings.chartYSingle, optionsText: 'name', optionsValue: 'name', optionsCaption: '${_ko('Choose a column...')}', select2: { width: '100%', placeholder: '${ _ko("Choose a column...") }', update: chartSettings.chartYSingle}" class="input-medium"></select>
   </div>
 
-  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartType() != '' && chartType() == ko.HUE_CHARTS.TYPES.MAP">
+  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartSettings.chartType() != '' && chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP">
     <li class="nav-header">${_('label')}</li>
   </ul>
-  <div data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.MAP">
-    <select data-bind="options: $root.collection.template.cleanedMeta, value: chartMapLabel, optionsText: 'name', optionsValue: 'name', optionsCaption: '${_ko('Choose a column...')}', select2: { width: '100%', placeholder: '${ _ko("Choose a column...") }', update: chartMapLabel}" class="input-medium"></select>
+  <div data-bind="visible: chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP">
+    <select data-bind="options: cleanedMeta, value: chartSettings.chartMapLabel, optionsText: 'name', optionsValue: 'name', optionsCaption: '${_ko('Choose a column...')}', select2: { width: '100%', placeholder: '${ _ko("Choose a column...") }', update: chartSettings.chartMapLabel}" class="input-medium"></select>
   </div>
 
 
-  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartType() != '' && chartType() != ko.HUE_CHARTS.TYPES.MAP">
+  <ul class="nav nav-list" style="border: none; background-color: #FFF" data-bind="visible: chartSettings.chartType() != '' && chartSettings.chartType() != ko.HUE_CHARTS.TYPES.MAP">
     <li class="nav-header">${_('sorting')}</li>
   </ul>
-  <div class="btn-group" data-toggle="buttons-radio" data-bind="visible: chartType() != '' && chartType() != ko.HUE_CHARTS.TYPES.MAP">
-    <a rel="tooltip" data-placement="top" title="${_('No sorting')}" href="javascript:void(0)" class="btn" data-bind="css: {'active': chartSorting() == 'none'}, click: function(){ chartSorting('none'); }"><i class="fa fa-align-left fa-rotate-270"></i></a>
-    <a rel="tooltip" data-placement="top" title="${_('Sort ascending')}" href="javascript:void(0)" class="btn" data-bind="css: {'active': chartSorting() == 'asc'}, click: function(){ chartSorting('asc'); }"><i class="fa fa-sort-amount-asc fa-rotate-270"></i></a>
-    <a rel="tooltip" data-placement="top" title="${_('Sort descending')}" href="javascript:void(0)" class="btn" data-bind="css: {'active': chartSorting() == 'desc'}, click: function(){ chartSorting('desc'); }"><i class="fa fa-sort-amount-desc fa-rotate-270"></i></a>
+  <div class="btn-group" data-toggle="buttons-radio" data-bind="visible: chartSettings.chartType() != '' && chartSettings.chartType() != ko.HUE_CHARTS.TYPES.MAP">
+    <a rel="tooltip" data-placement="top" title="${_('No sorting')}" href="javascript:void(0)" class="btn" data-bind="css: {'active': chartSettings.chartSorting() == 'none'}, click: function(){ chartSettings.chartSorting('none'); }"><i class="fa fa-align-left fa-rotate-270"></i></a>
+    <a rel="tooltip" data-placement="top" title="${_('Sort ascending')}" href="javascript:void(0)" class="btn" data-bind="css: {'active': chartSettings.chartSorting() == 'asc'}, click: function(){ chartSettings.chartSorting('asc'); }"><i class="fa fa-sort-amount-asc fa-rotate-270"></i></a>
+    <a rel="tooltip" data-placement="top" title="${_('Sort descending')}" href="javascript:void(0)" class="btn" data-bind="css: {'active': chartSettings.chartSorting() == 'desc'}, click: function(){ chartSettings.chartSorting('desc'); }"><i class="fa fa-sort-amount-desc fa-rotate-270"></i></a>
   </div>
 <!-- /ko -->
 
@@ -1028,6 +1024,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
       </div>
     </div>
     <!-- /ko -->
+
 
     <div class="result-main" style="overflow-x: auto">
       <div class="edit-dimensions" style="float: right">
@@ -1245,34 +1242,42 @@ ${ dashboard.layout_skeleton(suffix='search') }
 
     <div style="padding-bottom: 10px; text-align: right; padding-right: 20px" data-bind="visible: counts().length > 0">
       <span data-bind="with: $root.collection.getFacetById($parent.id())">
+        <div data-bind="visible: canZoomIn() || canReset()" class="inline-block">
+          <span class="facet-field-label">${ _('Zoom') }</span>
+          <i class="fa fa-search-minus"></i>
+        </div>
+        <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px" data-bind="visible: canZoomIn">
+          <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomIn">${ _('to selection') }</a>
+        </div>
+        <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px" data-bind="visible: canReset">
+          <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut">${ _('reset') }</a>
+        </div>
         <span class="facet-field-label">${ _('Chart Type') }</span>
         <select class="input-small" data-bind="options: $root.timelineChartTypes,
                        optionsText: 'label',
                        optionsValue: 'value',
                        value: properties.timelineChartType">
         </select>&nbsp;
-        <span class="facet-field-label">${ _('Interval') }</span>
-        <select class="input-small" data-bind="options: $root.intervalOptions,
-                       optionsText: 'label',
-                       optionsValue: 'value',
-                       value: properties.gap">
-        </select>&nbsp;
       </span>
-      <span class="facet-field-label">${ _('Zoom') }</span>
-      <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut"><i class="fa fa-search-minus"></i> ${ _('reset') }</a>
       <span class="facet-field-label" data-bind="visible: $root.query.multiqs().length > 1">${ _('Group by') }</span>
       <select class="input-medium" data-bind="visible: $root.query.multiqs().length > 1, options: $root.query.multiqs, optionsValue: 'id', optionsText: 'label', value: $root.query.selectedMultiq"></select>
     </div>
 
     <!-- ko if: $root.collection.getFacetById($parent.id()) -->
-      <div data-bind="timelineChart: {datum: {counts: counts(), extraSeries: extraSeries(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), enableSelection: $root.collection.getFacetById($parent.id()).properties.enableSelection(), field: field, label: label(), transformer: timelineChartDataTransformer,
+      <div style="position: relative;">
+      <div data-bind="timelineChart: {datum: {counts: counts(), extraSeries: extraSeries(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), enableSelection: true, field: field, label: label(), transformer: timelineChartDataTransformer,
         type: $root.collection.getFacetById($parent.id()).properties.timelineChartType,
+        hideSelection: true,
+        hideStacked: hideStacked,
+        selectedSerie: selectedSerie,
         fqs: $root.query.fqs,
+        slot: $root.collection.getFacetById($parent.id()).properties.slot,
         onSelectRange: function(from, to){ $root.collection.selectTimelineFacet({from: from, to: to, cat: field, widget_id: $parent.id()}) },
         onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); $root.collection.getFacetById($parent.id()).properties.enableSelection(state.selectionEnabled); },
         onClick: function(d){ $root.query.selectRangeFacet({count: d.obj.value, widget_id: $parent.id(), from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
-        onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}" />
+        onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}"/>
       <div class="clearfix"></div>
+      </div>
     <!-- /ko -->
   </div>
   <!-- /ko -->
@@ -1293,6 +1298,16 @@ ${ dashboard.layout_skeleton(suffix='search') }
     </div>
 
     <div style="padding-bottom: 10px; text-align: right; padding-right: 20px">
+      <div data-bind="visible: canZoomIn() || canReset()" class="inline-block">
+        <span class="facet-field-label">${ _('Zoom') }</span>
+        <i class="fa fa-search-minus"></i>
+      </div>
+      <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px" data-bind="visible: canZoomIn">
+        <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomIn">${ _('to selection') }</a>
+      </div>
+      <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px" data-bind="visible: canReset">
+        <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut">${ _('reset') }</a>
+      </div>
       <span data-bind="with: $root.collection.getFacetById($parent.id())">
         <span class="facet-field-label">${ _('Chart Type') }</span>
         <select class="input-small" data-bind="options: $root.timelineChartTypes,
@@ -1300,15 +1315,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
                        optionsValue: 'value',
                        value: properties.timelineChartType">
         </select>&nbsp;
-        <span class="facet-field-label">${ _('Interval') }</span>
-        <select class="input-small" data-bind="options: $root.intervalOptions,
-                       optionsText: 'label',
-                       optionsValue: 'value',
-                       value: properties.facets()[0].gap">
-        </select>&nbsp;
       </span>
-      <span class="facet-field-label">${ _('Zoom') }</span>
-      <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut2"><i class="fa fa-search-minus"></i> ${ _('reset') }</a>
     </div>
 
     <span data-bind="template: { name: 'data-grid' }"></span>
@@ -1316,7 +1323,6 @@ ${ dashboard.layout_skeleton(suffix='search') }
   </div>
   <!-- /ko -->
 </script>
-
 
 <script type="text/html" id="bar-widget">
   <div class="widget-spinner" data-bind="visible: isLoading()">
@@ -1340,8 +1346,13 @@ ${ dashboard.layout_skeleton(suffix='search') }
     </div>
 
     <!-- ko if: $root.collection.getFacetById($parent.id()) -->
+    <div style="position: relative;">
     <div data-bind="barChart: {datum: {counts: counts(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), field: field, label: label(),
       fqs: $root.query.fqs,
+      enableSelection: true,
+      hideSelection: true,
+      hideStacked: hideStacked,
+      slot: $root.collection.getFacetById($parent.id()).properties.slot,
       transformer: ($data.type == 'range-up' ? barChartRangeUpDataTransformer : barChartDataTransformer),
       onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
       onClick: function(d) {
@@ -1359,6 +1370,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
       onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); },
       type: $root.collection.getFacetById($parent.id()).properties.timelineChartType }"
     />
+    </div>
     <div class="clearfix"></div>
     <!-- /ko -->
   </div>
@@ -1446,7 +1458,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
           </ul>
         </div>
 
-        <div data-bind="visible: template.showGrid() || (template.showChart() && widgetType() === 'resultset-widget')">
+        <div data-bind="visible: template.showGrid() || (template.showChart() && (widgetType() === 'resultset-widget' || widgetType() === 'document-widget'))">
           <a class="grid-side-btn" href="javascript:void(0)" data-bind="click: function(){ template.showFieldList(!template.showFieldList())}, css: { 'blue' : template.showFieldList() }">
             <!-- ko if: template.showFieldList() -->
               <i class="fa fa-fw fa-chevron-left"></i>
@@ -1533,8 +1545,8 @@ ${ dashboard.layout_skeleton(suffix='search') }
         </div>
       </div>
 
-      <div data-bind="visible: template.showFieldList() && template.showChart() &&  widgetType() === 'resultset-widget'" style="float:left; width:200px; margin-right:10px; background-color:#FFF; padding:5px;">
-        <span data-bind="template: {name: 'grid-chart-settings', data: template.chartSettings}"></span>
+      <div data-bind="visible: template.showFieldList() && template.showChart() && (widgetType() === 'resultset-widget' || widgetType() === 'document-widget')" style="float:left; width:200px; margin-right:10px; background-color:#FFF; padding:5px;">
+        <span data-bind="template: {name: 'grid-chart-settings', data: template}"></span>
       </div>
     </span>
 
@@ -1607,9 +1619,13 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <!-- ko with: $parent -->
 
           <!-- ko if: dimension() == 1 -->
-            <div data-bind="barChart: {datum: {counts: counts(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), field: field, label: label(),
+            <div data-bind="barChart: {datum: {counts: counts(), extraSeries: extraSeries(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), field: field, label: label(),
               fqs: $root.query.fqs,
-              transformer: ($data.type == 'range-up' ? barChartRangeUpDataTransformer : barChartDataTransformer),
+              enableSelection: true,
+              hideSelection: true,
+              hideStacked: hideStacked,
+              slot: $root.collection.getFacetById($parent.id()).properties.slot,
+              transformer: barChartDataTransformer2,
               onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
               onClick: function(d) {
                 if (d.obj.field != undefined) {
@@ -1633,7 +1649,12 @@ ${ dashboard.layout_skeleton(suffix='search') }
             <div data-bind="barChart: {datum: {counts: counts(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(),
               isPivot: true,
               fqs: $root.query.fqs,
+              enableSelection: true,
+              hideSelection: true,
+              hideStacked: hideStacked,
+              slot: $root.collection.getFacetById($parent.id()).properties.slot,
               transformer: pivotChartDataTransformer,
+              onSelectRange: function(from, to){ $root.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
               onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
               onClick: function(d) {
                 $root.query.togglePivotFacet({facet: d.obj, widget_id: id()});
@@ -1648,6 +1669,11 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <div data-bind="timelineChart: {datum: {counts: counts(), extraSeries: extraSeries(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), field: field, label: label(), transformer: timelineChartDataTransformer,
             type: $root.collection.getFacetById($parent.id()).properties.timelineChartType,
             fqs: $root.query.fqs,
+            enableSelection: true,
+            hideSelection: true,
+            hideStacked: hideStacked,
+            selectedSerie: selectedSerie,
+            slot: $root.collection.getFacetById($parent.id()).properties.facets()[0].slot,
             onSelectRange: function(from, to){ $root.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
             onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
             onClick: function(d){ $root.query.selectRangeFacet({count: d.obj.value, widget_id: $parent.id(), from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
@@ -1676,6 +1702,11 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <div data-bind="timelineChart: {datum: {counts: counts(), extraSeries: extraSeries(), widget_id: $parent.id(), label: label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(), field: field, label: label(), transformer: timelineChartDataTransformer,
             type: $root.collection.getFacetById($parent.id()).properties.timelineChartType,
             fqs: $root.query.fqs,
+            enableSelection: true,
+            hideSelection: true,
+            hideStacked: hideStacked,
+            selectedSerie: selectedSerie,
+            slot: $root.collection.getFacetById($parent.id()).properties.slot,
             onSelectRange: function(from, to){ $root.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
             onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
             onClick: function(d){ $root.query.selectRangeFacet({count: d.obj.value, widget_id: $parent.id(), from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
@@ -1714,11 +1745,29 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <!-- /ko -->
         <!-- /ko -->
 
+        <!-- ko if: widgetType() == 'document-widget' -->
+          <div data-bind="attr:{'id': 'pieChart_'+id()}, pieChart: {data: {counts: $parent.results(), sorting: template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]),
+                transformer: pieChartDataTransformerGrid, maxWidth: 350, parentSelector: '.chart-container' }, visible: template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.PIECHART" class="chart"></div>
+
+          <div data-bind="attr:{'id': 'barChart_'+id()}, barChart: {datum: {counts: $parent.results(), sorting: template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]), hideSelection: true, enableSelection: false, hideStacked: template.chartSettings.hideStacked,
+                transformer: multiSerieDataTransformerGrid, stacked: false, showLegend: true, type: template.chartSettings.chartSelectorType},  stacked: true, showLegend: true, visible: template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.BARCHART" class="chart"></div>
+
+          <div data-bind="attr:{'id': 'lineChart_'+id()}, lineChart: {datum: {counts: $parent.results(), sorting: template.chartSettings.chartSorting(), snippet: $data},
+                transformer: multiSerieDataTransformerGrid, showControls: false }, visible: template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.LINECHART" class="chart"></div>
+
+          <div data-bind="attr: {'id': 'leafletMapChart_'+id()}, leafletMapChart: {datum: {counts: $parent.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data},
+                transformer: leafletMapChartDataTransformerGrid, showControls: false, height: 380, visible: template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP, forceRedraw: true}" class="chart"></div>
+
+          <div data-bind="attr:{'id': 'timelineChart_'+id()}, timelineChart: {datum: {counts: $parent.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]), hideSelection: true, enableSelection: false, hideStacked: template.chartSettings.hideStacked,
+                transformer: multiSerieDataTransformerGrid, showControls: false }, visible: template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART" class="chart"></div>
+          <div class="clearfix"></div>
+        <!-- /ko -->
+
         <!-- ko if: widgetType() == 'resultset-widget' -->
           <div data-bind="attr:{'id': 'pieChart_'+id()}, pieChart: {data: {counts: $root.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]),
                 transformer: pieChartDataTransformerGrid, maxWidth: 350, parentSelector: '.chart-container' }, visible: $root.collection.template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.PIECHART" class="chart"></div>
 
-          <div data-bind="attr:{'id': 'barChart_'+id()}, barChart: {datum: {counts: $root.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]), hideSelection: true,
+          <div data-bind="attr:{'id': 'barChart_'+id()}, barChart: {datum: {counts: $root.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]), hideSelection: true, enableSelection: false, hideStacked: $root.collection.template.chartSettings.hideStacked,
                 transformer: multiSerieDataTransformerGrid, stacked: false, showLegend: true, type: $root.collection.template.chartSettings.chartSelectorType},  stacked: true, showLegend: true, visible: $root.collection.template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.BARCHART" class="chart"></div>
 
           <div data-bind="attr:{'id': 'lineChart_'+id()}, lineChart: {datum: {counts: $root.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data},
@@ -1726,6 +1775,9 @@ ${ dashboard.layout_skeleton(suffix='search') }
 
           <div data-bind="attr: {'id': 'leafletMapChart_'+id()}, leafletMapChart: {datum: {counts: $root.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data},
                 transformer: leafletMapChartDataTransformerGrid, showControls: false, height: 380, visible: $root.collection.template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.MAP, forceRedraw: true}" class="chart"></div>
+
+          <div data-bind="attr:{'id': 'timelineChart_'+id()}, timelineChart: {datum: {counts: $root.results(), sorting: $root.collection.template.chartSettings.chartSorting(), snippet: $data}, fqs: ko.observableArray([]), hideSelection: true, enableSelection: false, hideStacked: $root.collection.template.chartSettings.hideStacked,
+                transformer: multiSerieDataTransformerGrid, showControls: false }, visible: $root.collection.template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART" class="chart"></div>
           <div class="clearfix"></div>
         <!-- /ko -->
 
@@ -1750,7 +1802,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
     <div>
 
       <input type="text" class="input-medium" data-bind="value: properties.engine"/>
-      <textarea data-bind="value: properties.statement"><textarea/>
+      <textarea data-bind="value: properties.statement"></textarea>
 
       ## Get sub widget by ID
       ## <div data-bind="template: { name: function() { return widgetType(); }}" class="widget-main-section"></div>
@@ -1775,10 +1827,18 @@ ${ dashboard.layout_skeleton(suffix='search') }
     <!-- ko with: $root.collection.getFacetById($parent.id()) -->
     <div>
       <span data-bind="template: { name: 'facet-toggle2' }"></span>
-
       <div class="pull-right">
-
-      <!-- ko if: properties.isDate -->
+        <div data-bind="visible: canZoomIn() || canReset()" class="inline-block">
+          <span class="facet-field-label">${ _('Zoom') }</span>
+          <i class="fa fa-search-minus"></i>
+        </div>
+        <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px" data-bind="visible: canZoomIn">
+          <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomIn">${ _('to selection') }</a>
+        </div>
+        <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px" data-bind="visible: canReset">
+          <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut">${ _('reset') }</a>
+        </div>
+        <!-- ko if: properties.canRange -->
         <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px">
           <span class="facet-field-label">${ _('Chart Type') }</span>
           <select class="input-small" data-bind="options: $root.timelineChartTypes,
@@ -1787,32 +1847,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
                        value: properties.timelineChartType">
           </select>
         </div>
-        <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px">
-          <span class="facet-field-label">${ _('Interval') }</span>
-          <select class="input-small" data-bind="options: $root.intervalOptions,
-                         optionsText: 'label',
-                         optionsValue: 'value',
-                         value: properties.gap">
-          </select>
-        </div>
-      <!-- /ko -->
-      <!-- ko if: ['bar', 'line'].indexOf(properties.timelineChartType()) >= 0 -->
-      <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px">
-        <span class="facet-field-label">${ _('Chart Type') }</span>
-        <select class="input-small" data-bind="options: $root.timelineChartTypes,
-                     optionsText: 'label',
-                     optionsValue: 'value',
-                     value: properties.timelineChartType">
-        </select>
-      </div>
-       <!-- /ko -->
-
-      <!-- ko if: properties.canRange -->
-        <div class="inline-block" style="padding-bottom: 10px; padding-right: 20px">
-          <span class="facet-field-label">${ _('Zoom') }</span>
-          <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut"><i class="fa fa-search-minus"></i> ${ _('reset') }</a>
-        </div>
-      <!-- /ko -->
+        <!-- /ko -->
       </div>
       <div class="clearfix"></div>
     </div>
@@ -1841,13 +1876,14 @@ ${ dashboard.layout_skeleton(suffix='search') }
       <span class="facet-field-label">${ _('Zoom') }</span>
       <a href="javascript:void(0)" data-bind="click: $root.collection.rangeZoomOut"><i class="fa fa-search-minus"></i> ${ _('reset') }</a>
     </div>
-
+    <div style="position: relative;">
     <div data-bind="lineChart: {datum: {counts: counts(), widget_id: $parent.id(), label: label()}, field: field, label: label(),
       transformer: lineChartDataTransformer,
       onClick: function(d){ searchViewModel.query.selectRangeFacet({count: d.obj.value, widget_id: d.obj.widget_id, from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
       onSelectRange: function(from, to){ searchViewModel.collection.selectTimelineFacet({from: from, to: to, cat: field, widget_id: $parent.id()}) },
-      onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"
+      onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); huePubSub.publish('gridster.autoheight'); }}"
     />
+    </div>
     <div class="clearfix"></div>
   </div>
   <!-- /ko -->
@@ -2064,16 +2100,22 @@ ${ dashboard.layout_skeleton(suffix='search') }
       <div class="clearfix"></div>
 
       <!-- ko if: properties.scope() == 'stack' -->
+        <div style="position: relative;">
         <div data-bind="barChart: {datum: {counts: $parent.counts(), widget_id: $parent.id(), label: $parent.label()}, stacked: $root.collection.getFacetById($parent.id()).properties.stacked(),
           isPivot: true,
+          enableSelection: true,
+          hideSelection: true,
           fqs: $root.query.fqs,
+          slot: $root.collection.getFacetById($parent.id()).properties.slot,
           transformer: pivotChartDataTransformer,
+          onSelectRange: function(from, to){ $root.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
           onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
           onClick: function(d) {
             $root.query.togglePivotFacet({facet: d.obj, widget_id: id()});
           },
           onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"
         />
+        </div>
       <div class="clearfix"></div>
       <!-- /ko -->
     </div>
@@ -2129,6 +2171,9 @@ ${ dashboard.layout_skeleton(suffix='search') }
         placeHolder: $root.collection.engine() === 'solr' ? '${ _ko('Example: field:value, or press CTRL + space') }' : '${ _ko('Example: col = value, or press CTRL + space') }',
         autocomplete: { type: $root.collection.engine() + 'Query', support: { collection: $root.collection } },
         mode: $root.collection.engine(),
+        fixedPrefix: $root.collection.engine() !== 'solr' ? function() { return 'SELECT * FROM ' +  $root.collection.name() + ' WHERE '; } : undefined,
+        fixedPostfix: $root.collection.engine() !== 'solr' ? function() { return ' GROUP BY 1;' } : undefined,
+        database: function () { return $root.collection.name().split('.')[0] },
         singleLine: true }
       }"></div>
     </span>
@@ -2315,7 +2360,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
     <!-- ko if: $data.type() == 'field' -->
     <div class="filter-box">
       <div class="title">
-        <a href="javascript:void(0)" class="pull-right" data-bind="click: function() { chartsUpdatingState(); $root.query.removeFilter($data); $root.search(); }">
+        <a href="javascript:void(0)" class="pull-right" data-bind="click: function() { huePubSub.publish('charts.state', { updating: true }); $root.query.removeFilter($data); $root.search(); }">
           <i class="fa fa-times"></i>
         </a>
         <span data-bind="text: $data.field"></span>
@@ -2338,7 +2383,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
     <!-- ko if: $data.type() == 'range' || $data.type() == 'range-up' -->
     <div class="filter-box">
       <div class="title">
-        <a href="javascript:void(0)" class="pull-right" data-bind="click: function(){ chartsUpdatingState(); $root.query.removeFilter($data); $root.search() }">
+        <a href="javascript:void(0)" class="pull-right" data-bind="click: function(){ huePubSub.publish('charts.state', { updating: true }); $root.query.removeFilter($data); $root.search() }">
           <i class="fa fa-times"></i>
         </a>
         <span data-bind="text: $data.field"></span>
@@ -2377,7 +2422,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
     <!-- ko if: $data.type() == 'map' -->
     <div class="filter-box">
       <div class="title">
-        <a href="javascript:void(0)" class="pull-right" data-bind="click: function(){ chartsUpdatingState(); $root.query.removeFilter($data); $root.search() }">
+        <a href="javascript:void(0)" class="pull-right" data-bind="click: function(){ huePubSub.publish('charts.state', { updating: true }); $root.query.removeFilter($data); $root.search() }">
           <i class="fa fa-times"></i>
         </a>
         <span data-bind="text: $data.lat"></span>, <span data-bind="text: $data.lon"></span>
@@ -2720,16 +2765,27 @@ ${ dashboard.layout_skeleton(suffix='search') }
               </div>
             </div>
 
-            <!-- ko if: $root.collection.engine() == 'solr' -->
+            ## Potentially useful for regular search and not analytic search
+            ##<!-- ko if: $root.collection.engine() == 'solr' -->
+            ##<div class="control-group">
+            ##  <label class="control-label">${ _('Autocomplete') }</label>
+            ##  <div class="controls">
+            ##    <label class="checkbox" style="padding-top:0">
+            ##      <input type="checkbox" style="margin-right: 4px; margin-top: 9px" data-bind="checked: $root.collection.suggest.enabled">
+            ##      <span data-bind="visible: $root.collection.suggest.enabled">
+            ##        ${ _('Dictionary') } <input type="text" class="input-xlarge" style="margin-bottom: 0; margin-left: 6px;" data-bind="textInput: $root.collection.suggest.dictionary, tagsNotAllowed" placeholder="${ _('Dictionary name or blank for default') }">
+            ##      </span>
+            ##    </label>
+            ##  </div>
+            ##</div>
             <div class="control-group">
-              <label class="control-label">${ _('Autocomplete') }</label>
+              <label class="control-label">
+                ${ _('Auto-refresh') }
+              </label>
               <div class="controls">
-                <label class="checkbox" style="padding-top:0">
-                  <input type="checkbox" style="margin-right: 4px; margin-top: 9px" data-bind="checked: $root.collection.suggest.enabled">
-                  <span data-bind="visible: $root.collection.suggest.enabled">
-                    ${ _('Dictionary') } <input type="text" class="input-xlarge" style="margin-bottom: 0; margin-left: 6px;" data-bind="textInput: $root.collection.suggest.dictionary, tagsNotAllowed" placeholder="${ _('Dictionary name or blank for default') }">
-                  </span>
-                </label>
+              <label class="checkbox inline-block">
+                <input type="checkbox" data-bind="checked: $root.collection.autorefresh"/> ${ _('every') } <input type="number" class="input-mini" data-bind="textInput: $root.collection.autorefreshSeconds, enable: $root.collection.autorefresh"/> ${ _('seconds') }
+              </label>
               </div>
             </div>
             <!-- ko if: $root.collection.supportAnalytics -->
@@ -2905,22 +2961,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
                   <input type="text" data-bind="value: collection.timeFilter.to, datepicker: {momentFormat: 'YYYY-MM-DD[T]HH:mm:ss[Z]'}" />
                 </div>
               </div>
-              <!-- ko if: collection.timeFilter.type() == 'rolling' -->
-              <div class="control-group">
-                <div class="controls">
-                  <label class="checkbox inline-block">
-                    <input type="checkbox" style="margin-right: 4px; margin-top: 9px" data-bind="checked: $root.collection.autorefresh"/> ${ _('Auto-refresh every') } <input type="number" class="input-mini" style="margin-bottom: 0; margin-left: 6px; margin-right: 6px; width: 46px; text-align:center" data-bind="textInput: $root.collection.autorefreshSeconds"/> ${ _('seconds') }
-                  </label>
-                </div>
-              </div>
-              <!-- /ko -->
             </span>
-
-            <!-- ko if: $root.availableDateFields().length == 0 -->
-              <label class="checkbox inline-block">
-                <input type="checkbox" style="margin-right: 4px; margin-top: 9px" data-bind="checked: $root.collection.autorefresh"/> ${ _('Auto-refresh every') } <input type="number" class="input-mini" style="margin-bottom: 0; margin-left: 6px; margin-right: 6px; width: 46px; text-align:center" data-bind="textInput: $root.collection.autorefreshSeconds"/> ${ _('seconds') }
-              </label>
-            <!-- /ko -->
           </fieldset>
         </form>
 
@@ -3367,6 +3408,7 @@ function _barChartDataTransformer(rawDatum, isUp) {
       if (isUp){
         _data.push({
           series: 0,
+          index: cnt,
           x: item.from + (item.is_up ? ' & ${ _('Up') }' : ' & ${ _('Less') }'),
           y: item.value,
           obj: item
@@ -3375,6 +3417,7 @@ function _barChartDataTransformer(rawDatum, isUp) {
       else {
         _data.push({
           series: 0,
+          index: cnt,
           x: item.from,
           x_end: item.to,
           y: item.value,
@@ -3385,6 +3428,7 @@ function _barChartDataTransformer(rawDatum, isUp) {
     else {
       _data.push({
         series: 0,
+        index: cnt,
         x: item.value,
         y: item.count,
         obj: item
@@ -3395,12 +3439,19 @@ function _barChartDataTransformer(rawDatum, isUp) {
     key: rawDatum.label,
     values: _data
   });
+  _data.sort(function (a, b) {
+    return a.x - b.x;
+  });
 
   return _datum;
 }
 
 function barChartDataTransformer(rawDatum) {
   return _barChartDataTransformer(rawDatum, false);
+}
+
+function barChartDataTransformer2(rawDatum) {
+  return _timelineChartDataTransformer(rawDatum, false);
 }
 
 function barChartRangeUpDataTransformer(rawDatum) {
@@ -3480,12 +3531,18 @@ function pivotChartDataTransformer(rawDatum) {
 
     _category.values.push({
       series: 0,
+      index: _category.values.length,
       x: item.cat,
       y: item.count,
       obj: item
     });
   });
 
+  _categories.forEach(function (category) {
+    category.values.sort(function (a, b) {
+      return a.x - b.x;
+    });
+  });
   return _categories;
 }
 
@@ -3519,41 +3576,106 @@ function lineChartDataTransformer(rawDatum) {
   return _datum;
 }
 
-function timelineChartDataTransformer(rawDatum) {
+function timelineChartDataTransformer (rawDatum) {
+  return _timelineChartDataTransformer(rawDatum, true);
+}
+
+function _timelineChartDataTransformer(rawDatum, isDate) {
   var _datum = [];
   var _data = [];
 
+  function getValue (value) {
+    return isDate ? new Date(moment(value).valueOf()) : value
+  }
+  function getNumericValue(value) {
+    return value && value.getTime ? value.getTime() : value;
+  }
+
   $(rawDatum.counts).each(function (cnt, item) {
+    item.widget_id = rawDatum.widget_id;
     _data.push({
       series: 0,
-      x: new Date(moment(item.from ? item.from : item.value).valueOf()), // When started from a non timeline widget
-      y: item.from ? item.value : item.count,
+      index: cnt,
+      x: getValue(item.from ? item.from : item.value), // When started from a non timeline widget
+      x_end: item.to && getValue(item.to),
+      y: item.from !== undefined ? item.value : item.count,
       obj: item
     });
   });
 
-  _datum.push({
-    key: rawDatum.label,
-    values: _data
-  });
+  if (_data.length) {
+    _datum.push({
+      key: rawDatum.label,
+      values: _data
+    });
+
+    _data.sort(function (a, b) {
+      return a.x - b.x;
+    });
+  }
+
+  // In Solr, all series might not have values on all data point. If a value is 0 or if it's been filtered by the limit option, solr does not return a value.
+  // Unfortunately, this causes the following issues in the chart:
+  // 1) The x axis can be unsorted
+  // 2) The stacked option does not render correctly.
+  // To fix this we pad series that don't have values with zeros
+
+  //Preprocess to obtain all the x values.
+  var values = rawDatum.extraSeries.reduce(function (values, serie) {
+    serie.counts.reduce(function (values, item) {
+      var x = getNumericValue(getValue(item.from ? item.from : item.value));
+      if (!values[x]) {
+        values[x] = {};
+      }
+      values[x][serie.label] = item;
+      return values;
+    }, values);
+    return values;
+  }, {});
+
 
   // If multi query
-  $(rawDatum.extraSeries).each(function (cnt, item) {
-    if (cnt == 0) {
+  var keys = Object.keys(values);
+  if (isDate) {
+    keys.sort();
+  }
+  $(rawDatum.extraSeries).each(function (serieIndex, serie) {
+    if (serieIndex == 0) {
       _datum = [];
     }
     var _data = [];
-    $(item.counts).each(function (cnt, item) {
-      _data.push({
-        series: cnt + 1,
-        x: new Date(moment(item.from ? item.from : item.value).valueOf()), // When started from a non timeline widget
-        y: item.from ? item.value : item.count,
-        obj: item
-      });
+
+    $(keys).each(function (cnt, key) {
+      if (values[key][serie.label]) {
+        var item = values[key][serie.label];
+        item.widget_id = rawDatum.widget_id;
+        _data.push({
+          series: serieIndex,
+          index: _data.length,
+          x: getValue(item.from ? item.from : item.value), // When started from a non timeline widget
+          x_end: item.to && getValue(item.to),
+          y: item.from !== undefined ? item.value : item.count,
+          obj: item
+        });
+      } else {
+        var keys = Object.keys(values[key]);
+        var item = keys[0] && values[key][keys[0]];
+        item.widget_id = rawDatum.widget_id;
+        var copy = JSON.parse(JSON.stringify(item));
+        copy.value = 0;
+        _data.push({
+          series: serieIndex,
+          index: _data.length,
+          x: getValue(item.from ? item.from : item.value),
+          x_end: item.to && getValue(item.to),
+          y: copy.value,
+          obj: copy
+        });
+      }
     });
 
     _datum.push({
-      key: item.label,
+      key: serie.label,
       values: _data
     });
   });
@@ -3714,7 +3836,7 @@ function multiSerieDataTransformer(rawDatum) {
 }
 
 
-function multiSerieDataTransformerGrid(rawDatum) {
+function multiSerieDataTransformerGrid(rawDatum, isTimeline) {
   var _datum = [];
 
   var chartX = searchViewModel.collection.template.chartSettings.chartX();
@@ -3728,7 +3850,7 @@ function multiSerieDataTransformerGrid(rawDatum) {
         if (item.item[chartX] && item.item[col]) {
           _data.push({
             series: _plottedSerie,
-            x: item.item[chartX](),
+            x: isTimeline && new Date(item.item[chartX]()) || item.item[chartX](),
             y: item.item[col](),
             obj: item.item
           });
@@ -3844,8 +3966,7 @@ function loadSearch(collection, query, initial) {
   searchViewModel = new SearchViewModel(collection, query, initial, ${ USE_GRIDSTER.get() and 'true' or 'false' }, ${ USE_NEW_ADD_METHOD.get() and 'true' or 'false' });
   ko.applyBindings(searchViewModel, $('#searchComponents')[0]);
 
-  searchViewModel.timelineChartTypes = ko.observableArray([
-    {
+  searchViewModel.timelineChartTypes = ko.observableArray([{
       value: "line",
       label: "${ _('Lines')}"
     },
@@ -3855,12 +3976,15 @@ function loadSearch(collection, query, initial) {
     }
   ]);
 
-  searchViewModel.init(function(data){
+  searchViewModel.init(function(){
     $(".chosen-select").trigger("chosen:updated");
+    if (searchViewModel.collection.engine() === 'report') {
+      magicSearchLayout(searchViewModel);
+    }
   });
 
   searchViewModel.isRetrievingResults.subscribe(function(value){
-    if (! value){
+    if (!value){
       resizeFieldsList();
     }
   });
@@ -4169,8 +4293,10 @@ $(document).ready(function () {
   var widgetGridWidth = null;
 
   var setWidgetGridWidth = function () {
-    // turns out Gridster generates CSS either with single or double quotes depending on the browser
-    widgetGridWidth = typeof hueUtils.getStyleFromCSSClass('[data-sizex="1"]') !== 'undefined' ? parseInt(hueUtils.getStyleFromCSSClass('[data-sizex="1"]').width) : parseInt(hueUtils.getStyleFromCSSClass("[data-sizex='1']").width);
+    if (searchViewModel && searchViewModel.isGridster()) {
+      // turns out Gridster generates CSS either with single or double quotes depending on the browser
+      widgetGridWidth = typeof hueUtils.getStyleFromCSSClass('[data-sizex="1"]') !== 'undefined' ? parseInt(hueUtils.getStyleFromCSSClass('[data-sizex="1"]').width) : parseInt(hueUtils.getStyleFromCSSClass("[data-sizex='1']").width);
+    }
   }
 
   setWidgetGridWidth();
@@ -4964,7 +5090,7 @@ $(document).ready(function () {
 
           selectedWidget = widget;
 
-          if (searchViewModel.collection.template.availableWidgetFields().length == 1) {
+          if (searchViewModel.collection.template.availableWidgetFields().length == 1 || widget.widgetType() == 'document-widget') {
             addFacetDemiModalFieldPreview(searchViewModel.collection.template.availableWidgetFields()[0]);
           }
           else {
@@ -5003,7 +5129,7 @@ $(document).ready(function () {
         selectedWidget = widget;
         selectedRow = target;
 
-        if (searchViewModel.collection.template.availableWidgetFields().length == 1 || widget.widgetType() == 'document-widget') {
+        if (searchViewModel.collection.template.availableWidgetFields().length == 1) {
           addFacetDemiModalFieldPreview(searchViewModel.collection.template.availableWidgetFields()[0]);
         }
         else {
@@ -5023,7 +5149,7 @@ $(document).ready(function () {
       selectedWidget.hasBeenSelected = true;
       selectedWidget.isLoading(true);
       searchViewModel.collection.addFacet({
-        'name': field.name(),
+        'name': field ? field.name() : 'Query',
         'widget_id': selectedWidget.id(),
         'widgetType': selectedWidget.widgetType()
       }, function () {

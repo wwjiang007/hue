@@ -31,8 +31,8 @@ import validate
 from django.conf import settings
 from django.shortcuts import render_to_response
 from django.http import HttpResponse
-from django.core.urlresolvers import reverse
-from django.core.servers.basehttp import FileWrapper
+from django.urls import reverse
+from wsgiref.util import FileWrapper
 from django.shortcuts import redirect
 from django.utils.translation import ugettext as _
 from django.views.decorators.http import require_POST
@@ -59,7 +59,7 @@ from desktop.lib.paths import get_desktop_root
 from desktop.lib.thread_util import dump_traceback
 from desktop.log.access import access_log_level, access_warn, AccessInfo
 from desktop.log import set_all_debug as _set_all_debug, reset_all_debug as _reset_all_debug, get_all_debug as _get_all_debug
-from desktop.models import Settings, hue_version, _get_apps, UserPreferences, Cluster
+from desktop.models import Settings, hue_version, _get_apps, UserPreferences
 
 
 
@@ -73,7 +73,6 @@ def is_alive(request):
 def hue(request):
   apps = appmanager.get_apps_dict(request.user)
   current_app, other_apps, apps_list = _get_apps(request.user, '')
-  default_cluster_index, default_cluster_interface = Cluster(request.user).get_list_interface_indexes()
   clusters = get_clusters().values()
 
   return render('hue.mako', request, {
@@ -91,10 +90,7 @@ def hue(request):
     'is_demo': desktop.conf.DEMO_ENABLED.get(),
     'banner_message': get_banner_message(request),
     'user_preferences': dict((x.key, x.value) for x in UserPreferences.objects.filter(user=request.user)),
-    'cluster': clusters[0]['type'] if clusters else None,
-    'clusters_config_json': json.dumps(clusters),
-    'default_cluster_index': default_cluster_index,
-    'default_cluster_interface': default_cluster_interface
+    'cluster': clusters[0]['type'] if clusters else None
   })
 
 
@@ -271,7 +267,7 @@ def status_bar(request):
   for view in _status_bar_views:
     try:
       r = view(request)
-      if r.status_code == 200:
+      if r and r.status_code == 200:
         resp += r.content
       else:
         LOG.warning("Failed to execute status_bar view %s" % (view,))
@@ -397,9 +393,9 @@ def index(request):
     return redirect(reverse('about:index'))
   else:
     if is_hue_4:
-      return redirect('desktop.views.hue')
+      return redirect('desktop_views_hue')
     elif USE_NEW_EDITOR.get():
-      return redirect('desktop.views.home2')
+      return redirect('desktop_views_home2')
     else:
       return home(request)
 
@@ -463,7 +459,7 @@ def log_frontend_event(request):
   "error", or "critical"), and "message".
   """
   def get(param, default=None):
-    return request.REQUEST.get(param, default)
+    return request.GET.get(param, default)
 
   level = _LOG_LEVELS.get(get("level"), logging.INFO)
   msg = "Untrusted log event from user %s: %s" % (
@@ -511,7 +507,7 @@ def commonheader(title, section, user, request=None, padding="90px", skip_topbar
 
 def get_banner_message(request):
   banner_message = None
-  forwarded_host = request.META.get('HTTP_X_FORWARDED_HOST')
+  forwarded_host = request.get_host()
 
   message = None;
   path_info = request.environ.get("PATH_INFO")
@@ -670,9 +666,9 @@ def collect_validation_messages(conf, error_list):
   message = []
   cm_extras = {
     'hadoop_hdfs_home': [('hadoop', 'hdfs_clusters', 'default')],
-    'hadoop_bin': [('hadoop', 'hdfs_clusters', 'default'), ('hadoop', 'yarn_clusters', 'default')],
-    'hadoop_mapred_home': [('hadoop', 'yarn_clusters', 'default')],
-    'hadoop_conf_dir': [('hadoop', 'yarn_clusters', 'default')],
+    'hadoop_bin': [('hadoop', 'hdfs_clusters', 'default'), ('hadoop', 'yarn_clusters', 'default'), ('hadoop', 'yarn_clusters', 'ha')],
+    'hadoop_mapred_home': [('hadoop', 'yarn_clusters', 'default'), ('hadoop', 'yarn_clusters', 'ha')],
+    'hadoop_conf_dir': [('hadoop', 'yarn_clusters', 'default'), ('hadoop', 'yarn_clusters', 'ha')],
     'ssl_cacerts': [('beeswax', 'ssl'), ('impala', 'ssl')],
     'remote_data_dir': [('liboozie', )],
     'shell': [()]

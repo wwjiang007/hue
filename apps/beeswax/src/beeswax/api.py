@@ -20,7 +20,7 @@ import json
 import re
 
 from django.contrib.auth.models import User
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import Http404
 from django.utils.translation import ugettext as _
 from django.views.decorators.http import require_POST
@@ -339,7 +339,7 @@ def execute(request, design_id=None):
         # Parameterized query
         parameterization_form_cls = make_parameterization_form(query_str)
         if parameterization_form_cls:
-          parameterization_form = parameterization_form_cls(request.REQUEST, prefix="parameterization")
+          parameterization_form = parameterization_form_cls(request.POST.get('query-query', ''), prefix="parameterization")
 
           if parameterization_form.is_valid():
             parameters = parameterization_form.cleaned_data

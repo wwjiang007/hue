@@ -154,8 +154,36 @@ class Notebook(object):
 
     self.data = json.dumps(_data)
 
-  def add_shell_snippet(self, shell_command, arguments, archives, files, env_var, last_executed):
+  def add_spark_snippet(self, clazz, jars, arguments, files):
     _data = json.loads(self.data)
+
+    _data['snippets'].append(self._make_snippet({
+        u'type': u'spark',
+        u'status': u'running',
+        u'properties':  {
+          u'files': files,
+          u'class': clazz,
+          u'app_jar': jars,
+          u'arguments': arguments,
+          u'archives': [],
+          u'spark_opts': ''
+        }
+    }))
+    self._add_session(_data, 'spark')
+
+    self.data = json.dumps(_data)
+
+  def add_shell_snippet(self, shell_command, arguments=None, archives=None, files=None, env_var=None, last_executed=None):
+    _data = json.loads(self.data)
+
+    if arguments is None:
+      arguments = []
+    if archives is None:
+      archives = []
+    if files is None:
+      files = []
+    if env_var is None:
+      env_var = []
 
     _data['snippets'].append(self._make_snippet({
         u'type': u'shell',
@@ -216,6 +244,9 @@ def get_api(request, snippet):
   if snippet.get('wasBatchExecuted'):
     return OozieApi(user=request.user, request=request)
 
+  if snippet['type'] == 'report':
+    snippet['type'] = 'impala'
+
   interpreter = [interpreter for interpreter in get_ordered_interpreters(request.user) if interpreter['type'] == snippet['type']]
   if not interpreter:
     if snippet['type'] == 'hbase':
@@ -223,6 +254,14 @@ def get_api(request, snippet):
         'name': 'hbase',
         'type': 'hbase',
         'interface': 'hbase',
+        'options': {},
+        'is_sql': False
+      }]
+    elif snippet['type'] == 'kafka':
+      interpreter = [{
+        'name': 'kafka',
+        'type': 'kafka',
+        'interface': 'kafka',
         'options': {},
         'is_sql': False
       }]
@@ -273,6 +312,9 @@ def get_api(request, snippet):
   elif interface == 'hbase':
     from notebook.connectors.hbase import HBaseApi
     return HBaseApi(request.user)
+  elif interface == 'kafka':
+    from notebook.connectors.kafka import KafkaApi
+    return KafkaApi(request.user)
   elif interface == 'pig':
     return OozieApi(user=request.user, request=request) # Backward compatibility until Hue 4
   else:

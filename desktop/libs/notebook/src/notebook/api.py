@@ -19,8 +19,9 @@ import json
 import logging
 
 import sqlparse
+import urllib
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.db.models import Q
 from django.utils.translation import ugettext as _
 from django.views.decorators.http import require_GET, require_POST
@@ -633,7 +634,7 @@ def export_result(request):
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
   data_format = json.loads(request.POST.get('format', 'hdfs-file'))
-  destination = json.loads(request.POST.get('destination', ''))
+  destination = urllib.unquote(json.loads(request.POST.get('destination', '')))
   overwrite = json.loads(request.POST.get('overwrite', 'false'))
   is_embedded = json.loads(request.POST.get('is_embedded', 'false'))
   start_time = json.loads(request.POST.get('start_time', '-1'))
@@ -818,5 +819,5 @@ def _get_statement_from_file(user, fs, snippet):
   script_path = snippet['statementPath']
   if script_path:
     script_path = script_path.replace('hdfs://', '')
-    if fs.do_as_user(user, fs.exists, script_path):
+    if fs.do_as_user(user, fs.isfile, script_path):
       return fs.do_as_user(user, fs.read, script_path, 0, 16 * 1024 ** 2)

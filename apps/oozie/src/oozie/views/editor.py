@@ -20,7 +20,7 @@ import logging
 import shutil
 import time
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.db.models import Q
 from django.forms.formsets import formset_factory
 from django.forms.models import inlineformset_factory
@@ -385,7 +385,7 @@ def _submit_workflow(user, fs, jt, workflow, mapping):
 @check_job_access_permission()
 def schedule_workflow(request, workflow):
   data = Document.objects.available(Coordinator, request.user)
-  data = [coordinator for coordinator in data if coordinator.workflow == workflow]
+  data = [coordinator for coordinator in data if coordinator.coordinatorworkflow == workflow]
   if data:
     request.info(_('You already have some coordinators for this workflow. Submit one or create a new one.'))
     return list_coordinators(request, workflow_id=workflow.id)
@@ -396,7 +396,7 @@ def schedule_workflow(request, workflow):
 @check_job_access_permission()
 def create_coordinator(request, workflow=None):
   if workflow is not None:
-    coordinator = Coordinator(owner=request.user, schema_version="uri:oozie:coordinator:0.2", workflow=workflow)
+    coordinator = Coordinator(owner=request.user, schema_version="uri:oozie:coordinator:0.2", coordinatorworkflow=workflow)
   else:
     coordinator = Coordinator(owner=request.user, schema_version="uri:oozie:coordinator:0.2")
 
@@ -878,8 +878,8 @@ def _submit_bundle(request, bundle, properties):
     deployment_dirs = {}
 
     for bundled in bundle.coordinators.all():
-      wf_dir = Submission(request.user, bundled.coordinator.workflow, request.fs, request.jt, properties).deploy()
-      deployment_dirs['wf_%s_dir' % bundled.coordinator.workflow.id] = request.fs.get_hdfs_path(wf_dir)
+      wf_dir = Submission(request.user, bundled.coordinator.coordinatorworkflow, request.fs, request.jt, properties).deploy()
+      deployment_dirs['wf_%s_dir' % bundled.coordinator.coordinatorworkflow.id] = request.fs.get_hdfs_path(wf_dir)
       coord_dir = Submission(request.user, bundled.coordinator, request.fs, request.jt, properties).deploy()
       deployment_dirs['coord_%s_dir' % bundled.coordinator.id] = coord_dir
 
@@ -934,7 +934,7 @@ def install_examples(request):
     result['message'] = _('A POST request is required.')
   else:
     try:
-      oozie_setup.Command().handle_noargs()
+      oozie_setup.Command().handle()
       activate_translation(request.LANGUAGE_CODE)
       result['status'] = 0
     except Exception, e:

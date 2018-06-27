@@ -1366,7 +1366,7 @@
             dialect: 'impala',
             expectedResult: {
               lowerCase: false,
-              suggestKeywords: ['AVRO', 'KUDU', 'PARQUET', 'RCFILE', 'SEQUENCEFILE', 'TEXTFILE']
+              suggestKeywords: ['AVRO', 'KUDU', 'ORC', 'PARQUET', 'RCFILE', 'SEQUENCEFILE', 'TEXTFILE']
             }
           });
         });
@@ -1476,7 +1476,6 @@
             afterCursor: '',
             dialect: 'impala',
             containsKeywords: ['PARQUET'],
-            doesNotContainKeywords: ['ORC'],
             expectedResult: {
               lowerCase: false
             }
@@ -3063,6 +3062,42 @@
             beforeCursor: 'CREATE VIEW IF NOT EXISTS boo ',
             afterCursor: '',
             dialect: 'impala',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['COMMENT', 'AS']
+            }
+          });
+        });
+
+        it('should suggest keywords for "CREATE VIEW boo (id |"', function () {
+          assertAutoComplete({
+            dialect: 'impala',
+            beforeCursor: 'CREATE VIEW boo (id ',
+            afterCursor: '',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['COMMENT']
+            }
+          });
+        });
+
+        it('should suggest keywords for "CREATE VIEW boo (id COMMENT \'boo\') |"', function () {
+          assertAutoComplete({
+            dialect: 'impala',
+            beforeCursor: 'CREATE VIEW boo (id COMMENT \'boo\') ',
+            afterCursor: '',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['COMMENT', 'AS']
+            }
+          });
+        });
+
+        it('should suggest keywords for "CREATE VIEW boo (id COMMENT \'boo\') COMMENT \'foo\' |"', function () {
+          assertAutoComplete({
+            dialect: 'impala',
+            beforeCursor: 'CREATE VIEW boo (id COMMENT \'boo\') COMMENT \'foo\' ',
+            afterCursor: '',
             expectedResult: {
               lowerCase: false,
               suggestKeywords: ['AS']

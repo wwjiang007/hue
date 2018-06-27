@@ -111,6 +111,10 @@
   var originalClearableImgUrl = '${ static('desktop/art/clearField@2x.png') }';
   var clearableImgUrl = typeof adaptHueEmbeddedUrls !== 'undefined' ? adaptHueEmbeddedUrls(originalClearableImgUrl) : originalClearableImgUrl;
   document.styleSheets[0].insertRule('.clearable { background: url(' + clearableImgUrl + ') no-repeat right -10px center; }');
+
+  if (window.embeddedClusterId) {
+    window.DEFAULT_CLUSTER_ID = window.embeddedClusterId;
+  }
 % endif
   </script>
 
@@ -223,48 +227,6 @@ ${ hueIcons.symbols() }
 
 
       <div class="top-nav-middle">
-
-        <!-- ko if: cluster.clusters().length > 1 && cluster.clusters()[0].type() != ANALYTIC_DB -->
-        <div class="btn-group pull-right" style="display: none;" data-bind="visible: cluster.clusters().length > 1">
-          <button class="btn" data-bind="text: cluster.cluster().name() + (cluster.cluster().interface ? ' ' + cluster.cluster().interface() : '')"></button>
-          <button class="btn dropdown-toggle" data-toggle="dropdown">
-            <span class="caret"></span>
-          </button>
-
-          <ul class="dropdown-menu">
-            <!-- ko foreach: cluster.clusters -->
-              <!-- ko if: ['dataeng', 'cm'].indexOf(type()) != -1 && interfaces().length > 0 -->
-                <li class="dropdown-submenu">
-                  <a data-rel="navigator-tooltip" href="javascript: void(0)">
-                    <i class="fa fa-fw fa-th-large inline-block"></i> <span data-bind="text: name"></span>
-                  </a>
-                  <ul class="dropdown-menu">
-                    <li data-bind="visible: type() == 'dataeng'">
-                      <a data-rel="navigator-tooltip" href="#">
-                        <span class="dropdown-no-icon"><i class="fa fa-fw fa-plus inline-block"></i></span>
-                      </a>
-                    </li>
-                    <!-- ko foreach: interfaces -->
-                      <li>
-                        <a href="javascript: void(0)" data-bind="click: function() { $root.cluster.cluster($data) }">
-                          <span class="dropdown-no-icon" data-bind="text: interface"></span>
-                        </a>
-                      </li>
-                    <!-- /ko -->
-                  </ul>
-                </li>
-                <!-- /ko -->
-                <!-- ko if: ['dataeng', 'cm'].indexOf(type()) == -1 || interfaces().length == 0 -->
-                  <li><a href="javascript: void(0)" data-bind="click: function(){  $root.cluster.cluster($data) }">
-                    <i class="fa fa-fw fa-square"></i> <span data-bind="text: name"></span></a>
-                  </li>
-                <!-- /ko -->
-              <!-- /ko -->
-            <!-- /ko -->
-          </ul>
-        </div>
-        <!-- /ko -->
-
         <div class="search-container-top" data-bind="component: 'hue-global-search'"></div>
       </div>
 
@@ -407,6 +369,7 @@ ${ hueIcons.symbols() }
       <div id="embeddable_home" class="embeddable"></div>
       <div id="embeddable_catalog" class="embeddable"></div>
       <div id="embeddable_indexer" class="embeddable"></div>
+      <div id="embeddable_kafka" class="embeddable"></div>
       <div id="embeddable_importer" class="embeddable"></div>
       <div id="embeddable_collections" class="embeddable"></div>
       <div id="embeddable_indexes" class="embeddable"></div>
@@ -644,6 +607,7 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
         home: { url: '/home*', title: '${_('Home')}' },
         catalog: { url: '/catalog', title: '${_('Catalog')}' },
         indexer: { url: '/indexer/indexer/', title: '${_('Indexer')}' },
+        kafka: { url: '/indexer/topics/', title: '${_('Streams')}' },
         collections: { url: '/dashboard/admin/collections', title: '${_('Search')}' },
         % if hasattr(ENABLE_NEW_INDEXER, 'get') and ENABLE_NEW_INDEXER.get():
         indexes: { url: '/indexer/indexes/*', title: '${_('Indexes')}' },
@@ -683,7 +647,7 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
       };
 
       var SKIP_CACHE = [
-          'home', 'catalog', 'oozie_workflow', 'oozie_coordinator', 'oozie_bundle', 'dashboard', 'metastore',
+          'home', 'oozie_workflow', 'oozie_coordinator', 'oozie_bundle', 'dashboard', 'metastore',
           'filebrowser', 'useradmin_users', 'useradmin_groups', 'useradmin_newgroup', 'useradmin_editgroup',
           'useradmin_permissions', 'useradmin_editpermission', 'useradmin_configurations', 'useradmin_newuser',
           'useradmin_addldapusers', 'useradmin_addldapgroups', 'useradmin_edituser', 'importer',
@@ -999,6 +963,7 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
               baseURL += (baseURL.indexOf('?') > -1 ? '&' : '?') + self.currentQueryString();
               self.currentQueryString(null);
             }
+            baseURL = encodeURI(baseURL);
             $.ajax({
               url: baseURL + (baseURL.indexOf('?') > -1 ? '&' : '?') +'is_embeddable=true' + self.extraEmbeddableURLParams(),
               beforeSend: function (xhr) {
@@ -1185,6 +1150,8 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
           }},
           { url: '/home*', app: 'home' },
           { url: '/catalog', app: 'catalog' },
+          { url: '/kafka/', app: 'kafka' },
+          { url: '/indexer/topics/*', app: 'kafka' },
           { url: '/indexer/indexes/*', app: 'indexes' },
           { url: '/indexer/', app: 'indexes' },
           { url: '/indexer/importer/', app: 'importer' },
@@ -1307,7 +1274,7 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
                 self.currentContextParams(ctx.params);
                 self.currentQueryString(ctx.querystring);
                 self.loadApp('${ other.display_name }', true)
-              }}
+              }},
             % endfor
           % endif
         ];
@@ -1584,55 +1551,6 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
         huePubSub.subscribe('hue.new.default.app', function () {
           huePubSub.publish('cluster.config.refresh.config');
         });
-
-        var ClusterPanelViewModel = function() {
-          var self = this;
-          self.apiHelper = ApiHelper.getInstance();
-
-          self.clusters = ko.mapping.fromJS(${ clusters_config_json | n,unicode });
-          self.cluster = ko.observable(self.clusters().length > 0 ? self.clusters()[${ default_cluster_index }] : self.clusters()[0]);
-          self.cluster.subscribe(function(newValue) {
-            new ClusterConfig({'cluster': ko.mapping.toJSON(newValue)});
-          });
-
-          self.contextPanelVisible = ko.observable(false);
-
-          self._loadInterface = function() {
-            var interfaces = self.cluster().interfaces().filter(function (i) {return i.interface() == '${ default_cluster_interface }'});
-            if (interfaces.length > 0) {
-              self.cluster(interfaces[0]);
-            }
-          };
-          var dataEngCluster = $.grep(self.clusters(), function(cluster) {
-            return cluster.type() == 'dataeng';
-          });
-          if (dataEngCluster.length > 0) {
-            $.post("/jobbrowser/api/jobs", {
-              interface: ko.mapping.toJSON('dataeng-clusters'),
-              filters: ko.mapping.toJSON([]),
-            }, function (data) {
-              if (data.status == 0) {
-                var interfaces = [];
-                if (data && data.apps) {
-                  data.apps.forEach(function(cluster) {
-                    interfaces.push(ko.mapping.fromJS({'name': dataEngCluster[0].name(), 'type': 'dataeng', 'interface': cluster.name, 'id': cluster.id}));
-                  });
-                }
-                dataEngCluster[0]['interfaces'](interfaces);
-
-                if (dataEngCluster[0].type() == 'dataeng') {
-                  self._loadInterface();
-                }
-              } else {
-                $(document).trigger("error", data.message);
-              }
-            });
-          }
-          if (self.cluster().type() != 'dataeng') {
-            self._loadInterface();
-          }
-        };
-        self.cluster = new ClusterPanelViewModel();
       }
 
       var topNavViewModel = new TopNavViewModel(onePageViewModel);
@@ -1862,7 +1780,7 @@ ${ smart_unicode(login_modal(request).content) | n,unicode }
       }
     };
 
-    % if is_demo or not user_preferences.get(PREFERENCE_IS_WELCOME_TOUR_SEEN):
+    % if is_demo or (not user_preferences.get(PREFERENCE_IS_WELCOME_TOUR_SEEN) and not IS_EMBEDDED.get()):
       $(document).on('keyup', closeTourOnEsc);
       $(document).on('click', '.shepherd-backdrop', tour.cancel);
       tour.start();
@@ -1897,7 +1815,7 @@ ${ commonHeaderFooterComponents.footer(messages) }
 </div>
 % endif
 
-<div class="monospace-preload" style="opacity: 0">
+<div class="monospace-preload" style="opacity: 0; height: 0; width: 0;">
   ${ _('Hue and the Hue logo are trademarks of Cloudera, Inc.') }
   <b>Query. Explore. Repeat.</b>
 </div>

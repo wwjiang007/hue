@@ -20,7 +20,7 @@ import re
 import threading
 import time
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.utils.encoding import force_unicode
 from django.utils.translation import ugettext as _
 
@@ -28,7 +28,7 @@ from desktop.lib.django_util import format_preserving_redirect
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.parameterization import substitute_variables
 from desktop.models import Cluster, ANALYTIC_DB
-from filebrowser.views import location_to_url
+from desktop.lib.view_util import location_to_url
 from indexer.file_format import HiveFormat
 
 from beeswax import hive_site
@@ -757,7 +757,7 @@ class HiveServer2Dbms(object):
       # We need to update the query in case it was fixed
       query_history.refresh_design(hql_query)
 
-    query_history.last_state = QueryHistory.STATE.submitted.index
+    query_history.last_state = QueryHistory.STATE.submitted.value
     query_history.save()
     query = query_history.design.get_design()
 
@@ -782,7 +782,7 @@ class HiveServer2Dbms(object):
           server_port='%(server_port)d' % self.client.query_server,
           server_name='%(server_name)s' % self.client.query_server,
           server_type=self.server_type,
-          last_state=QueryHistory.STATE.submitted.index,
+          last_state=QueryHistory.STATE.submitted.value,
           design=design,
           notify=query.query.get('email_notify', False),
           query_type=query.query['type'],

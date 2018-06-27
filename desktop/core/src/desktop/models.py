@@ -30,10 +30,11 @@ except ImportError:
 from itertools import chain
 
 from django.contrib.auth import models as auth_models
-from django.contrib.contenttypes import generic
+from django.contrib.auth.validators import UnicodeUsernameValidator
+from django.contrib.contenttypes.fields import GenericRelation, GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.staticfiles.storage import staticfiles_storage
-from django.core.urlresolvers import reverse, NoReverseMatch
+from django.urls import reverse, NoReverseMatch
 from django.db import connection, models, transaction
 from django.db.models import Q
 from django.db.models.query import QuerySet
@@ -44,16 +45,16 @@ from settings import HUE_DESKTOP_VERSION
 from aws.conf import is_enabled as is_s3_enabled, has_s3_access
 from azure.conf import is_adls_enabled, has_adls_access
 from dashboard.conf import get_engines, HAS_REPORT_ENABLED
+from kafka.conf import has_kafka
 from notebook.conf import SHOW_NOTEBOOKS, get_ordered_interpreters
 
 from desktop import appmanager
-from desktop.conf import get_clusters, IS_EMBEDDED
+from desktop.conf import get_clusters
 from desktop.lib.i18n import force_unicode
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.paths import get_run_root
 from desktop.redaction import global_redaction_engine
 from desktop.settings import DOCUMENT2_SEARCH_MAX_LENGTH
-
 
 LOG = logging.getLogger(__name__)
 
@@ -64,8 +65,6 @@ SAMPLE_USER_OWNERS = ['hue', 'sample']
 UTC_TIME_FORMAT = "%Y-%m-%dT%H:%MZ"
 HUE_VERSION = None
 
-USER_PREFERENCE_CLUSTER = 'cluster'
-
 
 def uuid_default():
   return str(uuid.uuid4())
@@ -74,16 +73,18 @@ def hue_version():
   global HUE_VERSION
 
   if HUE_VERSION is None:
+    HUE_VERSION = HUE_DESKTOP_VERSION
+
     p = get_run_root('cloudera', 'cdh_version.properties')
     if os.path.exists(p):
-      HUE_VERSION = _version_from_properties(open(p))
-    else:
-      HUE_VERSION = HUE_DESKTOP_VERSION
+      build_version = _version_from_properties(open(p))
+      if build_version:
+        HUE_VERSION = '%s - %s' % (HUE_VERSION, build_version)
 
   return HUE_VERSION
 
 def _version_from_properties(f):
-  return dict(line.strip().split('=') for line in f.readlines() if len(line.strip().split('=')) == 2).get('version', HUE_DESKTOP_VERSION)
+  return dict(line.strip().split('=') for line in f.readlines() if len(line.strip().split('=')) == 2).get('cloudera.cdh.release')
 
 
 ###################################################################################################
@@ -91,6 +92,16 @@ def _version_from_properties(f):
 ###################################################################################################
 
 PREFERENCE_IS_WELCOME_TOUR_SEEN = 'is_welcome_tour_seen'
+
+class HueUser(auth_models.User):
+  class Meta:
+    proxy = True
+
+  def __init__(self, *args, **kwargs):
+    self._meta.get_field(
+      'username'
+    ).validators[0] = UnicodeUsernameValidator()
+    super(auth_models.User, self).__init__(*args, **kwargs)
 
 
 class UserPreferences(models.Model):
@@ -610,7 +621,7 @@ class Document(models.Model):
 
   content_type = models.ForeignKey(ContentType)
   object_id = models.PositiveIntegerField()
-  content_object = generic.GenericForeignKey('content_type', 'object_id')
+  content_object = GenericForeignKey('content_type', 'object_id')
 
   objects = DocumentManager()
 
@@ -943,7 +954,7 @@ class Document2QuerySet(QuerySet, Document2QueryMixin):
 
 class Document2Manager(models.Manager, Document2QueryMixin):
 
-  def get_query_set(self):
+  def get_queryset(self):
     return Document2QuerySet(self.model, using=self._db)
 
   # TODO prevent get() in favor of this
@@ -1076,7 +1087,7 @@ class Document2(models.Model):
 
   parent_directory = models.ForeignKey('self', blank=True, null=True, related_name='children', on_delete=models.CASCADE)
 
-  doc = generic.GenericRelation(Document, related_name='doc_doc') # Compatibility with Hue 3
+  doc = GenericRelation(Document, related_query_name='doc_doc') # Compatibility with Hue 3
 
   objects = Document2Manager()
 
@@ -1177,8 +1188,8 @@ class Document2(models.Model):
       'parent_uuid': self.parent_directory.uuid if self.parent_directory else None,
       'type': self.type,
       'perms': self._massage_permissions(),
-      'last_modified': self.last_modified.strftime(UTC_TIME_FORMAT),
-      'last_modified_ts': calendar.timegm(self.last_modified.utctimetuple()),
+      'last_modified': self.last_modified.strftime(UTC_TIME_FORMAT) if self.last_modified else None,
+      'last_modified_ts': calendar.timegm(self.last_modified.utctimetuple()) if self.last_modified else None,
       'is_managed': self.is_managed,
       'isSelected': False,
       'absoluteUrl': self.get_absolute_url(),
@@ -1547,7 +1558,6 @@ def get_cluster_config(user):
   return cluster_config.get_config()
 
 
-DATAENG = 'dataeng'
 ANALYTIC_DB = 'analyticdb'
 
 
@@ -1643,9 +1653,8 @@ class ClusterConfig():
     interpreters = []
 
     _interpreters = get_ordered_interpreters(self.user)
-    if self.cluster_type == DATAENG:
-      _interpreters = [interpreter for interpreter in _interpreters if interpreter['type'] in ('hive', 'spark2', 'mapreduce')]
-    elif self.cluster_type == ANALYTIC_DB:
+
+    if self.cluster_type == ANALYTIC_DB:
       _interpreters = [interpreter for interpreter in _interpreters if interpreter['type'] == 'impala']
 
     for interpreter in _interpreters:
@@ -1659,7 +1668,7 @@ class ClusterConfig():
         'is_sql': interpreter['is_sql']
       })
 
-    if SHOW_NOTEBOOKS.get() and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
+    if SHOW_NOTEBOOKS.get() and self.cluster_type != ANALYTIC_DB:
       try:
         first_non_sql_index = [interpreter['is_sql'] for interpreter in interpreters].index(False)
       except ValueError:
@@ -1689,18 +1698,9 @@ class ClusterConfig():
 
   def _get_dashboard(self):
     interpreters = get_engines(self.user)
+    _interpreters = []
 
-    if interpreters and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
-      _interpreters = [{
-          'type': interpreter['type'],
-          'displayName': interpreter['type'].title(),
-          'buttonName': interpreter['type'].title(),
-          'page': '/dashboard/new_search?engine=%(type)s' % interpreter,
-          'tooltip': _('%s Dashboard') % interpreter['type'].title(),
-          'is_sql': True
-        } for interpreter in interpreters
-      ]
-
+    if interpreters and self.cluster_type != ANALYTIC_DB:
       if HAS_REPORT_ENABLED.get():
         _interpreters.append({
           'type': 'report',
@@ -1710,6 +1710,16 @@ class ClusterConfig():
           'tooltip': _('Report'),
           'is_sql': False
         })
+
+      _interpreters.extend([{
+          'type': interpreter['type'],
+          'displayName': interpreter['type'].title(),
+          'buttonName': interpreter['type'].title(),
+          'page': '/dashboard/new_search?engine=%(type)s' % interpreter,
+          'tooltip': _('%s Dashboard') % interpreter['type'].title(),
+          'is_sql': True
+        } for interpreter in interpreters
+      ])
 
       return {
         'name': 'dashboard',
@@ -1724,7 +1734,7 @@ class ClusterConfig():
   def _get_browser(self):
     interpreters = []
 
-    if 'filebrowser' in self.apps and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
+    if 'filebrowser' in self.apps and self.cluster_type != ANALYTIC_DB:
       interpreters.append({
         'type': 'hdfs',
         'displayName': _('Files'),
@@ -1760,7 +1770,7 @@ class ClusterConfig():
         'page': '/metastore/tables'
       })
 
-    if 'search' in self.apps and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
+    if 'indexer' in self.apps and self.cluster_type != ANALYTIC_DB:
       interpreters.append({
         'type': 'indexes',
         'displayName': _('Indexes'),
@@ -1770,29 +1780,29 @@ class ClusterConfig():
       })
 
     if 'jobbrowser' in self.apps:
-      if self.cluster_type == DATAENG:
+      from hadoop.cluster import get_default_yarncluster # Circular loop
+
+      title =  _('Jobs') if self.cluster_type != ANALYTIC_DB else _('Queries')
+
+      if get_default_yarncluster():
         interpreters.append({
-          'type': 'dataeng',
-          'displayName': _('Jobs'),
-          'buttonName': _('Jobs'),
-          'tooltip': _('Jobs'),
+          'type': 'yarn',
+          'displayName': title,
+          'buttonName': title,
+          'tooltip': title,
           'page': '/jobbrowser/'
         })
-      else:
-        from hadoop.cluster import get_default_yarncluster # Circular loop
 
-        title =  _('Jobs') if self.cluster_type != ANALYTIC_DB else _('Queries')
+    if has_kafka() and self.cluster_type != ANALYTIC_DB:
+      interpreters.append({
+        'type': 'kafka',
+        'displayName': _('Streams'),
+        'buttonName': _('Browse'),
+        'tooltip': _('Kafka'),
+        'page': '/kafka/'
+      })
 
-        if get_default_yarncluster():
-          interpreters.append({
-            'type': 'yarn',
-            'displayName': title,
-            'buttonName': title,
-            'tooltip': title,
-            'page': '/jobbrowser/'
-          })
-
-    if 'hbase' in self.apps and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
+    if 'hbase' in self.apps and self.cluster_type != ANALYTIC_DB:
       interpreters.append({
         'type': 'hbase',
         'displayName': _('HBase'),
@@ -1801,7 +1811,7 @@ class ClusterConfig():
         'page': '/hbase/'
       })
 
-    if 'security' in self.apps and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
+    if 'security' in self.apps and self.cluster_type != ANALYTIC_DB:
       interpreters.append({
         'type': 'security',
         'displayName': _('Security'),
@@ -1810,14 +1820,16 @@ class ClusterConfig():
         'page': '/security/hive'
       })
 
-    if 'sqoop' in self.apps and (self.cluster_type not in (DATAENG, ANALYTIC_DB)):
-      interpreters.append({
-        'type': 'sqoop',
-        'displayName': _('Sqoop'),
-        'buttonName': _('Browse'),
-        'tooltip': _('Sqoop'),
-        'page': '/sqoop'
-      })
+    if 'sqoop' in self.apps and self.cluster_type != ANALYTIC_DB:
+      from sqoop.conf import IS_ENABLED
+      if IS_ENABLED.get():
+        interpreters.append({
+          'type': 'sqoop',
+          'displayName': _('Sqoop'),
+          'buttonName': _('Browse'),
+          'tooltip': _('Sqoop'),
+          'page': '/sqoop'
+        })
 
     if interpreters:
       return {
@@ -1894,45 +1906,10 @@ class Cluster():
 
   def __init__(self, user):
     self.user = user
-    self.default_cluster = get_user_preferences(self.user, key=USER_PREFERENCE_CLUSTER)
-    self.data = {}
-
-    if IS_EMBEDDED.get():
-      self.data = get_clusters()['Default']
-    elif self.default_cluster:
-      clusters = get_clusters()
-      cluster_name = json.loads(self.default_cluster[USER_PREFERENCE_CLUSTER]).get('name')
-      self.data = cluster_name and clusters.get(cluster_name) and clusters[cluster_name] or None
+    self.data = get_clusters()['Default']
 
   def get_type(self):
-    return self.data and self.data['type'] or 'ini'
-
-  def get_interface(self):
-    return json.loads(self.default_cluster[USER_PREFERENCE_CLUSTER]).get('interface')
-
-  def get_id(self):
-    return json.loads(self.default_cluster[USER_PREFERENCE_CLUSTER]).get('id')
-
-  def get_list_interface_indexes(self):
-    default_cluster_index = 0
-    default_cluster_interface = ''
-
-    clusters = get_clusters()
-    default_cluster = get_user_preferences(self.user, key=USER_PREFERENCE_CLUSTER)
-
-    if clusters and default_cluster:
-      if len(clusters) == 1:
-        default_cluster = clusters.values()[0]
-        default_cluster_index = 0
-        default_cluster_interface = ANALYTIC_DB
-      else:
-        default_cluster_json = json.loads(default_cluster[USER_PREFERENCE_CLUSTER])
-        default_cluster_name = default_cluster_json.get('name')
-
-        default_cluster_index = default_cluster_name in clusters.keys() and clusters.keys().index(default_cluster_name) or 0
-        default_cluster_interface = default_cluster_json.get('interface', '')
-
-    return default_cluster_index, default_cluster_interface
+    return self.data['type']
 
 
 def _get_apps(user, section=None):

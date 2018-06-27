@@ -870,7 +870,7 @@ var EditorViewModel = (function() {
           var variable = variables[p2];
           var pad = variable.type() == 'datetime-local' && variable.value().length == 16 ? ':00' : ''; // Chrome drops the seconds from the timestamp when it's at 0 second.
           var value = variable.value();
-          return p1 + (value || value === 0 ? value + pad : variable.meta.placeholder && variable.meta.placeholder());
+          return p1 + (value !== undefined && value !== null ? value + pad : variable.meta.placeholder && variable.meta.placeholder());
         });
       }
       return statement;
@@ -908,7 +908,7 @@ var EditorViewModel = (function() {
         }
         ignoreNextAssistDatabaseUpdate = true;
         DataCatalog.getEntry({ sourceType: self.type(), path: path }).done(function (entry) {
-          entry.clear('invalidate', true);
+          entry.clearCache({ invalidate: 'invalidate', cascade: true, silenceErrors: true });
         });
       });
     }, 0);
@@ -1022,6 +1022,9 @@ var EditorViewModel = (function() {
     self.chartMapType = ko.observable(typeof snippet.chartMapType != "undefined" && snippet.chartMapType != null ? snippet.chartMapType : 'marker');
     self.chartMapLabel = ko.observable(typeof snippet.chartMapLabel != "undefined" && snippet.chartMapLabel != null ? snippet.chartMapLabel : null);
     self.chartMapHeat = ko.observable(typeof snippet.chartMapHeat != "undefined" && snippet.chartMapHeat != null ? snippet.chartMapHeat : null);
+    self.hideStacked = ko.computed(function() {
+      return self.chartYMulti().length <= 1;
+    });
 
     self.hasDataForChart = ko.computed(function () {
       if (self.chartType() == ko.HUE_CHARTS.TYPES.BARCHART || self.chartType() == ko.HUE_CHARTS.TYPES.LINECHART || self.chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART) {
@@ -1497,6 +1500,7 @@ var EditorViewModel = (function() {
             self.loadData(data.result, 100);
             self.status('available');
             self.progress(100);
+            self.result.endTime(new Date());
           } else {
             if (! notebook.unloaded()) {
               self.checkStatus();

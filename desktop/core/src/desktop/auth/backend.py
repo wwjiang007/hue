@@ -31,12 +31,16 @@ User to remain a django.contrib.auth.models.User object.
 import ldap
 import logging
 import pam
+import requests
 
 import django.contrib.auth.backends
+from django.contrib import auth
 from django.contrib.auth.models import User
+from django.core.urlresolvers import reverse
 from django.core.exceptions import ImproperlyConfigured, PermissionDenied
+from django.http import HttpResponseRedirect
 from django.forms import ValidationError
-from django.utils.importlib import import_module
+from importlib import import_module
 
 from django_auth_ldap.backend import LDAPBackend
 from django_auth_ldap.config import LDAPSearch
@@ -44,6 +48,8 @@ from django_auth_ldap.config import LDAPSearch
 import desktop.conf
 from desktop import metrics
 from liboauth.metrics import oauth_authentication_time
+from mozilla_django_oidc.auth import OIDCAuthenticationBackend, default_username_algo
+from mozilla_django_oidc.utils import absolutify, import_from_settings
 
 from useradmin import ldap_access
 from useradmin.forms import validate_username
@@ -185,7 +191,8 @@ class AllowFirstUserDjangoBackend(django.contrib.auth.backends.ModelBackend):
   """
   def authenticate(self, username=None, password=None):
     username = force_username_case(username)
-    user = super(AllowFirstUserDjangoBackend, self).authenticate(username, password)
+    request = None
+    user = super(AllowFirstUserDjangoBackend, self).authenticate(request, username=username, password=password)
 
     if user is not None:
       if user.is_active:
@@ -225,7 +232,8 @@ class ImpersonationBackend(django.contrib.auth.backends.ModelBackend):
     if not login_as:
       return
 
-    authenticated = super(ImpersonationBackend, self).authenticate(username, password)
+    request = None
+    authenticated = super(ImpersonationBackend, self).authenticate(request, username, password)
 
     if not authenticated:
       raise PermissionDenied()
@@ -434,14 +442,14 @@ class LdapBackend(object):
       self.add_ldap_config(desktop.conf.LDAP)
 
   @metrics.ldap_authentication_time
-  def authenticate(self, username=None, password=None, server=None):
+  def authenticate(self, request=None, username=None, password=None, server=None):
     self.add_ldap_config_for_server(server)
 
     username_filter_kwargs = ldap_access.get_ldap_user_kwargs(username)
 
     # Do this check up here, because the auth call creates a django user upon first login per user
     is_super = False
-    if not UserProfile.objects.filter(creation_method=str(UserProfile.CreationMethod.EXTERNAL)).exists():
+    if not UserProfile.objects.filter(creation_method=UserProfile.CreationMethod.EXTERNAL.name).exists():
       # If there are no LDAP users already in the system, the first one will
       # become a superuser
       is_super = True
@@ -451,7 +459,7 @@ class LdapBackend(object):
       # user, we should do the safe thing and turn off superuser privs.
       existing_user = User.objects.get(**username_filter_kwargs)
       existing_profile = get_profile(existing_user)
-      if existing_profile.creation_method == str(UserProfile.CreationMethod.EXTERNAL):
+      if existing_profile.creation_method == UserProfile.CreationMethod.EXTERNAL.name:
         is_super = User.objects.get(**username_filter_kwargs).is_superuser
     elif not desktop.conf.LDAP.CREATE_USERS_ON_LOGIN.get():
       LOG.warn("Create users when they login with their LDAP credentials is turned off")
@@ -579,4 +587,164 @@ class RemoteUserDjangoBackend(django.contrib.auth.backends.RemoteUserBackend):
     user = super(RemoteUserDjangoBackend, self).get_user(user_id)
     user = rewrite_user(user)
     return user
+
+
+class OIDCBackend(OIDCAuthenticationBackend):
+  def authenticate(self, **kwargs):
+    self.request = kwargs.pop('request', None)
+    if not self.request:
+      return None
+
+    state = self.request.GET.get('state')
+    code = self.request.GET.get('code')
+    nonce = kwargs.pop('nonce', None)
+
+    if not code or not state:
+      return None
+
+    reverse_url = import_from_settings('OIDC_AUTHENTICATION_CALLBACK_URL',
+                                       'oidc_authentication_callback')
+
+    token_payload = {
+      'client_id': self.OIDC_RP_CLIENT_ID,
+      'client_secret': self.OIDC_RP_CLIENT_SECRET,
+      'grant_type': 'authorization_code',
+      'code': code,
+      'redirect_uri': absolutify(
+        self.request,
+        reverse(reverse_url)
+      ),
+    }
+
+    # Get the token
+    token_info = self.get_token(token_payload)
+    id_token = token_info.get('id_token')
+    access_token = token_info.get('access_token')
+    refresh_token = token_info.get('refresh_token')
+
+    # Validate the token
+    verified_id = self.verify_token(id_token, nonce=nonce)
+
+    if verified_id:
+      self.save_refresh_tokens(refresh_token)
+      user =  self.get_or_create_user(access_token, id_token, verified_id)
+      user = rewrite_user(user)
+      return user
+
+    return None
+
+  def filter_users_by_claims(self, claims):
+    username = claims.get('preferred_username')
+    if not username:
+      return self.UserModel.objects.none()
+    # iexact is equals to SQL 'like', replace % and _ for wildcards
+    username = username.replace('%', '').replace('_', '')
+    return self.UserModel.objects.filter(username__iexact=username)
+
+  def save_refresh_tokens(self, refresh_token):
+    session = self.request.session
+
+    if import_from_settings('OIDC_STORE_REFRESH_TOKEN', False):
+      session['oidc_refresh_token'] = refresh_token
+
+  def create_user(self, claims):
+    """Return object for a newly created user account."""
+    # Overriding lib's logic, use preferred_username from oidc as username
+
+    username = claims.get('preferred_username', '')
+    email = claims.get('email', '')
+    first_name = claims.get('given_name', '')
+    last_name = claims.get('family_name', '')
+
+    if not username:
+      if not email:
+        LOG.debug("OpenID Connect no username and email while creating new user")
+        return None
+      username = default_username_algo(email)
+
+    return self.UserModel.objects.create_user(username=username, email=email,
+                                              first_name=first_name, last_name=last_name,
+                                              is_superuser=self.is_hue_superuser(claims))
+
+  def get_or_create_user(self, access_token, id_token, verified_id):
+    user = super(OIDCBackend, self).get_or_create_user(access_token, id_token, verified_id)
+    if not user and not import_from_settings('OIDC_CREATE_USER', True):
+      # in this case, user is login from Keycloak, but not allow create
+      self.logout(self.request, next_page=import_from_settings('LOGIN_REDIRECT_URL_FAILURE', '/'))
+    return user
+
+  def get_user(self, user_id):
+    user = super(OIDCBackend, self).get_user(user_id)
+    user = rewrite_user(user)
+    return user
+
+  def update_user(self, user, claims):
+    if user.is_superuser != self.is_hue_superuser(claims):
+      user.is_superuser = self.is_hue_superuser(claims)
+      user.save()
+    return user
+
+  def is_hue_superuser(self, claims):
+    """
+    To use this feature, setup in Keycloak:
+      1. add the name of Hue superuser group to superuser_group in hue.ini
+      2. in Keycloak, go to your_realm --> your_clients --> Mappers, add a mapper
+           Mapper Type: Group Membership (this is predefined mapper type)
+           Token Claim Name: group_membership (required exact string)
+    """
+    sueruser_group = '/' + desktop.conf.OIDC.SUPERUSER_GROUP.get()
+    if sueruser_group:
+      return sueruser_group in claims.get('group_membership', [])
+    return False
+
+  def logout(self, request, next_page):
+    # https://stackoverflow.com/questions/46689034/logout-user-via-keycloak-rest-api-doesnt-work
+    session = request.session
+    access_token = session['oidc_access_token']
+    refresh_token = session['oidc_refresh_token']
+
+    if access_token and refresh_token:
+      oidc_logout_url = desktop.conf.OIDC.LOGOUT_REDIRECT_URL.get()
+      client_id = import_from_settings('OIDC_RP_CLIENT_ID')
+      client_secret = import_from_settings('OIDC_RP_CLIENT_SECRET')
+      oidc_verify_ssl = import_from_settings('OIDC_VERIFY_SSL')
+      form = {
+        'client_id': client_id,
+        'client_secret': client_secret,
+        'refresh_token': refresh_token,
+      }
+      headers = {
+        'Authorization': 'Bearer {0}'.format(access_token),
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+      resp = requests.post(oidc_logout_url, data=form, headers=headers, verify=oidc_verify_ssl)
+      if resp.status_code >= 200 and resp.status_code < 300:
+        LOG.debug("OpenID Connect logout succeed!")
+        delete_oidc_session_tokens(session)
+        auth.logout(request)
+        return HttpResponseRedirect(next_page)
+      else:
+        LOG.error("OpenID Connect logout failed: %s" % resp.content)
+    else:
+      LOG.warn("OpenID Connect tokens are not available, logout skipped!")
+    return None
+
+  # def filter_users_by_claims(self, claims):
+
+  # def verify_claims(self, claims):
+
+def delete_oidc_session_tokens(session):
+  if session:
+    if 'oidc_access_token' in session:
+      del session['oidc_access_token']
+    if 'oidc_id_token' in session:
+      del session['oidc_id_token']
+    if 'oidc_id_token_expiration' in session:
+      del session['oidc_id_token_expiration']
+    if 'oidc_login_next' in session:
+      del session['oidc_login_next']
+    if 'oidc_refresh_token' in session:
+      del session['oidc_refresh_token']
+    if 'oidc_state' in session:
+      del session['oidc_state']
 

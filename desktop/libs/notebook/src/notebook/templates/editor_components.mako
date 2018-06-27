@@ -187,11 +187,14 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
                 <!-- ko case: 'jar' -->Spark Submit Jar<!-- /ko -->
                 <!-- ko case: 'py' -->Spark Submit Python<!-- /ko -->
                 <!-- ko case: 'solr' -->Solr SQL<!-- /ko -->
+                <!-- ko case: 'kafkasql' -->Kafka SQL<!-- /ko -->
                 <!-- ko case: 'markdown' -->Markdown<!-- /ko -->
                 <!-- ko case: 'text' -->Text<!-- /ko -->
                 <!-- ko case: $default -->SQL<!-- /ko -->
               <!-- /ko -->
+              % if not IS_EMBEDDED.get():
               <!-- ko component: { name: 'hue-favorite-app', params: { hue4: IS_HUE_4, app: 'editor', interpreter: editorType() }} --><!-- /ko -->
+              % endif
               </a>
             <!-- /ko -->
             <!-- ko ifnot: editorMode -->
@@ -248,7 +251,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
 
 <script type="text/html" id="notebook-menu-buttons-${ suffix }">
   <div class="pull-right margin-right-10">
-  % if ENABLE_PRESENTATION.get():
+  % if ENABLE_PRESENTATION.get() and not IS_EMBEDDED.get():
     <!-- ko with: selectedNotebook() -->
       <div class="btn-group">
         <a class="btn" data-bind="click: function() { isPresentationMode(!isPresentationMode()); },
@@ -589,11 +592,13 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
         % if conf.USE_DEFAULT_CONFIGURATION.get():
           <a class="inactive-action pointer margin-left-10" title="${ _('Save session settings as default') }" rel="tooltip" data-bind="click: function() { $parent.saveDefaultUserProperties($data) }"><i class="fa fa-save"></i> ${ _('Set as default settings') }</a>
         % endif
+        % if not IS_EMBEDDED.get():
         <!-- ko if: type() == 'impala' && typeof http_addr != 'undefined' -->
           <a class="margin-left-10" data-bind="attr: {'href': http_addr()}" target="_blank">
             <span data-bind="text: http_addr().replace(/^(https?):\/\//, '')"></span> <i class="fa fa-external-link"></i>
           </a>
         <!-- /ko -->
+        % endif
       </div>
       % if conf.USE_DEFAULT_CONFIGURATION.get():
       <div style="width:100%;">
@@ -630,6 +635,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
   <div class="snippet-log-container margin-bottom-10" data-bind="visible: showLogs() && status() != 'ready' && status() != 'loading'" style="display: none;">
     <div data-bind="delayedOverflow: 'slow', css: resultsKlass" style="margin-top: 5px; position: relative;">
       <a href="javascript: void(0)" class="inactive-action close-logs-overlay" data-bind="click: function(){ showLogs(false) }">&times;</a>
+      %if not IS_EMBEDDED.get():
       <ul data-bind="visible: jobs().length > 0, foreach: jobs" class="unstyled jobs-overlay">
         <li data-bind="attr: {'id': $data.name.substr(4)}">
           %if is_embeddable:
@@ -645,6 +651,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
           <div class="clearfix"></div>
         </li>
       </ul>
+      %endif
       <span data-bind="visible: !$root.isPresentationMode() || !$root.isHidingCode()">
         <pre data-bind="visible: result.logs() && result.logs().length == 0" class="logs logs-bigger">${ _('No logs available at this moment.') }</pre>
         <pre data-bind="visible: result.logs() && result.logs().length > 0, text: result.logs, logScroller: result.logs, logScrollerVisibilityEvent: showLogs" class="logs logs-bigger logs-populated"></pre>
@@ -683,7 +690,9 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
           <a class="inactive-action" href="#queryHistory" data-toggle="tab">${_('Query History')}
             <div class="inline-block inactive-action margin-left-10 pointer" title="${_('Search the query history')}" data-bind="click: function(data, e){ $parent.historyFilterVisible(!$parent.historyFilterVisible()); if ($parent.historyFilterVisible()) { window.setTimeout(function(){ $(e.target).parent().siblings('input').focus(); }, 0); } else { $parent.historyFilter('') }}"><i class="snippet-icon fa fa-search"></i></div>
             <input class="input-small inline-tab-filter" type="text" data-bind="visible: $parent.historyFilterVisible, clearable: $parent.historyFilter, valueUpdate:'afterkeydown'" placeholder="${ _('Search...') }">
+            % if not IS_EMBEDDED.get():
             <div class="inline-block inactive-action pointer" title="${_('Clear the query history')}" data-target="#clearHistoryModal${ suffix }" data-toggle="modal" rel="tooltip" data-bind="visible: $parent.history().length > 0"><i class="snippet-icon fa fa-calendar-times-o"></i></div>
+            %endif
           </a>
         </li>
         % if not IS_EMBEDDED.get():
@@ -944,7 +953,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
 
 
 <script type="text/html" id="snippet-header-statement-type${ suffix }">
-  % if ENABLE_EXTERNAL_STATEMENT.get():
+  % if ENABLE_EXTERNAL_STATEMENT.get() and not IS_EMBEDDED.get():
   <!-- ko if: isSqlDialect() -->
     <div class="margin-left-10 statement-type-selector" data-bind="component: { name: 'hue-drop-down', params: { value: statementType, entries: statementTypes, linkTitle: '${ _ko('Statement type') }' } }" style="display: inline-block"></div>
   <!-- /ko -->
@@ -1249,8 +1258,11 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
               <!-- ko if: type() == 'date' -->
               <input class="input-medium" type="text" data-bind="value: value, datepicker: { momentFormat: 'YYYY-MM-DD' }">
               <!-- /ko -->
-              <!-- ko ifnot: (type() == 'datetime-local' || type() == 'date') -->
-              <input class="input-medium" type="text" data-bind="value: value, attr: { type: type() || 'text', step: step }, valueUpdate: 'afterkeydown', event: { 'keydown': $parent.onKeydownInVariable }, autogrowInput: { minWidth: 150, maxWidth: 270, comfortZone: 15 }">
+              <!-- ko if: type() == 'checkbox' -->
+              <input class="input-medium" type="checkbox" data-bind="checked: value">
+              <!-- /ko -->
+              <!-- ko ifnot: (type() == 'datetime-local' || type() == 'date' || type() == 'checkbox') -->
+              <input class="input-medium" type="text" value="true" data-bind="value: value, attr: { type: type() || 'text', step: step }, valueUpdate: 'afterkeydown', event: { 'keydown': $parent.onKeydownInVariable }, autogrowInput: { minWidth: 150, maxWidth: 270, comfortZone: 15 }">
               <!-- /ko -->
             <!-- /ko -->
           <!-- /ko -->
@@ -1309,7 +1321,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
       <li data-bind="visible: chartType() == ko.HUE_CHARTS.TYPES.MAP" class="nav-header">${_('longitude')}</li>
     </ul>
 
-    <div style="overflow-y: auto; max-height: 220px" data-bind="visible: chartType() != '' && ((chartType() == ko.HUE_CHARTS.TYPES.BARCHART && !chartXPivot()) || chartType() == ko.HUE_CHARTS.TYPES.LINECHART || chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART)">
+    <div style="max-height: 220px" data-bind="delayedOverflow, visible: chartType() != '' && ((chartType() == ko.HUE_CHARTS.TYPES.BARCHART && !chartXPivot()) || chartType() == ko.HUE_CHARTS.TYPES.LINECHART || chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART)">
       <ul class="unstyled" data-bind="foreach: result.cleanedNumericMeta" style="margin-bottom: 0">
         <li><label class="checkbox"><input type="checkbox" data-bind="checkedValue: name, checked: $parent.chartYMulti" /> <span data-bind="text: $data.name"></span></label></li>
       </ul>
@@ -1519,7 +1531,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
                 <!-- /ko -->
 
                 <!-- ko if: chartType() == ko.HUE_CHARTS.TYPES.BARCHART -->
-                <div data-bind="attr:{'id': 'barChart_'+id()}, barChart: {skipWindowResize: true, datum: {counts: result.data, sorting: chartSorting(), snippet: $data, limit: chartLimit()}, fqs: ko.observableArray([]), hideSelection: true,
+                <div data-bind="attr:{'id': 'barChart_'+id()}, barChart: {skipWindowResize: true, datum: {counts: result.data, sorting: chartSorting(), snippet: $data, limit: chartLimit()}, fqs: ko.observableArray([]), hideSelection: true, enableSelection: false, hideStacked: hideStacked,
                       transformer: editorMultiSerieDataTransformer, stacked: false, showLegend: true, isPivot: typeof chartXPivot() !== 'undefined', type: chartTimelineType},  stacked: true, showLegend: true, visible: chartType() == ko.HUE_CHARTS.TYPES.BARCHART" class="chart"></div>
                 <!-- /ko -->
 
@@ -1529,8 +1541,8 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
                 <!-- /ko -->
 
                 <!-- ko if: chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART -->
-                <div data-bind="attr:{'id': 'timelineChart_'+id()}, timelineChart: {type: chartTimelineType, skipWindowResize: true, datum: {counts: result.data, sorting: chartSorting(), snippet: $data, limit: chartLimit()}, fqs: ko.observableArray([]), hideSelection: true,
-                      transformer: editorTimelineChartDataTransformer, stacked: false, showLegend: true}, hideSelection: true, visible: chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART" class="chart"></div>
+                <div data-bind="attr:{'id': 'timelineChart_'+id()}, timelineChart: {type: chartTimelineType, skipWindowResize: true, datum: {counts: result.data, sorting: chartSorting(), snippet: $data, limit: chartLimit()}, fqs: ko.observableArray([]), hideSelection: true, enableSelection: false, hideStacked: hideStacked,
+                      transformer: editorTimelineChartDataTransformer, stacked: false, showLegend: true}, visible: chartType() == ko.HUE_CHARTS.TYPES.TIMELINECHART" class="chart"></div>
                 <!-- /ko -->
 
                 <!-- ko if: chartType() == ko.HUE_CHARTS.TYPES.MAP -->
@@ -1917,7 +1929,7 @@ ${ sqlSyntaxDropdown.sqlSyntaxDropdown() }
       </a>
     </div>
 
-    % if conf.ENABLE_DOWNLOAD.get():
+    % if conf.ENABLE_DOWNLOAD.get() and not IS_EMBEDDED.get():
     <div data-bind="component: { name: 'downloadSnippetResults', params: { gridSideBtn: false, snippet: $data, notebook: $parent } }" style="display:inline-block;"></div>
     % endif
   </div>
@@ -2850,6 +2862,12 @@ function togglePresentation(value) {};
           sqlDialect: true
         },
         solr: {
+          placeHolder: '${ _("Example: SELECT fieldA, FieldB FROM collectionname, or press CTRL + space") }',
+          aceMode: 'ace/mode/mysql',
+          snippetIcon: 'fa-database',
+          sqlDialect: true
+        },
+        kafkasql: {
           placeHolder: '${ _("Example: SELECT fieldA, FieldB FROM collectionname, or press CTRL + space") }',
           aceMode: 'ace/mode/mysql',
           snippetIcon: 'fa-database',

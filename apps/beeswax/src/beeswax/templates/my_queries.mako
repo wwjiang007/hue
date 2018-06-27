@@ -110,7 +110,7 @@ ${layout.menubar(section='my queries')}
         % endfor
         </tbody>
       </table>
-      % if q_page.number != q_page.num_pages():
+      % if q_page.number != q_paginator.num_pages:
         <a href="${ url(app_name + ':list_designs') }?q-user=${request.user.username|u}" >${_('View all my queries')} &raquo;</a>
       % endif
     </div>
@@ -135,7 +135,7 @@ ${layout.menubar(section='my queries')}
             <td width="1%" data-row-selector-exclude="true">
               <div class="hue-checkbox runCheck fa"
                 data-edit-url="${ url(app_name + ':execute_design', design_id=query.design.id) }"
-                % if qcontext and query.last_state != models.QueryHistory.STATE.expired.index:
+                % if qcontext and query.last_state != models.QueryHistory.STATE.expired.value:
                   data-view-url="${ url(app_name + ':watch_query_history', query_history_id=query.id) }?context=${qcontext|u}"
                 % endif
                 data-row-selector-exclude="true"></div>
@@ -149,12 +149,12 @@ ${layout.menubar(section='my queries')}
               <code>${ collapse_whitespace(query.query) }</code>
               % endif
             </td>
-            <td width="9%">${models.QueryHistory.STATE[query.last_state]}</td>
+            <td width="9%">${query.last_state}</td>
           </tr>
         % endfor
         </tbody>
       </table>
-      % if h_page.number != h_page.num_pages():
+      % if h_page.number != h_paginator.num_pages:
         <a href="${ url(app_name + ':list_query_history') }">${_('View my entire query history')} &raquo;</a>
       % endif
     </div>

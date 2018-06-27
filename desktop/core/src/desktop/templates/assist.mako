@@ -758,12 +758,12 @@ from desktop.views import _ko
     </label>
     <label class="radio">
       <input type="radio" name="refreshImpala" value="invalidate" data-bind="checked: invalidateOnRefresh" />
-      ${ _('Perform incremental metadata update') }
+      ${ _('Perform incremental metadata update.') }
     </label>
-    <div class="assist-invalidate-description">${ _('This will sync missing tables in Hive.') }</div>
+    <div class="assist-invalidate-description">${ _('This will sync missing tables.') }</div>
     <label class="radio">
       <input type="radio" name="refreshImpala" value="invalidateAndFlush" data-bind="checked: invalidateOnRefresh"  />
-      ${ _('Invalidate all metadata and rebuild index') }
+      ${ _('Invalidate all metadata and rebuild index.') }
     </label>
     <div class="assist-invalidate-description">${ _('WARNING: This can be both resource and time-intensive.') }</div>
     <div style="width: 100%; display: inline-block; margin-top: 5px;"><button class="pull-right btn btn-primary" data-bind="css: { 'btn-primary': invalidateOnRefresh() !== 'invalidateAndFlush', 'btn-danger': invalidateOnRefresh() === 'invalidateAndFlush' }, click: function (data, event) { huePubSub.publish('close.popover'); triggerRefresh(data, event); }, clickBubble: false">${ _('Refresh') }</button></div>
@@ -773,7 +773,7 @@ from desktop.views import _ko
     <div class="assist-db-header-actions">
       <!-- ko ifnot: loading -->
       <span class="assist-tables-counter">(<span data-bind="text: filteredEntries().length"></span>)</span>
-      % if hasattr(ENABLE_NEW_CREATE_TABLE, 'get') and ENABLE_NEW_CREATE_TABLE.get():
+      % if hasattr(ENABLE_NEW_CREATE_TABLE, 'get') and ENABLE_NEW_CREATE_TABLE.get() and not IS_EMBEDDED.get():
         <!-- ko if: sourceType === 'hive' || sourceType === 'impala' -->
         <!-- ko if: typeof databaseName !== 'undefined' -->
           <a class="inactive-action" data-bind="hueLink: '${ url('indexer:importer_prefill', source_type='all', target_type='table') }' + databaseName + '/?sourceType=' + sourceType" title="${_('Create table')}" href="javascript:void(0)">
@@ -808,11 +808,11 @@ from desktop.views import _ko
   <script type="text/html" id="assist-databases-template">
     <div class="assist-flex-header" data-bind="visibleOnHover: { selector: '.hover-actions', override: loading() }">
       <div class="assist-inner-header">
-        <!-- ko ifnot: sourceType === 'solr' -->
+        <!-- ko ifnot: sourceType === 'solr' || sourceType === 'kafka' -->
         ${_('Databases')}
         <!-- ko template: 'assist-db-header-actions' --><!-- /ko -->
         <!-- /ko -->
-        <!-- ko if: sourceType === 'solr' -->
+        <!-- ko if: sourceType === 'solr' || sourceType === 'kafka'-->
         ${_('Sources')}
         <!-- /ko -->
       </div>
@@ -854,11 +854,14 @@ from desktop.views import _ko
   <script type="text/html" id="assist-tables-template">
     <div class="assist-flex-header">
       <div class="assist-inner-header" data-bind="visible: !$parent.loading() && !$parent.hasErrors()">
-        <!-- ko ifnot: sourceType === 'solr' -->
-        ${_('Tables')}
+        <!-- ko ifnot: sourceType === 'solr' || sourceType === 'kafka' -->
+          ${_('Tables')}
         <!-- /ko -->
         <!-- ko if: sourceType === 'solr' -->
-        <div data-bind="appAwareTemplateContextMenu: { template: 'collection-title-context-items', scrollContainer: '.assist-db-scrollable' }">${_('Indexes')}</div>
+          <div data-bind="appAwareTemplateContextMenu: { template: 'collection-title-context-items', scrollContainer: '.assist-db-scrollable' }">${_('Indexes')}</div>
+        <!-- /ko -->
+        <!-- ko if: sourceType === 'kafka' -->
+          ${_('Topics')}
         <!-- /ko -->
         <!-- ko template: 'assist-db-header-actions' --><!-- /ko -->
       </div>
@@ -870,7 +873,7 @@ from desktop.views import _ko
           params: {
             querySpec: filter.querySpec,
             facets: ['type'],
-            knownFacetValues: sourceType === 'solr' ? SOLR_ASSIST_KNOWN_FACET_VALUES : SQL_ASSIST_KNOWN_FACET_VALUES,
+            knownFacetValues: knownFacetValues.bind($data),
             autocompleteFromEntries: autocompleteFromEntries
           }
         } --><!-- /ko -->
@@ -1084,6 +1087,11 @@ from desktop.views import _ko
               type: 'solr',
               name: 'solr'
             }];
+          } else if (options.isKafka) {
+            options.sourceTypes = [{
+              type: 'kafka',
+              name: 'kafka'
+            }];
           } else {
             % for interpreter in get_ordered_interpreters(request.user):
               % if interpreter["is_sql"]:
@@ -1111,7 +1119,7 @@ from desktop.views import _ko
 
         huePubSub.subscribe('assist.collections.refresh', function() {
           DataCatalog.getEntry({ sourceType: 'solr', path: [] }).done(function (entry) {
-            entry.clear('cache', true);
+            entry.clearCache({ cascade: true });
           });
         });
 
@@ -1898,6 +1906,22 @@ from desktop.views import _ko
                 });
               }
 
+              if (appConfig['browser'] && appConfig['browser']['interpreter_names'].indexOf('kafka') != -1) {
+                var kafkaPanel = new AssistInnerPanel({
+                  panelData: new AssistDbPanel($.extend({
+                    apiHelper: self.apiHelper,
+                    i18n: i18nCollections,
+                    isKafka: true
+                  }, params.sql)),
+                  apiHelper: self.apiHelper,
+                  name: '${ _("Streams") }',
+                  type: 'solr',
+                  icon: 'fa-sitemap',
+                  minHeight: 75
+                });
+                panels.push(kafkaPanel);
+              }
+
               if (appConfig['browser'] && appConfig['browser']['interpreter_names'].indexOf('hbase') != -1) {
                 panels.push(new AssistInnerPanel({
                   panelData: new AssistHBasePanel({
@@ -2213,7 +2237,7 @@ from desktop.views import _ko
             <!-- ko if: isSolr -->
             ${ _('Indexes') }
             <!-- /ko -->
-            <!-- ko ifnot: isSolr  -->
+            <!-- ko ifnot: isSolr -->
             ${ _('Tables') }
             <!-- ko if: statementCount() > 1 -->
             <div class="statement-count">${ _('Statement') } <span data-bind="text: activeStatementIndex() + '/' + statementCount()"></span></div>
@@ -2254,7 +2278,11 @@ from desktop.views import _ko
             <li class="assist-table hue-warning" data-bind="attr: { 'title': $parent.isSolr() ? '${ _ko('Error loading index details.') }' : '${ _ko('Error loading table details.') }'}">
               <span class="assist-entry">
                 <i class="hue-warning fa fa-fw muted valign-middle fa-warning"></i>
-                <span data-bind="text: catalogEntry.getDisplayName()"></span>
+                <!-- ko with: catalogEntry -->
+                <!-- ko if: typeof reload !== 'undefined' -->
+                <span data-bind="text: getDisplayName()"></span> <a class="inactive-action" href="javascript: void(0);" data-bind="click: reload"><i class="fa fa-refresh" data-bind="css: { 'fa-spin': reloading }"></i></a>
+                <!-- /ko -->
+                <!-- /ko -->
               </span>
             </li>
             <!-- /ko -->
@@ -2587,7 +2615,43 @@ from desktop.views import _ko
                             getType: function () { return 'table' },
                             hasPossibleChildren: function () { return true; },
                             getSourceMeta: function () { return $.Deferred().resolve({ notFound: true }).promise() },
-                            getDisplayName: function () { return dbEntry.catalogEntry.name + '.' + tableName }
+                            getDisplayName: function () { return dbEntry.catalogEntry.name + '.' + tableName },
+                            reloading: ko.observable(false),
+                            reload: function () {
+                              var self = this;
+                              if (self.reloading()) {
+                                return;
+                              }
+                              self.reloading(true);
+                              huePubSub.subscribeOnce('data.catalog.entry.refreshed', function (data) {
+                                data.entry.getSourceMeta({ silenceErrors: true }).always(function () {
+                                  self.reloading(false)
+                                })
+                              });
+                              DataCatalog.getEntry({ sourceType: activeLocations.type, path: []}).done(function (sourceEntry) {
+                                sourceEntry.getChildren().done(function (dbEntries) {
+                                  var clearPromise;
+                                   // Clear the database first if it exists without cascade
+                                  var hasDb = dbEntries.some(function (dbEntry) {
+                                    if (dbEntry.name.toLowerCase() === self.path[0].toLowerCase()) {
+                                      clearPromise = dbEntry.clearCache({ invalidate: 'invalidate', cascade: false });
+                                      return true;
+                                    }
+                                  });
+                                  if (!hasDb) {
+                                    // If the database is missing clear the source without cascade
+                                    clearPromise = sourceEntry.clearCache({ invalidate: 'invalidate', cascade: false });
+                                  }
+                                  clearPromise.fail(function () {
+                                    self.reloading(false);
+                                  });
+                                }).fail(function () {
+                                  self.reloading(false);
+                                })
+                              }).fail(function () {
+                                self.reloading(false);
+                              });
+                            }
                           },
                           dbEntry,
                           assistDbSource,

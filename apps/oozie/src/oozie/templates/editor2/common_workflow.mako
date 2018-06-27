@@ -42,17 +42,16 @@
 </script>
 
 <div data-bind="css: {'dashboard': true, 'readonly': ! isEditing()}">
-  <!-- ko if: $root.workflow.properties.imported -->
-    <div class="alert alert-warn" style="margin-top: 93px; margin-bottom: 0; border: none; text-align: center">
-      ${ _('This workflow was imported from an old Hue version, save it to create a copy in the new format or') }
-      <a data-bind="attr: { href: '/oozie/edit_workflow/' + $root.workflow.properties.wf1_id() }">${ _('open it in the old editor.') }</a>
-    </div>
-  <!-- /ko -->
+  % if layout_json != '':
   <div class="container-fluid">
     <div class="row-fluid" data-bind="template: { name: 'column-template', foreach: oozieColumns}">
     </div>
     <div class="clearfix"></div>
   </div>
+  %endif
+  % if layout_json == '':
+   <div class="container-fluid" id="workflow_graph"/>
+  %endif
 </div>
 
 
@@ -386,7 +385,7 @@
 <script type="text/html" id="start-widget">
   <!-- ko if: $root.workflow.getNodeById(id()) -->
   <div class="row-fluid" data-bind="with: $root.workflow.getNodeById(id())" style="min-height: 40px;">
-    <div class="big-icon" title="${ _('It is where we start!') }"><i class="fa fa-dot-circle-o"></i></div>
+    <div class="big-icon" title="${ _('It is where we start!') }"><i class="fa fa-flag-checkered"></i></div>
   </div>
   <!-- /ko -->
 </script>
@@ -395,7 +394,7 @@
 <script type="text/html" id="end-widget">
   <!-- ko if: $root.workflow.getNodeById(id()) -->
   <div class="row-fluid" data-bind="with: $root.workflow.getNodeById(id())" style="min-height: 40px">
-    <div class="big-icon" title="${ _('It is where we successfully finish!') }"><i class="fa fa-flag-checkered"></i></div>
+    <div class="big-icon" title="${ _('It is where we successfully finish!') }"><i class="fa fa-dot-circle-o"></i></div>
   </div>
   <!-- /ko -->
 </script>

@@ -28,7 +28,7 @@ from lxml import html
 from django.http import HttpResponseRedirect
 from django.utils.functional import wraps
 from django.utils.translation import ugettext as _
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from desktop.log.access import access_log_level
 from desktop.lib.rest.http_client import RestException
@@ -201,7 +201,7 @@ def massage_job_for_json(job, request=None, user=None):
     'durationFormatted': hasattr(job, 'durationFormatted') and job.durationFormatted or '',
     'durationMs': hasattr(job, 'durationInMillis') and job.durationInMillis or 0,
     'canKill': can_kill_job(job, request.user if request else user),
-    'killUrl': job.jobId and reverse('jobbrowser.views.kill_job', kwargs={'job': job.jobId}) or '',
+    'killUrl': job.jobId and reverse('kill_job', kwargs={'job': job.jobId}) or '',
     'diagnostics': hasattr(job, 'diagnostics') and job.diagnostics or '',
   }
   return job
@@ -212,14 +212,14 @@ def massage_task_for_json(task):
     'id': task.taskId,
     'shortId': task.taskId_short,
     'url': task.taskId and reverse('jobbrowser.views.single_task', kwargs={'job': task.jobId, 'taskid': task.taskId}) or '',
-    'logs': task.taskAttemptIds and reverse('jobbrowser.views.single_task_attempt_logs', kwargs={'job': task.jobId, 'taskid': task.taskId, 'attemptid': task.taskAttemptIds[-1]}) or '',
+    'logs': task.taskAttemptIds and reverse('single_task_attempt_logs', kwargs={'job': task.jobId, 'taskid': task.taskId, 'attemptid': task.taskAttemptIds[-1]}) or '',
     'type': task.taskType
   }
   return task
 
 
 def single_spark_job(request, job):
-  if request.REQUEST.get('format') == 'json':
+  if request.GET.get('format') == 'json':
     json_job = {
       'job': massage_job_for_json(job, request)
     }
@@ -243,7 +243,7 @@ def single_job(request, job):
   recent_tasks = job.filter_tasks(task_states=('running', 'succeeded',))
   recent_tasks.sort(cmp_exec_time, reverse=True)
 
-  if request.REQUEST.get('format') == 'json':
+  if request.GET.get('format') == 'json':
     json_failed_tasks = [massage_task_for_json(task) for task in failed_tasks]
     json_recent_tasks = [massage_task_for_json(task) for task in recent_tasks]
     json_job = {
@@ -291,9 +291,9 @@ def kill_job(request, job):
       LOG.warn('Failed to get job with ID %s: %s' % (job.jobId, e))
     else:
       if job.status not in ["RUNNING", "QUEUED"]:
-        if request.REQUEST.get("next"):
-          return HttpResponseRedirect(request.REQUEST.get("next"))
-        elif request.REQUEST.get("format") == "json":
+        if request.GET.get("next"):
+          return HttpResponseRedirect(request.GET.get("next"))
+        elif request.GET.get("format") == "json":
           return JsonResponse({'status': 0}, encoder=JSONEncoderForHTML)
         else:
           raise MessageException("Job Killed")

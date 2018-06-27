@@ -36,7 +36,7 @@ from django.contrib.auth.models import User
 from django.core import exceptions, urlresolvers
 import django.db
 from django.http import HttpResponseNotAllowed, HttpResponseForbidden
-from django.core.urlresolvers import resolve
+from django.urls import resolve
 from django.http import HttpResponseRedirect, HttpResponse
 from django.utils.translation import ugettext as _
 from django.utils.http import urlquote, is_safe_url
@@ -77,7 +77,7 @@ class AjaxMiddleware(object):
   GET parameters.
   """
   def process_request(self, request):
-    request.ajax = request.is_ajax() or request.REQUEST.get("format", "") == "json"
+    request.ajax = request.is_ajax() or request.GET.get("format", "") == "json"
     return None
 
 
@@ -120,7 +120,7 @@ class ClusterMiddleware(object):
     Sets request.fs and request.jt on every request to point to the
     configured filesystem.
     """
-    request.fs_ref = request.REQUEST.get('fs', view_kwargs.get('fs', 'default'))
+    request.fs_ref = request.GET.get('fs', view_kwargs.get('fs', 'default'))
     if "fs" in view_kwargs:
       del view_kwargs["fs"]
 
@@ -274,6 +274,10 @@ class LoginAndPermissionMiddleware(object):
     request.ts = time.time()
     request.view_func = view_func
     access_log_level = getattr(view_func, 'access_log_level', None)
+    # skip loop for oidc
+    if request.path in ['/oidc/authenticate/', '/oidc/callback/', '/oidc/logout/', '/hue/oidc_failed/']:
+      return None
+
     # First, skip views not requiring login
 
     # If the view has "opted out" of login required, skip
@@ -310,7 +314,8 @@ class LoginAndPermissionMiddleware(object):
       if app_accessed and \
           app_accessed not in ("desktop", "home", "home2", "about", "hue", "editor", "notebook", "indexer", "404", "500", "403") and \
           not (request.user.has_hue_permission(action="access", app=app_accessed) or
-               request.user.has_hue_permission(action=access_view, app=app_accessed)):
+               request.user.has_hue_permission(action=access_view, app=app_accessed)) and \
+          not (app_accessed == '__debug__' and desktop.conf.DJANGO_DEBUG_MODE):
         access_log(request, 'permission denied', level=access_log_level)
         return PopupException(
             _("You do not have permission to access the %(app_name)s application.") % {'app_name': app_accessed.capitalize()}, error_code=401).response(request)
@@ -656,6 +661,9 @@ class EnsureSafeRedirectURLMiddleware(object):
         return response
 
       if is_safe_url(location, request.get_host()):
+        return response
+
+      if request.path in ['/oidc/authenticate/', '/oidc/callback/', '/oidc/logout/', '/hue/oidc_failed/']:
         return response
 
       response = render("error.mako", request, {

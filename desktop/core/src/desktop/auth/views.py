@@ -36,6 +36,7 @@ from django.http import HttpResponseRedirect
 from django.utils.translation import ugettext as _
 
 from desktop.auth import forms as auth_forms
+from desktop.auth.backend import OIDCBackend
 from desktop.auth.forms import ImpersonationAuthenticationForm
 from desktop.lib.django_util import render
 from desktop.lib.django_util import login_notrequired
@@ -47,7 +48,6 @@ from desktop.settings import LOAD_BALANCER_COOKIE
 from hadoop.fs.exceptions import WebHdfsException
 from useradmin.models import get_profile
 from useradmin.views import ensure_home_directory, require_change_password
-
 
 LOG = logging.getLogger(__name__)
 
@@ -88,12 +88,12 @@ def dt_login_old(request, from_modal=False):
 @login_notrequired
 @watch_login
 def dt_login(request, from_modal=False):
-  redirect_to = request.REQUEST.get('next', '/')
+  redirect_to = request.GET.get('next', '/')
   is_first_login_ever = first_login_ever()
   backend_names = auth_forms.get_backend_names()
   is_active_directory = auth_forms.is_active_directory()
-  is_ldap_option_selected = 'server' not in request.POST or request.POST['server'] == 'LDAP' \
-                            or request.POST['server'] in auth_forms.get_ldap_server_keys()
+  is_ldap_option_selected = 'server' not in request.POST or request.POST.get('server') == 'LDAP' \
+                            or request.POST.get('server') in auth_forms.get_ldap_server_keys()
 
   if is_active_directory and is_ldap_option_selected:
     UserCreationForm = auth_forms.LdapUserCreationForm
@@ -142,8 +142,8 @@ def dt_login(request, from_modal=False):
 
         msg = 'Successful login for user: %s' % user.username
         request.audit['operationText'] = msg
-        access_log(request, msg)
-        if from_modal or request.REQUEST.get('fromModal', 'false') == 'true':
+        access_warn(request, msg)
+        if from_modal or request.GET.get('fromModal', 'false') == 'true':
           return JsonResponse({'auth': True})
         else:
           return HttpResponseRedirect(redirect_to)
@@ -152,7 +152,7 @@ def dt_login(request, from_modal=False):
         msg = 'Failed login for user: %s' % request.POST.get('username')
         request.audit['operationText'] = msg
         access_warn(request, msg)
-        if from_modal or request.REQUEST.get('fromModal', 'false') == 'true':
+        if from_modal or request.GET.get('fromModal', 'false') == 'true':
           return JsonResponse({'auth': False})
 
   else:
@@ -173,7 +173,7 @@ def dt_login(request, from_modal=False):
     renderable_path = 'login_modal.mako'
 
   response = render(renderable_path, request, {
-    'action': urlresolvers.reverse('desktop.auth.views.dt_login'),
+    'action': urlresolvers.reverse('desktop_auth_views_dt_login'),
     'form': first_user_form or auth_form,
     'next': redirect_to,
     'first_login_ever': is_first_login_ever,
@@ -268,6 +268,13 @@ def oauth_authenticated(request):
   user = authenticate(access_token=access_token)
   login(request, user)
 
-  redirect_to = request.REQUEST.get('next', '/')
+  redirect_to = request.GET.get('next', '/')
   return HttpResponseRedirect(redirect_to)
+
+@login_notrequired
+def oidc_failed(request):
+  if request.user.is_authenticated():
+    return HttpResponseRedirect('/')
+  access_warn(request, "401 Unauthorized by oidc")
+  return render("oidc_failed.mako", request, dict(uri=request.build_absolute_uri()), status=401)
 

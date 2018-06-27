@@ -46,12 +46,25 @@ nv.models.lineWithBrushChart = function() {
     , rightAlignYAxis = false
     , useInteractiveGuideline = false
     , tooltips = true
-    , tooltip = function(key, x, y, e, graph) {
-        return '<h3>' + key + '</h3>' +
-               '<p>' +  y + ' at ' + x + '</p>'
-      }
+    , tooltip = null
+    , displayValuesInLegend = false
+    , tooltipSimple = function(value) {
+      return '<h3>' + hueUtils.htmlEncode(value.key) + '</h3>' +
+        '<p>' + hueUtils.htmlEncode(value.x) + '</p>';
+    }
+    , tooltipSingle = function(value) {
+      return '<h3>' + hueUtils.htmlEncode(value.key) + '</h3>' +
+        '<p>' + hueUtils.htmlEncode(value.y) + ' on ' + hueUtils.htmlEncode(value.x) + '</p>';
+    }
+    , tooltipMultiple = function (values) {
+      return '<h3>' + hueUtils.htmlEncode(values[0] && values[0].x) + '</h3>' + values.map(function (value) {
+          return '<p><span class="circle" style="background-color:'+value.color+'"></span><b>' + hueUtils.htmlEncode(value.key) + '</b> ' +  hueUtils.htmlEncode(value.y) + '</p>';
+        }).join("");
+    }
     , x
     , y
+    , getX = function(d) { return d.x } // accessor to get the x value
+    , getY = function(d) { return d.y } // accessor to get the y value
     , state = {}
     , defaultState = null
     , noData = 'No Data Available.'
@@ -65,6 +78,7 @@ nv.models.lineWithBrushChart = function() {
     , selectionHidden = false
     , onSelectRange = null
     , onStateChange = null
+    , onLegendChange = null
     , onChartUpdate = null
     ;
 
@@ -86,11 +100,25 @@ nv.models.lineWithBrushChart = function() {
   //------------------------------------------------------------
 
   var showTooltip = function(e, offsetElement) {
+    var values;
+    if (!tooltip) {
+      values = (e.list || [e]).map(function (e) {
+        var x = xAxis.tickFormat()(lines.x()(e.point, e.pointIndex)),
+        y = yAxis.tickFormat()(lines.y()(e.point, e.pointIndex));
+        return {x: x, y: y, key: displayValuesInLegend && (e.point.obj.field || e.point.obj.fq_fields && e.point.obj.fq_fields[0]) || e.series.key, color: e.series.color || color(e.series, e.point.series)};
+      });
+    } else {
+      values = tooltip((e.list || [e]).map(function (e) {
+        var x = lines.x()(e.point, e.pointIndex),
+        y = lines.y()(e.point, e.pointIndex);
+        return {x: x, y: y, key: displayValuesInLegend && (e.point.obj.field || e.point.obj.fq_fields && e.point.obj.fq_fields[0]) || e.series.key, color: e.series.color || color(e.series, e.point.series)};
+      }));
+    }
+
+
     var left = e.pos[0] + ( offsetElement.offsetLeft || 0 ),
         top = e.pos[1] + ( offsetElement.offsetTop || 0),
-        x = xAxis.tickFormat()(lines.x()(e.point, e.pointIndex)),
-        y = yAxis.tickFormat()(lines.y()(e.point, e.pointIndex)),
-        content = tooltip(e.series.key, x, y, e, chart);
+        content = displayValuesInLegend ? tooltipSimple(values[0]) : tooltipMultiple(values);
 
     nv.tooltip.show([left, top], content, null, null, offsetElement);
   };
@@ -105,13 +133,14 @@ nv.models.lineWithBrushChart = function() {
 
       var availableWidth = (width  || parseInt(container.style('width')) || 960)
                              - margin.left - margin.right,
-          availableChartWidth = Math.max(availableWidth - legendWidth, 0),
+          availableChartWidth = Math.max(availableWidth - showLegend * legendWidth, 0),
           availableHeight = (height || parseInt(container.style('height')) || 400)
                              - margin.top - margin.bottom;
 
 
       chart.update = function() {
-        container.transition().duration(transitionDuration).each("end", onChartUpdate).call(chart)
+        container.transition().duration(transitionDuration).each("end", onChartUpdate).call(chart);
+        filteredData = data.filter(function(series) { return !series.disabled; });
         if (selectionEnabled){
           enableBrush();
         }
@@ -150,7 +179,7 @@ nv.models.lineWithBrushChart = function() {
         noDataText
           .attr('x', margin.left + availableWidth / 2)
           .attr('y', margin.top + availableHeight / 2)
-          .text(function(d) { return d });
+          .text(function(d) { return d; });
 
         return chart;
       } else {
@@ -195,7 +224,7 @@ nv.models.lineWithBrushChart = function() {
       // Legend
 
       if (showLegend) {
-        legend.width(legendWidth);
+        legend.width(legendWidth / 2);
         legend.height(availableHeight);
         legend.rightAlign(false);
         legend.margin({top: 5, right: 0, left: 10, bottom: 0});
@@ -205,10 +234,34 @@ nv.models.lineWithBrushChart = function() {
             .datum(data)
             .call(legend)
           .selectAll('text')
+          .text(function (d) {
+            if (displayValuesInLegend) {
+              var addEllipsis = d.key && d.key.length > 12;
+              return d.key && d.key.substring(0, 12) + (addEllipsis ? '...' : '');
+            } else {
+              return d.key;
+            }
+          })
           .append('title')
           .text(function(d){
             return d.key;
           });
+          if (displayValuesInLegend) {
+            legendG.selectAll('g.nv-series')
+            .append('text')
+            .classed('nv-series-value', true)
+            .text(function (d, i) {
+              return '';
+            })
+            .attr('dx', 125)
+            .attr('dy', '.32em')
+            .attr('text-anchor', 'end')
+            .append('title')
+            .classed('nv-series-value', true)
+            .text(function (d, i) {
+              return '';
+            });
+          }
         }
         catch (e){}
       }
@@ -252,17 +305,17 @@ nv.models.lineWithBrushChart = function() {
         wrap.select(".nv-interactive").call(interactiveLayer);
       }
 
-
+      var filteredData = data.filter(function(series) { return !series.disabled; });
       lines
         .width(availableChartWidth)
         .height(availableHeight)
         .color(data.map(function(d,i) {
           return d.color || color(d, i);
-        }).filter(function(d,i) { return !data[i].disabled }));
+        }).filter(function(d,i) { return !data[i].disabled; }));
 
 
       var linesWrap = g.select('.nv-linesWrap')
-          .datum(data.filter(function(d) { return !d.disabled }))
+          .datum(data.filter(function(d) { return !d.disabled; }));
 
       linesWrap.transition().call(lines);
 
@@ -270,23 +323,50 @@ nv.models.lineWithBrushChart = function() {
 
       //------------------------------------------------------------
       // Setup Brush
+      var overlay;
       if (selectionEnabled){
         enableBrush();
+        overlay = g.select('rect');
+        overlay.style('display', 'none');
+      } else {
+        disableBrush();
+        overlay = g.select('rect');
+        overlay
+        .style('display', 'inherit')
+        .attr('height', availableHeight)
+        .attr('width', availableWidth)
+        .on('mousemove', onMouseMove)
+        .on('mouseout', onMouseOut)
+        .on('click', onClick);
       }
 
 
       function enableBrush() {
+        if (!g) { // Can happen if the state change before the charts has been created.
+          return;
+        }
+        brush
+          .x(x)
+          .on('brush', onBrush)
+          .on('brushend', onBrushEnd);
+        if (chart.brushDomain) {
+          var brushExtent = [fGetNumericValue(chart.brushDomain[0]), fGetNumericValue(chart.brushDomain[1])];
+          var isWholeDomain =  xAxis.scale()(chart.brushDomain[0]) < 10 && xAxis.scale()(chart.brushDomain[1]) >= xAxis.range()[1];
+          if (!isWholeDomain) { // If brush is the whole domain, don't display brush
+            brush.extent(brushExtent);
+          } else {
+            brush.clear();
+          }
+        } else {
+          brush.clear();
+        }
+        var gBrush;
         if (g.selectAll('.nv-brush')[0].length == 0) {
-          gEnter.append('g').attr('class', 'nv-brushBackground');
-          gEnter.append('g').attr('class', 'nv-x nv-brush');
-          brush
-              .x(x)
-              .on('brush', onBrush)
-              .on('brushend', onBrushEnd)
+          g.append('g').attr('class', 'nv-brushBackground');
+          g.append('g').attr('class', 'nv-x nv-brush');
 
-          if (brushExtent) brush.extent(brushExtent);
           var brushBG = g.select('.nv-brushBackground').selectAll('g')
-              .data([brushExtent || brush.extent()])
+              .data([chart.brushExtent || brush.extent()])
           var brushBGenter = brushBG.enter()
               .append('g');
 
@@ -302,14 +382,16 @@ nv.models.lineWithBrushChart = function() {
               .attr('y', 0)
               .attr('height', availableHeight);
 
-          var gBrush = g.select('.nv-x.nv-brush')
-              .call(brush);
-          gBrush.selectAll('rect')
-              .attr('height', availableHeight);
+          gBrush = g.select('.nv-x.nv-brush').call(brush);
         }
         else {
           g.selectAll('.nv-brush').attr('display', 'inline');
+          gBrush = g.select('.nv-x.nv-brush').call(brush);
         }
+        gBrush.selectAll('rect')
+          .attr('height', availableHeight)
+          .on('mousemove', onMouseMove)
+          .on('mouseout', onMouseOut);
       }
 
       function disableBrush() {
@@ -353,6 +435,9 @@ nv.models.lineWithBrushChart = function() {
       legend.dispatch.on('stateChange', function(newState) {
           state = newState;
           dispatch.stateChange(state);
+          if (onLegendChange) {
+            onLegendChange(state);
+          }
           chart.update();
       });
 
@@ -400,7 +485,7 @@ nv.models.lineWithBrushChart = function() {
             var yValue = chart.yScale().invert(e.mouseY);
             var domainExtent = Math.abs(chart.yScale().domain()[0] - chart.yScale().domain()[1]);
             var threshold = 0.03 * domainExtent;
-            var indexToHighlight = nv.nearestValueIndex(allData.map(function(d){return d.value}),yValue,threshold);
+            var indexToHighlight = nv.nearestValueIndex(allData.map(function(d){return d.value;}),yValue,threshold);
             if (indexToHighlight !== null)
               allData[indexToHighlight].highlight = true;
           }
@@ -450,21 +535,216 @@ nv.models.lineWithBrushChart = function() {
       //============================================================
 
       function onBrush(){
-        brushExtent = brush.empty() ? null : brush.extent();
+        chart.brushExtent = brush.empty() ? null : brush.extent();
         extent = brush.empty() ? x.domain() : brush.extent();
 
         dispatch.brush({extent: extent, brush: brush});
       }
+      function fGetNumericValue (o) {
+        return o instanceof Date ? o.getTime() : o;
+      }
 
       function onBrushEnd(){
-        brushExtent = brush.empty() ? null : brush.extent();
-        extent = brush.empty() ? x.domain() : brush.extent();
+        var closest = function () {
+          if (!data[0].values.length) {
+            return [];
+          }
+          var xDate = x.invert(d3v3.mouse(this)[0]);
 
-        if (onSelectRange != null){
-          onSelectRange(parseInt(extent[0]), parseInt(extent[1])); // Only int values currently
+          var distances = {};
+          var min = Number.MAX_VALUE;
+          var next = -Number.MAX_VALUE;
+          var diff;
+          var i, j;
+          for (j = 0; j < data.length; j++) {
+            for (i = 0; i < data[j].values.length; i++) {
+              diff = xDate - fGetNumericValue(data[j].values[i].x);
+              if (diff >= 0 && diff < min) {
+                min = diff;
+              } else if (diff < 0 && diff > next) {
+                next = diff;
+              }
+              if (!distances[diff]) {
+                distances[diff] = [];
+              }
+              distances[diff].push(data[j].values[i]);
+            }
+          }
+          if (distances[min][0].x_end) {
+            return [distances[min][0].x, distances[min][0].x_end];
+          } else if (distances[min] !== undefined && distances[next] !== undefined) {
+            var _from = distances[min][0].x < distances[next][0].x ? distances[min][0].x : distances[next][0].x;
+            var _to = distances[min][0].x < distances[next][0].x ? distances[next][0].x : distances[min][0].x;
+            return [_from, _to];
+          } else {
+            return [];
+          }
+        };
+
+        chart.brushExtent = extent = brush.empty() ? closest.call(this) : brush.extent();
+
+        if (onSelectRange) {
+          onSelectRange(fGetNumericValue(extent[0]), fGetNumericValue(extent[1]));
         }
       }
 
+      function getElByMouse () {
+        var xy = d3v3.mouse(this);
+        var px = x.invert(xy[0]);
+        if (!filteredData.length || !filteredData[0].values.length) {
+          return null;
+        }
+        var minx = Math.abs(filteredData[0].values[0].x - px);
+        var distances = {};
+        var py = y.invert(xy[1]);
+        var i, j, diff;
+        // Find closest on x axis
+        for (j = 0; j < filteredData.length; j++) {
+          for (i = 0; i < filteredData[j].values.length; i++) {
+            diff = Math.abs(fGetNumericValue(filteredData[j].values[i].x) - px);
+            if (!distances[diff]) {
+              distances[diff] = [];
+            }
+            filteredData[j].values[i].seriesKey = filteredData[j].key;
+            distances[diff].push(filteredData[j].values[i]);
+            if (diff < minx) {
+              minx = diff;
+            }
+          }
+        }
+        // Find series with y axis
+        var miny = Number.MAX_VALUE;
+        var distancesy = {};
+        for (i = 0; i < distances[minx].length; i++) {
+          diff = Math.abs(distances[minx][i].y - py);
+          if (!distancesy[diff]) {
+            distancesy[diff] = [];
+          }
+          distancesy[diff].push(distances[minx][i]);
+          if (diff < miny) {
+            miny = diff;
+          }
+        };
+
+        return distancesy[miny];
+      }
+      function onMouseMove () {
+        var el = getElByMouse.call(this);
+        // If we're mousing over a circle that doesn't have class hover, set class and dispatch mouseover
+        var target = container.selectAll('g.nv-wrap.nv-lineChart circle:not(.hover)').filter(function(rect) {
+          return el && el.some(function(d) {
+            return fGetNumericValue(getX(rect)) === fGetNumericValue(getX(d)) && d.series === rect.series;
+          });
+        });
+
+        if (el && el.length && displayValuesInLegend) {
+          var legendG = legendSvg.select('.nvd3.nv-wrap.nv-legendWrap');
+          var elBySerie = el.reduce(function (elBySerie, el) {
+            elBySerie[el.seriesKey] = el;
+            return elBySerie;
+          }, {});
+          legendG.selectAll('g.nv-series text.nv-series-value')
+          .text(function (d, i) {
+            if (elBySerie[d.key]) {
+              var value = yAxis.tickFormat()(d.values[elBySerie[d.key].index].y)+'';
+              var addEllipsis = value.length > 5;
+              return value && (addEllipsis ? '...' : '') + value.substring(value.length - 5);
+            } else {
+              return '';
+            }
+          })
+          .append('title')
+          .text(function (d, i) {
+            if (elBySerie[d.key]) {
+              return yAxis.tickFormat()(d.values[elBySerie[d.key].index].y);
+            } else {
+              return '';
+            }
+          });
+        }
+        // If there's rectangle with the hover class that are not the target, remove the class and dispatch mouseout
+        var others = container.selectAll('g.nv-wrap.nv-lineChart circle.hover').filter(function(rect) {
+          return !el || !el.some(function(d) {
+            return fGetNumericValue(getX(rect)) === fGetNumericValue(getX(d)) && d.series === rect.series;
+          });
+        });
+        if (others.size()) {
+          others.classed('hover', false)
+          .each(function (d, i) {
+            lines.dispatch.elementMouseout({
+              value: getY(d),
+              point: d,
+              series: filteredData[d.series],
+              pointIndex: i,
+              seriesIndex: d.series,
+              e: d3v3.event
+            });
+          });
+        }
+        if (target.size()) {
+          var e = d3v3.event; // Keep reference to event for setTimeout
+          setTimeout(function(){ // Delayed to conteract conflict with elementMouseout.
+            target.classed('hover', true);
+            var max, maxi;
+            target.each(function (d, i) {
+              if (isNaN(max) || max < getY(d)) {
+                max = getY(d);
+                maxi = i;
+              }
+            });
+            d3v3.select(target[0][maxi])
+            .each(function(d, i){
+              lines.dispatch.elementMouseover({
+                value: getY(d),
+                point: d,
+                series: data[d.series],
+                pos: [x(getX(d)), y(getY(d))],
+                pointIndex: -1,
+                seriesIndex: d.series,
+                list: el.map(function (d) {
+                  return {
+                    value: getY(d),
+                    point: d,
+                    series: data[d.series],
+                    pos: [x(getX(d)), y(getY(d))],
+                    pointIndex: -1,
+                    seriesIndex: d.series,
+                  };
+                }),
+                e: e,
+              });
+            });
+          });
+        }
+      }
+      function onMouseOut () {
+        var others = container.selectAll('g.nv-wrap.nv-lineChart circle.hover');
+        if (others.size()) {
+           others.classed('hover', false)
+          .each(function (d) {
+            lines.dispatch.elementMouseout({
+              value: getY(d),
+              point: d,
+              series: data[d.series],
+              pointIndex: d.index,
+              seriesIndex: d.series,
+              e: d3v3.event
+            });
+          });
+        }
+      }
+      function onClick () {
+        var el = getElByMouse.call(this);
+        var d = el[0];
+        lines.dispatch.elementClick({
+          value: getY(d),
+          point: d,
+          series: data[d.series],
+          pointIndex: d.index,
+          seriesIndex: d.series,
+          e: d3v3.event
+        });
+      }
     });
 
     return chart;
@@ -501,6 +781,7 @@ nv.models.lineWithBrushChart = function() {
   chart.legend = legend;
   chart.xAxis = xAxis;
   chart.yAxis = yAxis;
+  chart.xScale = lines.xScale;
   chart.interactiveLayer = interactiveLayer;
 
   d3v3.rebind(chart, lines, 'defined', 'isArea', 'x', 'y', 'size', 'xScale', 'yScale', 'xDomain', 'yDomain', 'xRange', 'yRange'
@@ -623,11 +904,19 @@ nv.models.lineWithBrushChart = function() {
     return chart;
   };
 
+  chart.isSelectionEnabled = function() {
+    return selectionEnabled;
+  };
+
   chart.hideSelection = function() {
     selectionHidden = true;
-    selectionEnabled = false;
     return chart;
-  }
+  };
+
+  chart.showSelection = function() {
+    selectionHidden = false;
+    return chart;
+  };
 
   chart.onSelectRange = function(_) {
     if (!arguments.length) return onSelectRange;
@@ -647,9 +936,31 @@ nv.models.lineWithBrushChart = function() {
     return chart;
   };
 
+  chart.onLegendChange = function(_) {
+    if (!arguments.length) return onLegendChange;
+    onLegendChange = _;
+    return chart;
+  };
+
+  chart.displayValuesInLegend = function(_) {
+    if (!arguments.length) return displayValuesInLegend;
+    displayValuesInLegend = _;
+    return chart;
+  };
+
   chart.brush = function(_) {
     if (!arguments.length) return brush;
     brush = _;
+    return chart;
+  };
+
+  chart.selectBars = function(args) {
+    if (!arguments.length) return selectBars;
+    if (args && args.rangeValues) {
+      chart.brushDomain = [args.rangeValues[0].from, args.rangeValues[0].to];
+    } else {
+      chart.brushDomain = null;
+    }
     return chart;
   };
 

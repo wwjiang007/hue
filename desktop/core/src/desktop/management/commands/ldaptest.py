@@ -35,7 +35,7 @@ import socket
 import sys
 
 from desktop.conf import LDAP
-from django.core.management.base import NoArgsCommand
+from django.core.management.base import BaseCommand
 from django.utils.translation import ugettext as _
 from useradmin import ldap_access
 
@@ -137,7 +137,7 @@ will typically work with Active Directory/LDAP. Typically this is member
 for Active Directory and LDAP.
 """
 
-class Command(NoArgsCommand):
+class Command(BaseCommand):
   def print_ldap_global_settings(self, cfg, is_multi_ldap):
     LOG.info('[desktop]')
     LOG.info('[[ldap]]')
@@ -438,7 +438,7 @@ class Command(NoArgsCommand):
       LOG.warn('LDAP Test Command failed')
     sys.exit(exit_code)
 
-  def handle_noargs(self, **options):
+  def handle(self, *args, **options):
     """
       ldap_test management command enters here. Main logic as follows:
       * check ldap parameters from hue.ini file

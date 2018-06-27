@@ -27,7 +27,7 @@ from desktop.lib.test_utils import grant_access
 from desktop.lib.django_test_util import make_logged_in_client
 from django.conf import settings
 from django.contrib.auth.models import User, Group
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from useradmin.models import LdapGroup, UserProfile
 from useradmin.models import get_profile
@@ -420,7 +420,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
       assert_true(larry.first_name == 'Larry')
       assert_true(larry.last_name == 'Stooge')
       assert_true(larry.email == 'larry@stooges.com')
-      assert_true(get_profile(larry).creation_method == str(UserProfile.CreationMethod.EXTERNAL))
+      assert_true(get_profile(larry).creation_method == UserProfile.CreationMethod.EXTERNAL.name)
 
       # Should be a noop
       sync_ldap_users(ldap_access.CACHED_LDAP_CONN)
@@ -433,7 +433,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
       hue_user = User.objects.create(username='otherguy', first_name='Different', last_name='Guy')
       import_ldap_users(ldap_access.CACHED_LDAP_CONN, 'otherguy', sync_groups=False, import_by_dn=False)
       hue_user = User.objects.get(username='otherguy')
-      assert_equal(get_profile(hue_user).creation_method, str(UserProfile.CreationMethod.HUE))
+      assert_equal(get_profile(hue_user).creation_method, UserProfile.CreationMethod.HUE.name)
       assert_equal(hue_user.first_name, 'Different')
 
       # Make sure LDAP groups exist or they won't sync
@@ -445,7 +445,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
       assert_equal(curly.first_name, 'Curly')
       assert_equal(curly.last_name, 'Stooge')
       assert_equal(curly.email, 'curly@stooges.com')
-      assert_equal(get_profile(curly).creation_method, str(UserProfile.CreationMethod.EXTERNAL))
+      assert_equal(get_profile(curly).creation_method, UserProfile.CreationMethod.EXTERNAL.name)
       assert_equal(2, curly.groups.all().count(), curly.groups.all())
 
       reset_all_users()
@@ -531,7 +531,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
       assert_true('/useradmin/users' in response['Location'], response)
 
       response = c.post(URL, dict(server='multi_ldap_conf', username_pattern='bad_name', password1='test', password2='test'))
-      assert_true('Could not' in response.context['form'].errors['username_pattern'][0], response)
+      assert_true('Could not' in response.context[0]['form'].errors['username_pattern'][0], response)
 
       # Test wild card
       response = c.post(URL, dict(server='multi_ldap_conf', username_pattern='*rr*', password1='test', password2='test'))
@@ -561,7 +561,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
 
       # Test regular with spaces (should fail)
       response = c.post(URL, dict(server='multi_ldap_conf', username_pattern='user with space', password1='test', password2='test'))
-      assert_true("Username must not contain whitespaces and ':'" in response.context['form'].errors['username_pattern'][0], response)
+      assert_true("Username must not contain whitespaces and ':'" in response.context[0]['form'].errors['username_pattern'][0], response)
 
       # Test dn with spaces in username and dn (should fail)
       response = c.post(URL, dict(server='multi_ldap_conf', username_pattern='uid=user with space,ou=People,dc=example,dc=com', password1='test', password2='test', dn=True))
@@ -665,7 +665,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
                                                                        'toolongnametoolongnametoolongnametoolongname'
                                                                        'toolongnametoolongnametoolongnametoolongname'
                                                                        'toolongnametoolongnametoolongnametoolongname'))
-      assert_true('Ensure this value has at most 256 characters' in response.context['form'].errors['groupname_pattern'][0], response)
+      assert_true('Ensure this value has at most 256 characters' in response.context[0]['form'].errors['groupname_pattern'][0], response)
 
       # Test wild card
       response = c.post(URL, dict(server='multi_ldap_conf', groupname_pattern='*r*'))
@@ -750,7 +750,7 @@ class TestUserAdminLdapWithHadoop(BaseUserAdminTests):
       assert_true(cluster.fs.exists('/user/curly'))
 
       response = c.post(URL, dict(server='multi_ldap_conf', username_pattern='bad_name', password1='test', password2='test'))
-      assert_true('Could not' in response.context['form'].errors['username_pattern'][0])
+      assert_true('Could not' in response.context[0]['form'].errors['username_pattern'][0])
       assert_false(cluster.fs.exists('/user/bad_name'))
 
       # See if moe, who did not ask for his home directory, has a home directory.

@@ -336,6 +336,7 @@ ColumnSpecificationList_EDIT
 ColumnSpecification
  : ColumnIdentifier ColumnDataType OptionalColumnOptions
    {
+     $$ = $1;
      var keywords = [];
      if (parser.isImpala()) {
        if (!$3['primary']) {
@@ -365,7 +366,7 @@ ColumnSpecification
        }
      }
      if (keywords.length > 0) {
-       $$ = { suggestKeywords: keywords };
+       $$.suggestKeywords = keywords;
      }
    }
  ;
@@ -1061,6 +1062,7 @@ FileFormat
  | '<hive>TEXTFILE'
  | '<impala>AVRO'
  | '<impala>KUDU'
+ | '<impala>ORC'
  | '<impala>PARQUET'
  | '<impala>RCFILE'
  | '<impala>SEQUENCEFILE'
@@ -1304,15 +1306,19 @@ ViewDefinition_EDIT
      }
    }
  | AnyCreate AnyView OptionalIfNotExists_EDIT
+ | AnyCreate AnyView OptionalIfNotExists SchemaQualifiedIdentifier ParenthesizedViewColumnList_EDIT OptionalComment OptionalHiveTblproperties
  | AnyCreate AnyView OptionalIfNotExists SchemaQualifiedIdentifier OptionalParenthesizedViewColumnList OptionalComment OptionalHiveTblproperties 'CURSOR'
    {
-     if (parser.isHive() && !$6 && !$7) {
-       parser.suggestKeywords([{ value: 'COMMENT', weight: 3 }, { value: 'TBLPROPERTIES', weight: 2 }, {value: 'AS', weight: 1 }]);
-     } else if (parser.isHive() && !$7) {
-       parser.suggestKeywords([{ value: 'TBLPROPERTIES', weight: 2 }, {value: 'AS', weight: 1 }]);
-     } else {
-       parser.suggestKeywords([{value: 'AS', weight: 1 }]);
+     var keywords = [{value: 'AS', weight: 1 }];
+     if (!$7) {
+       if (parser.isHive()) {
+         keywords.push({ value: 'TBLPROPERTIES', weight: 2 });
+       }
+       if (!$6) {
+         keywords.push({ value: 'COMMENT', weight: 3 });
+       }
      }
+     parser.suggestKeywords(keywords);
    }
  | AnyCreate AnyView OptionalIfNotExists SchemaQualifiedIdentifier OptionalParenthesizedViewColumnList OptionalComment OptionalHiveTblproperties AnyAs 'CURSOR'
    {
@@ -1681,9 +1687,25 @@ ParenthesizedViewColumnList
  : '(' ViewColumnList ')'
  ;
 
+ParenthesizedViewColumnList_EDIT
+ : '(' ViewColumnList_EDIT RightParenthesisOrError
+   {
+     if (!$2) {
+       parser.suggestKeywords(['COMMENT']);
+     }
+   }
+ ;
+
 ViewColumnList
  : ColumnReference OptionalComment
  | ViewColumnList ',' ColumnReference OptionalComment
+ ;
+
+ViewColumnList_EDIT
+ : ColumnReference OptionalComment 'CURSOR'                                        --> $2
+ | ColumnReference OptionalComment 'CURSOR' ',' ViewColumnList                     --> $2
+ | ViewColumnList ',' ColumnReference OptionalComment 'CURSOR'                     --> $4
+ | ViewColumnList ',' ColumnReference OptionalComment 'CURSOR' ',' ViewColumnList  --> $4
  ;
 
 RoleDefinition

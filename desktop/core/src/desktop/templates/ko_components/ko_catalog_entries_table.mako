@@ -169,7 +169,7 @@ from desktop.views import _ko
               <!-- ko if: isKey -->
               &nbsp;<i class="fa fa-key" data-bind="tooltip: { title: keyText, html: true }"></i>
               <!-- /ko -->
-              <!-- ko if: popularity -->
+              <!-- ko if: popularity && popularity() >= 5 -->
               &nbsp;<i data-bind="tooltip: { title: '${ _ko("Popularity") }: ' + popularity() + '%' }" class="fa fa-star-o"></i>
               <!-- /ko -->
             </a>
@@ -436,7 +436,7 @@ from desktop.views import _ko
             });
 
             if (self.catalogEntry.isTableOrView()) {
-              var joinsPromise = self.catalogEntry.getTopJoins().done(function (topJoins) {
+              var joinsPromise = self.catalogEntry.getTopJoins({ silenceErrors: true, cancellable: true }).done(function (topJoins) {
                 if (topJoins && topJoins.values && topJoins.values.length) {
                   entriesAddedDeferred.done(function (entries) {
                     var entriesIndex = {};

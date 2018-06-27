@@ -83,7 +83,7 @@ var MetastoreDatabase = (function () {
   MetastoreDatabase.prototype.reload = function () {
     var self = this;
     // Clear will publish when done
-    self.catalogEntry.clear(self.catalogEntry.getSourceType() === 'impala' ? 'invalidate' : 'cache');
+    self.catalogEntry.clearCache({ invalidate: self.catalogEntry.getSourceType() === 'impala' ? 'invalidate' : 'cache' });
   };
 
   MetastoreDatabase.prototype.load = function (callback, optimizerEnabled, navigatorEnabled) {
@@ -369,7 +369,7 @@ var MetastoreTable = (function () {
 
     self.optimizerStats = ko.observable();
     self.optimizerDetails = ko.observable();
-    self.topJoins = ko.observable();
+    self.topJoins = ko.observableArray();
     self.navigatorMeta = ko.observable();
     self.relationshipsDetails = ko.observable();
 
@@ -494,7 +494,7 @@ var MetastoreTable = (function () {
         self.loadingViewSql(true);
       }
 
-      self.catalogEntry.getTopJoins().done(function (topJoins) {
+      self.catalogEntry.getTopJoins({ silenceErrors: true }).done(function (topJoins) {
         if (topJoins && topJoins.values) {
           var joins = [];
           var ownQidLower = self.catalogEntry.path.join('.').toLowerCase();
@@ -528,10 +528,10 @@ var MetastoreTable = (function () {
                       joinCol.columns.forEach(function (col) {
                         var colLower = col.toLowerCase();
                         if (colLower.indexOf(ownQidLower + '.') === 0) {
-                          cleanCols.source = colLower.substring(ownQidLower.length + 1);
+                          cleanCols.source = colLower.substring(ownDbNameLower.length + 1);
                           cleanCols.sourcePath = col.split('.');
                         } else if (colLower.indexOf(ownNameLower + '.') === 0) {
-                          cleanCols.source = colLower.substring(ownNameLower.length + 1);
+                          cleanCols.source = colLower;
                           cleanCols.sourcePath = col.split('.');
                           cleanCols.sourcePath.unshift(ownDbNameLower);
                         } else if (colLower.indexOf(ownDbNameLower + '.') === 0) {
@@ -649,7 +649,7 @@ var MetastoreTable = (function () {
     self.samples.loaded(false);
     self.partitions.loaded(false);
     // Clear will publish when done
-    self.catalogEntry.clear(self.catalogEntry.getSourceType() === 'impala' ? 'invalidate' : 'cache');
+    self.catalogEntry.clearCache({ invalidate: self.catalogEntry.getSourceType() === 'impala' ? 'invalidate' : 'cache' });
   };
 
   MetastoreTable.prototype.showImportData = function () {

@@ -27,7 +27,7 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _t, ugettext as _
 
 from desktop import conf
-from useradmin.password_policy import get_password_validators
+from useradmin.hue_password_policy import hue_get_password_validators
 
 
 LOG = logging.getLogger(__name__)
@@ -110,7 +110,8 @@ class ImpersonationAuthenticationForm(AuthenticationForm):
     except:
       # Expected to fail as login_as is nor provided by the parent Django AuthenticationForm, hence we redo it properly below.
       pass
-    self.user_cache = authenticate(username=self.cleaned_data.get('username'), password=self.cleaned_data.get('password'), login_as=self.cleaned_data.get('login_as'))
+    request = None
+    self.user_cache = authenticate(request, username=self.cleaned_data.get('username'), password=self.cleaned_data.get('password'), login_as=self.cleaned_data.get('login_as'))
     return self.user_cache
 
 
@@ -124,6 +125,7 @@ class LdapAuthenticationForm(AuthenticationForm):
     self.fields['server'] = ChoiceField(choices=get_server_choices())
 
   def authenticate(self):
+    request = None
     username = self.cleaned_data.get('username')
     password = self.cleaned_data.get('password')
     server = self.cleaned_data.get('server')
@@ -133,7 +135,7 @@ class LdapAuthenticationForm(AuthenticationForm):
 
     if username and password:
       try:
-        self.user_cache = authenticate(username=username,
+        self.user_cache = authenticate(request, username=username,
                                        password=password,
                                        server=server)
       except Exception as e:
@@ -159,7 +161,6 @@ class LdapAuthenticationForm(AuthenticationForm):
           self.error_messages['invalid_login'])
       elif not self.user_cache.is_active:
         raise ValidationError(self.error_messages['inactive'])
-    self.check_for_test_cookie()
     return self.cleaned_data
 
 
@@ -171,7 +172,7 @@ class UserCreationForm(AuthUserCreationForm):
   """
   password = CharField(label=_t("Password"),
                        widget=PasswordInput(attrs={'class': 'input-large'}),
-                       validators=get_password_validators())
+                       validators=hue_get_password_validators())
 
   def __init__(self, data=None, *args, **kwargs):
     if data and 'password' in data:

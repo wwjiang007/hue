@@ -254,6 +254,20 @@
         });
       });
 
+      it('should handle "ALTER TABLE bar SET ROW FORMAT ... |"', function () {
+        assertAutoComplete({
+          beforeCursor: 'ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS TERMINATED BY \'a\' ESCAPED BY \'c\' ' +
+          'LINES TERMINATED BY \'q\'; ',
+          afterCursor: '',
+          dialect: 'impala',
+          noErrors: true,
+          containsKeywords: ['SELECT'],
+          expectedResult: {
+            lowerCase: false
+          }
+        });
+      });
+
       it('should suggest keywords for "ALTER |"', function() {
         assertAutoComplete({
           beforeCursor: 'ALTER ',
@@ -325,6 +339,19 @@
           });
         });
 
+        it('should handle "ALTER TABLE bar SET OWNER ROLE boo;|"', function() {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET OWNER ROLE boo;',
+            afterCursor: '',
+            dialect: 'hive',
+            noErrors: true,
+            containsKeywords: ['SELECT'],
+            expectedResult: {
+              lowerCase: false
+            }
+          });
+        });
+
         it('should suggest keywords for "ALTER TABLE bar |"', function() {
           assertAutoComplete({
             beforeCursor: 'ALTER TABLE bar ',
@@ -335,7 +362,7 @@
               suggestKeywords: ['ADD COLUMNS', 'ADD IF NOT EXISTS', 'ADD PARTITION', 'ARCHIVE PARTITION', 'CHANGE',
                 'CLUSTERED BY', 'COMPACT', 'CONCATENATE', 'DISABLE NO_DROP', 'DISABLE OFFLINE', 'DROP',  'ENABLE NO_DROP',
                 'ENABLE OFFLINE', 'EXCHANGE PARTITION', 'NOT SKEWED', 'NOT STORED AS DIRECTORIES',  'PARTITION',
-                'RECOVER PARTITIONS', 'RENAME TO', 'REPLACE COLUMNS', 'SET FILEFORMAT', 'SET LOCATION', 'SET SERDE',
+                'RECOVER PARTITIONS', 'RENAME TO', 'REPLACE COLUMNS', 'SET FILEFORMAT', 'SET LOCATION', 'SET OWNER', 'SET SERDE',
                 'SET SERDEPROPERTIES', 'SET SKEWED LOCATION', 'SET TBLPROPERTIES', 'SKEWED BY', 'TOUCH', 'UNARCHIVE PARTITION']
             }
           });
@@ -1386,7 +1413,7 @@
             dialect: 'hive',
             expectedResult: {
               lowerCase: false,
-              suggestKeywords: ['FILEFORMAT', 'LOCATION', 'SERDE', 'SERDEPROPERTIES', 'SKEWED LOCATION', 'TBLPROPERTIES']
+              suggestKeywords: ['FILEFORMAT', 'LOCATION', 'OWNER', 'SERDE', 'SERDEPROPERTIES', 'SKEWED LOCATION', 'TBLPROPERTIES']
             }
           });
         });
@@ -1411,6 +1438,18 @@
             expectedResult: {
               lowerCase: false,
               suggestHdfs: { path: '' }
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET OWNER |"', function() {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET OWNER ',
+            afterCursor: '',
+            dialect: 'hive',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['GROUP', 'ROLE', 'USER']
             }
           });
         });
@@ -1585,7 +1624,7 @@
 
       });
 
-     describe('Impala specific', function () {
+      describe('Impala specific', function () {
         it('should handle "ALTER TABLE db.tbl SET COLUMN STATS foo (\'numDVs\'=\'2\',\'numNulls\'=\'0\'); |"', function() {
           assertAutoComplete({
             beforeCursor: 'ALTER TABLE db.tbl SET COLUMN STATS foo (\'numDVs\'=\'2\',\'numNulls\'=\'0\'); ',
@@ -1669,7 +1708,7 @@
               suggestKeywords: ['ADD COLUMNS', 'ADD PARTITION', 'ADD RANGE PARTITION', 'ALTER', 'ALTER COLUMN',
                 'CHANGE', 'DROP COLUMN', 'DROP PARTITION', 'DROP RANGE PARTITION', 'PARTITION', 'RECOVER PARTITIONS',
                 'RENAME TO', 'REPLACE COLUMNS', 'SET CACHED IN', 'SET COLUMN STATS', 'SET FILEFORMAT', 'SET LOCATION',
-                'SET SERDEPROPERTIES', 'SET TBLPROPERTIES', 'SET UNCACHED' ]
+                'SET ROW FORMAT', 'SET SERDEPROPERTIES', 'SET TBLPROPERTIES', 'SET UNCACHED' ]
             }
           });
         });
@@ -1681,7 +1720,7 @@
             dialect: 'impala',
             expectedResult: {
               lowerCase: false,
-              suggestKeywords: ['CACHED IN', 'COLUMN STATS', 'FILEFORMAT', 'LOCATION', 'SERDEPROPERTIES', 'TBLPROPERTIES', 'UNCACHED']
+              suggestKeywords: ['CACHED IN', 'COLUMN STATS', 'FILEFORMAT', 'LOCATION', 'ROW FORMAT', 'SERDEPROPERTIES', 'TBLPROPERTIES', 'UNCACHED']
             }
           });
         });
@@ -2119,7 +2158,7 @@
             dialect: 'impala',
             expectedResult: {
               lowerCase: false,
-              suggestKeywords: ['SET CACHED IN', 'SET FILEFORMAT', 'SET LOCATION', 'SET SERDEPROPERTIES', 'SET TBLPROPERTIES', 'SET UNCACHED']
+              suggestKeywords: ['SET CACHED IN', 'SET FILEFORMAT', 'SET LOCATION', 'SET ROW FORMAT', 'SET SERDEPROPERTIES', 'SET TBLPROPERTIES', 'SET UNCACHED']
             }
           });
         });
@@ -2131,7 +2170,7 @@
             dialect: 'impala',
             expectedResult: {
               lowerCase: false,
-              suggestKeywords: ['CACHED IN', 'FILEFORMAT', 'LOCATION', 'SERDEPROPERTIES', 'TBLPROPERTIES', 'UNCACHED']
+              suggestKeywords: ['CACHED IN', 'FILEFORMAT', 'LOCATION', 'ROW FORMAT', 'SERDEPROPERTIES', 'TBLPROPERTIES', 'UNCACHED']
             }
           });
         });
@@ -2190,7 +2229,6 @@
             afterCursor: '',
             dialect: 'impala',
             containsKeywords: ['PARQUET'],
-            doesNotContainKeywords: ['ORC'],
             expectedResult: {
               lowerCase: false
             }
@@ -2205,6 +2243,92 @@
             expectedResult: {
               lowerCase: false,
               suggestHdfs: { path: '' }
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW |"', function() {
+         assertAutoComplete({
+           beforeCursor: 'ALTER TABLE bar SET ROW ',
+           afterCursor: '',
+           dialect: 'impala',
+           expectedResult: {
+             lowerCase: false,
+             suggestKeywords: ['FORMAT']
+           }
+         });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW FORMAT |"', function() {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET ROW FORMAT ',
+            afterCursor: '',
+            dialect: 'impala',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['DELIMITED']
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW FORMAT DELIMITED |"', function () {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET ROW FORMAT DELIMITED ',
+            afterCursor: '',
+            dialect: 'impala',
+            containsKeywords: ['FIELDS TERMINATED BY', 'LINES TERMINATED BY' ],
+            doestNotContainKeywords: ['ROW FORMAT'],
+            expectedResult: {
+              lowerCase: false
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS |"', function () {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS ',
+            afterCursor: '',
+            dialect: 'impala',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['TERMINATED BY']
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS TERMINATED |"', function () {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS TERMINATED ',
+            afterCursor: '',
+            dialect: 'impala',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['BY']
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS TERMINATED BY \'b\' |"', function () {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET ROW FORMAT DELIMITED FIELDS TERMINATED BY \'b\' ',
+            afterCursor: '',
+            dialect: 'impala',
+            containsKeywords: ['LINES TERMINATED BY' ],
+            doestNotContainKeywords: ['FIELDS TERMINATED BY', 'ROW FORMAT'],
+            expectedResult: {
+              lowerCase: false
+            }
+          });
+        });
+
+        it('should suggest keywords for "ALTER TABLE bar SET ROW FORMAT DELIMITED LINES TERMINATED |"', function () {
+          assertAutoComplete({
+            beforeCursor: 'ALTER TABLE bar SET ROW FORMAT DELIMITED LINES TERMINATED ',
+            afterCursor: '',
+            dialect: 'impala',
+            expectedResult: {
+              lowerCase: false,
+              suggestKeywords: ['BY']
             }
           });
         });
@@ -2493,6 +2617,106 @@
           expectedResult: {
             lowerCase: true,
             suggestKeywords: ['FUNCTION']
+          }
+        });
+      });
+    });
+
+    describe('COMMENT ON', function () {
+      it('should handle "COMMENT ON DATABASE boo IS \'foo\';|"', function() {
+        assertAutoComplete({
+          beforeCursor: 'COMMENT ON DATABASE boo IS \'foo\';',
+          afterCursor: '',
+          dialect: 'impala',
+          noErrors: true,
+          containsKeywords: ['SELECT'],
+          expectedResult: {
+            lowerCase: false
+          }
+        });
+      });
+
+      it('should handle "COMMENT ON DATABASE boo IS NULL;|"', function() {
+        assertAutoComplete({
+          beforeCursor: 'COMMENT ON DATABASE boo IS NULL;',
+          afterCursor: '',
+          dialect: 'impala',
+          noErrors: true,
+          containsKeywords: ['SELECT'],
+          expectedResult: {
+            lowerCase: false
+          }
+        });
+      });
+
+      it('should suggest keywords for "|"', function() {
+        assertAutoComplete({
+          beforeCursor: '',
+          afterCursor: '',
+          dialect: 'impala',
+          containsKeywords: ['COMMENT ON'],
+          expectedResult: {
+            lowerCase: false
+          }
+        });
+      });
+
+      it('should suggest keywords for "comment |"', function() {
+        assertAutoComplete({
+          beforeCursor: 'comment ',
+          afterCursor: '',
+          dialect: 'impala',
+          expectedResult: {
+            lowerCase: true,
+            suggestKeywords: ['ON DATABASE']
+          }
+        });
+      });
+
+      it('should suggest keywords for "comment on |"', function() {
+        assertAutoComplete({
+          beforeCursor: 'comment on ',
+          afterCursor: '',
+          dialect: 'impala',
+          expectedResult: {
+            lowerCase: true,
+            suggestKeywords: ['DATABASE']
+          }
+        });
+      });
+
+      it('should suggest datagbase for "COMMENT ON DATABASE |"', function() {
+        assertAutoComplete({
+          beforeCursor: 'COMMENT ON DATABASE ',
+          afterCursor: '',
+          dialect: 'impala',
+          expectedResult: {
+            lowerCase: false,
+            suggestDatabases: {}
+          }
+        });
+      });
+
+      it('should suggest keywords for "COMMENT ON DATABASE bar |"', function() {
+        assertAutoComplete({
+          beforeCursor: 'COMMENT ON DATABASE bar ',
+          afterCursor: '',
+          dialect: 'impala',
+          expectedResult: {
+            lowerCase: false,
+            suggestKeywords: ['IS']
+          }
+        });
+      });
+
+      it('should suggest keywords for "COMMENT ON DATABASE bar IS |"', function() {
+        assertAutoComplete({
+          beforeCursor: 'COMMENT ON DATABASE bar IS ',
+          afterCursor: '',
+          dialect: 'impala',
+          expectedResult: {
+            lowerCase: false,
+            suggestKeywords: ['NULL']
           }
         });
       });

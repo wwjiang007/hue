@@ -18,7 +18,7 @@
 import logging
 
 from django.core import management
-from django.core.management.base import NoArgsCommand
+from django.core.management.base import BaseCommand
 
 from desktop.models import Directory, Document, Document2, Document2Permission, SAMPLE_USER_OWNERS
 from useradmin.models import get_default_user_group, install_sample_user
@@ -27,8 +27,8 @@ from useradmin.models import get_default_user_group, install_sample_user
 LOG = logging.getLogger(__name__)
 
 
-class Command(NoArgsCommand):
-  def handle_noargs(self, **options):
+class Command(BaseCommand):
+  def handle(self, *args, **options):
 
     sample_user = install_sample_user()
 

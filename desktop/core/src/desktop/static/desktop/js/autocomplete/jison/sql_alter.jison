@@ -29,6 +29,7 @@ AlterStatement
  | AlterView
  | Msck
  | ReloadFunction
+ | CommentOn
  ;
 
 AlterStatement_EDIT
@@ -38,6 +39,7 @@ AlterStatement_EDIT
  | AlterView_EDIT
  | Msck_EDIT
  | ReloadFunction_EDIT
+ | CommentOn_EDIT
  | 'ALTER' 'CURSOR'
    {
      if (parser.isHive()) {
@@ -229,13 +231,13 @@ AlterTable_EDIT
        parser.suggestKeywords(['ADD COLUMNS', 'ADD IF NOT EXISTS', 'ADD PARTITION', 'ARCHIVE PARTITION', 'CHANGE',
          'CLUSTERED BY', 'CONCATENATE', 'COMPACT', 'DISABLE NO_DROP', 'DISABLE OFFLINE', 'DROP', 'ENABLE NO_DROP',
          'ENABLE OFFLINE', 'EXCHANGE PARTITION', 'NOT SKEWED', 'NOT STORED AS DIRECTORIES', 'PARTITION',
-         'RECOVER PARTITIONS', 'RENAME TO', 'REPLACE COLUMNS', 'SET FILEFORMAT', 'SET LOCATION', 'SET SERDE',
+         'RECOVER PARTITIONS', 'RENAME TO', 'REPLACE COLUMNS', 'SET FILEFORMAT', 'SET LOCATION', 'SET OWNER', 'SET SERDE',
          'SET SERDEPROPERTIES', 'SET SKEWED LOCATION', 'SET TBLPROPERTIES', 'SKEWED BY', 'TOUCH', 'UNARCHIVE PARTITION']);
      } else if (parser.isImpala()) {
        parser.suggestKeywords(['ADD COLUMNS', 'ADD PARTITION', 'ADD RANGE PARTITION', 'ALTER', 'ALTER COLUMN', 'CHANGE',
          'DROP COLUMN', 'DROP PARTITION', 'DROP RANGE PARTITION', 'PARTITION', 'RECOVER PARTITIONS', 'RENAME TO',
-         'REPLACE COLUMNS', 'SET CACHED IN', 'SET COLUMN STATS', 'SET FILEFORMAT', 'SET LOCATION','SET SERDEPROPERTIES',
-         'SET TBLPROPERTIES', 'SET UNCACHED']);
+         'REPLACE COLUMNS', 'SET CACHED IN', 'SET COLUMN STATS', 'SET FILEFORMAT', 'SET LOCATION', 'SET ROW FORMAT',
+         'SET SERDEPROPERTIES', 'SET TBLPROPERTIES', 'SET UNCACHED']);
      }
    }
  | AlterTableLeftSide PartitionSpec 'CURSOR'
@@ -245,8 +247,8 @@ AlterTable_EDIT
          'ENABLE NO_DROP', 'ENABLE OFFLINE', 'RENAME TO PARTITION', 'REPLACE COLUMNS', 'SET FILEFORMAT', 'SET LOCATION',
          'SET SERDE', 'SET SERDEPROPERTIES']);
      } else if (parser.isImpala()) {
-       parser.suggestKeywords(['SET CACHED IN', 'SET FILEFORMAT', 'SET LOCATION', 'SET SERDEPROPERTIES', 'SET TBLPROPERTIES',
-         'SET UNCACHED']);
+       parser.suggestKeywords(['SET CACHED IN', 'SET FILEFORMAT', 'SET LOCATION', 'SET ROW FORMAT',
+       'SET SERDEPROPERTIES', 'SET TBLPROPERTIES', 'SET UNCACHED']);
      }
    }
  | AlterTableLeftSide PartitionSpec AddOrReplace 'CURSOR'
@@ -258,15 +260,15 @@ AlterTable_EDIT
      if (parser.isHive()) {
        parser.suggestKeywords(['FILEFORMAT', 'LOCATION', 'SERDE', 'SERDEPROPERTIES']);
      } else if (parser.isImpala()) {
-       parser.suggestKeywords(['CACHED IN', 'FILEFORMAT', 'LOCATION', 'SERDEPROPERTIES','TBLPROPERTIES', 'UNCACHED']);
+       parser.suggestKeywords(['CACHED IN', 'FILEFORMAT', 'LOCATION', 'ROW FORMAT', 'SERDEPROPERTIES','TBLPROPERTIES', 'UNCACHED']);
      }
    }
  | AlterTableLeftSide 'SET' 'CURSOR'
    {
      if (parser.isHive()) {
-       parser.suggestKeywords(['FILEFORMAT', 'LOCATION', 'SERDE', 'SERDEPROPERTIES', 'SKEWED LOCATION', 'TBLPROPERTIES']);
+       parser.suggestKeywords(['FILEFORMAT', 'LOCATION', 'OWNER', 'SERDE', 'SERDEPROPERTIES', 'SKEWED LOCATION', 'TBLPROPERTIES']);
      } else if (parser.isImpala()) {
-       parser.suggestKeywords(['CACHED IN', 'COLUMN STATS', 'FILEFORMAT', 'LOCATION', 'SERDEPROPERTIES', 'TBLPROPERTIES', 'UNCACHED']);
+       parser.suggestKeywords(['CACHED IN', 'COLUMN STATS', 'FILEFORMAT', 'LOCATION', 'ROW FORMAT', 'SERDEPROPERTIES', 'TBLPROPERTIES', 'UNCACHED']);
      }
    }
  | AlterTableLeftSide PartitionSpec OptionalPartitionOperations_EDIT
@@ -294,6 +296,7 @@ HiveSpecificOperations
  | 'NOT' '<hive>SKEWED'
  | 'NOT' '<hive>STORED_AS_DIRECTORIES'
  | 'SET' '<hive>SKEWED_LOCATION' ParenthesizedSkewedLocationList
+ | 'SET' '<hive>OWNER' PrincipalSpecification
  | PartitionSpec '<hive>RENAME' 'TO' PartitionSpec
  | PartitionSpec AnyChange '<hive>COLUMN' ParenthesizedColumnSpecificationList OptionalHiveCascadeOrRestrict
  ;
@@ -341,6 +344,11 @@ HiveSpecificOperations_EDIT
    {
      parser.suggestKeywords(['BY']);
    }
+ | 'SET' '<hive>OWNER' 'CURSOR'
+   {
+     parser.suggestKeywords(['GROUP', 'ROLE', 'USER']);
+   }
+ | 'SET' '<hive>OWNER' PrincipalSpecification_EDIT
  | '<hive>SKEWED' 'BY' ParenthesizedColumnList_EDIT
  | '<hive>SKEWED' 'BY' ParenthesizedColumnList_EDIT 'ON' ParenthesizedSkewedValueList OptionalStoredAsDirectories
  | '<hive>SKEWED' 'BY' ParenthesizedColumnList 'CURSOR'
@@ -481,6 +489,7 @@ OptionalPartitionOperations
  | 'SET' '<hive>SERDE' QuotedValue OptionalWithSerdeproperties
  | 'SET' HiveOrImpalaSerdeproperties ParenthesizedPropertyAssignmentList
  | 'SET' CachedIn OptionalWithReplication
+ | 'SET' 'ROW' '<impala>FORMAT' ImpalaRowFormat
  | 'SET' '<impala>UNCACHED'
  | AddReplaceColumns
  | '<hive>CONCATENATE'
@@ -552,6 +561,23 @@ OptionalPartitionOperations_EDIT
      }
    }
  | 'SET' CachedIn WithReplication_EDIT
+ | 'SET' 'ROW' 'CURSOR'
+   {
+     if (parser.isImpala()) {
+       parser.suggestKeywords(['FORMAT']);
+     }
+   }
+ | 'SET' 'ROW' '<impala>FORMAT' 'CURSOR'
+   {
+     parser.suggestKeywords(['DELIMITED']);
+   }
+ | 'SET' 'ROW' '<impala>FORMAT' ImpalaRowFormat 'CURSOR'
+   {
+     if ($4.suggestKeywords) {
+       parser.suggestKeywords($4.suggestKeywords);
+     }
+   }
+ | 'SET' 'ROW' '<impala>FORMAT' ImpalaRowFormat_EDIT
  | 'SET' '<hive>SERDE' QuotedValue OptionalWithSerdeproperties 'CURSOR'
    {
      if (!$4) {
@@ -1034,4 +1060,41 @@ ReloadFunction_EDIT
    {
      parser.suggestKeywords(['FUNCTION']);
    }
+ ;
+
+CommentOn
+ : '<impala>COMMENT' 'ON' 'DATABASE' RegularOrBacktickedIdentifier 'IS' NullableComment
+   {
+     parser.addDatabaseLocation(@4, [ { name: $4 } ]);
+   }
+ ;
+
+CommentOn_EDIT
+ : '<impala>COMMENT' 'CURSOR'
+   {
+     parser.suggestKeywords(['ON DATABASE']);
+   }
+ | '<impala>COMMENT' 'ON' 'CURSOR'
+   {
+     parser.suggestKeywords(['DATABASE']);
+   }
+ | '<impala>COMMENT' 'ON' 'DATABASE' 'CURSOR'
+   {
+     parser.suggestDatabases();
+   }
+ | '<impala>COMMENT' 'ON' 'DATABASE' RegularOrBacktickedIdentifier 'CURSOR'
+   {
+     parser.addDatabaseLocation(@4, [ { name: $4 } ]);
+     parser.suggestKeywords(['IS']);
+   }
+ | '<impala>COMMENT' 'ON' 'DATABASE' RegularOrBacktickedIdentifier 'IS' 'CURSOR'
+   {
+     parser.addDatabaseLocation(@4, [ { name: $4 } ]);
+     parser.suggestKeywords(['NULL']);
+   }
+ ;
+
+NullableComment
+ : QuotedValue
+ | 'NULL'
  ;

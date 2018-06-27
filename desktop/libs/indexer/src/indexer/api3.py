@@ -18,16 +18,21 @@
 import chardet
 import json
 import logging
+import urllib
+import StringIO
 
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.utils.translation import ugettext as _
+from simple_salesforce.api import Salesforce
 
 from desktop.lib import django_mako
 from desktop.lib.django_util import JsonResponse
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.i18n import smart_unicode
 from desktop.models import Document2
+from kafka.kafka_api import get_topics
 from librdbms.server import dbms as rdbms
+from metadata.manager_client import ManagerApi
 from notebook.connectors.base import get_api, Notebook
 from notebook.decorators import api_error_handler
 from notebook.models import make_notebook, MockedDjangoRequest, escape_rows
@@ -35,6 +40,7 @@ from notebook.models import make_notebook, MockedDjangoRequest, escape_rows
 from indexer.controller import CollectionManagerController
 from indexer.file_format import HiveFormat
 from indexer.fields import Field
+from indexer.indexers.envelope import EnvelopeIndexer
 from indexer.indexers.morphline import MorphlineIndexer
 from indexer.indexers.rdbms import RdbmsIndexer, run_sqoop
 from indexer.indexers.sql import SQLIndexer
@@ -48,6 +54,16 @@ try:
   from beeswax.server import dbms
 except ImportError, e:
   LOG.warn('Hive and HiveServer2 interfaces are not enabled')
+
+try:
+  from filebrowser.views import detect_parquet
+except ImportError, e:
+  LOG.warn('File Browser interface is not enabled')
+
+try:
+  from search.conf import SOLR_URL
+except ImportError, e:
+  LOG.warn('Solr Search interface is not enabled')
 
 
 def _escape_white_space_characters(s, inverse = False):
@@ -78,15 +94,16 @@ def guess_format(request):
   file_format = json.loads(request.POST.get('fileFormat', '{}'))
 
   if file_format['inputFormat'] == 'file':
+    path = urllib.unquote(file_format["path"])
     indexer = MorphlineIndexer(request.user, request.fs)
-    if not request.fs.isfile(file_format["path"]):
+    if not request.fs.isfile(path):
       raise PopupException(_('Path %(path)s is not a file') % file_format)
 
-    stream = request.fs.open(file_format["path"])
+    stream = request.fs.open(path)
     format_ = indexer.guess_format({
       "file": {
         "stream": stream,
-        "name": file_format['path']
+        "name": path
       }
     })
     _convert_format(format_)
@@ -114,6 +131,16 @@ def guess_format(request):
     format_ = {"quoteChar": "\"", "recordSeparator": "\\n", "type": "csv", "hasHeader": False, "fieldSeparator": "\u0001"}
   elif file_format['inputFormat'] == 'rdbms':
     format_ = RdbmsIndexer(request.user, file_format['rdbmsType']).guess_format()
+  elif file_format['inputFormat'] == 'stream':
+    if file_format['streamSelection'] == 'kafka':
+      format_ = {"type": "csv", "fieldSeparator": ",", "hasHeader": True, "quoteChar": "\"", "recordSeparator": "\\n", 'topics': get_topics()}
+    elif file_format['streamSelection'] == 'sfdc':
+      sf = Salesforce(
+          username=file_format['streamUsername'],
+          password=file_format['streamPassword'],
+          security_token=file_format['streamToken']
+      )
+      format_ = {"type": "csv", "fieldSeparator": ",", "hasHeader": True, "quoteChar": "\"", "recordSeparator": "\\n", 'objects': [sobject['name'] for sobject in sf.restful('sobjects/')['sobjects'] if sobject['queryable']]}
 
   format_['status'] = 0
   return JsonResponse(format_)
@@ -124,7 +151,8 @@ def guess_field_types(request):
 
   if file_format['inputFormat'] == 'file':
     indexer = MorphlineIndexer(request.user, request.fs)
-    stream = request.fs.open(file_format["path"])
+    path = urllib.unquote(file_format["path"])
+    stream = request.fs.open(path)
     encoding = chardet.detect(stream.read(10000)).get('encoding')
     stream.seek(0)
     _convert_format(file_format["format"], inverse=True)
@@ -132,7 +160,7 @@ def guess_field_types(request):
     format_ = indexer.guess_field_types({
       "file": {
           "stream": stream,
-          "name": file_format['path']
+          "name": path
         },
       "format": file_format['format']
     })
@@ -194,6 +222,52 @@ def guess_field_types(request):
             for col in table_metadata
         ]
     }
+  elif file_format['inputFormat'] == 'stream':
+    # Note: mocked here, should come from SFDC or Kafka API or sampling job
+    if file_format['streamSelection'] == 'kafka':
+      data = """%(kafkaFieldNames)s
+%(data)s""" % {
+        'kafkaFieldNames': file_format.get('kafkaFieldNames', ''),
+        'data': '\n'.join([','.join(['...'] * len(file_format.get('kafkaFieldTypes', '').split(',')))] * 5)
+      }
+      stream = StringIO.StringIO()
+      stream.write(data)
+
+      _convert_format(file_format["format"], inverse=True)
+
+      indexer = MorphlineIndexer(request.user, request.fs)
+      format_ = indexer.guess_field_types({
+        "file": {
+            "stream": stream,
+            "name": file_format['path']
+          },
+        "format": file_format['format']
+      })
+
+      type_mapping = dict(zip(file_format['kafkaFieldNames'].split(','), file_format['kafkaFieldTypes'].split(',')))
+      for col in format_['columns']:
+        col['keyType'] = type_mapping[col['name']]
+        col['type'] = type_mapping[col['name']]
+    elif file_format['streamSelection'] == 'sfdc':
+      sf = Salesforce(
+          username=file_format['streamUsername'],
+          password=file_format['streamPassword'],
+          security_token=file_format['streamToken']
+      )
+      table_metadata = [{
+          'name': column['name'],
+          'type': column['type']
+        } for column in sf.restful('sobjects/%(streamObject)s/describe/' % file_format)['fields']
+      ]
+      query = 'SELECT %s FROM %s LIMIT 4' % (', '.join([col['name'] for col in table_metadata]), file_format['streamObject'])
+      print query
+      format_ = {
+        "sample": [row.values()[1:] for row in sf.query_all(query)['records']],
+        "columns": [
+            Field(col['name'], HiveFormat.FIELD_TYPE_TRANSLATE.get(col['type'], 'string')).to_dict()
+            for col in table_metadata
+        ]
+       }
 
   return JsonResponse(format_)
 
@@ -207,11 +281,15 @@ def importer_submit(request):
   start_time = json.loads(request.POST.get('start_time', '-1'))
 
   if source['inputFormat'] == 'file':
-    source['path'] = request.fs.netnormpath(source['path']) if source['path'] else source['path']
+    if source['path']:
+      path = urllib.unquote(source['path'])
+      source['path'] = request.fs.netnormpath(path)
   if destination['ouputFormat'] in ('database', 'table'):
     destination['nonDefaultLocation'] = request.fs.netnormpath(destination['nonDefaultLocation']) if destination['nonDefaultLocation'] else destination['nonDefaultLocation']
 
-  if destination['ouputFormat'] == 'index':
+  if source['inputFormat'] == 'stream':
+    job_handle = _envelope_job(request, source, destination, start_time=start_time, lib_path=destination['indexerJobLibPath'])
+  elif destination['ouputFormat'] == 'index':
     source['columns'] = destination['columns']
     index_name = destination["name"]
 
@@ -244,55 +322,23 @@ def importer_submit(request):
 
 
 def _small_indexing(user, fs, client, source, destination, index_name):
-  unique_key_field = destination['indexerPrimaryKey'] and destination['indexerPrimaryKey'][0] or None
-  df = destination['indexerDefaultField'] and destination['indexerDefaultField'][0] or None
   kwargs = {}
   errors = []
 
   if source['inputFormat'] not in ('manual', 'table', 'query_handle'):
-    stats = fs.stats(source["path"])
+    path = urllib.unquote(source["path"])
+    stats = fs.stats(path)
     if stats.size > MAX_UPLOAD_SIZE:
       raise PopupException(_('File size is too large to handle!'))
 
   indexer = MorphlineIndexer(user, fs)
+
   fields = indexer.get_field_list(destination['columns'])
-  skip_fields = [field['name'] for field in fields if not field['keep']]
-
-  kwargs['fieldnames'] = ','.join([field['name'] for field in fields])
-  for field in fields:
-    for operation in field['operations']:
-      if operation['type'] == 'split':
-        field['multiValued'] = True # Solr requires multiValued to be set when splitting
-        kwargs['f.%(name)s.split' % field] = 'true'
-        kwargs['f.%(name)s.separator' % field] = operation['settings']['splitChar'] or ','
-
-  if skip_fields:
-    kwargs['skip'] = ','.join(skip_fields)
-    fields = [field for field in fields if field['name'] not in skip_fields]
-
-  if not unique_key_field:
-    unique_key_field = 'hue_id'
-    fields += [{"name": unique_key_field, "type": "string"}]
-    kwargs['rowid'] = unique_key_field
-
-  if not destination['hasHeader']:
-    kwargs['header'] = 'false'
-  else:
-    kwargs['skipLines'] = 1
-
-  if not client.exists(index_name):
-    client.create_index(
-        name=index_name,
-        config_name=destination.get('indexerConfigSet'),
-        fields=fields,
-        unique_key_field=unique_key_field,
-        df=df,
-        shards=destination['indexerNumShards'],
-        replication=destination['indexerReplicationFactor']
-    )
+  _create_solr_collection(user, fs, client, destination, index_name, kwargs)
 
   if source['inputFormat'] == 'file':
-    data = fs.read(source["path"], 0, MAX_UPLOAD_SIZE)
+    path = urllib.unquote(source["path"])
+    data = fs.read(path, 0, MAX_UPLOAD_SIZE)
 
   if client.is_solr_six_or_more():
     kwargs['processor'] = 'tolerant'
@@ -311,6 +357,8 @@ def _small_indexing(user, fs, client, source, destination, index_name):
       fetch_handle = lambda rows, start_over: get_api(request, snippet).fetch_result(notebook, snippet, rows=rows, start_over=start_over) # Assumes handle still live
       rows = searcher.update_data_from_hive(index_name, columns, fetch_handle=fetch_handle, indexing_options=kwargs)
       # TODO if rows == MAX_ROWS truncation warning
+    elif source['inputFormat'] == 'manual':
+      pass # No need to do anything
     else:
       response = client.index(name=index_name, data=data, **kwargs)
       errors = [error.get('message', '') for error in response['responseHeader'].get('errors', [])]
@@ -387,10 +435,127 @@ def _large_indexing(request, file_format, collection_name, query=None, start_tim
     table_metadata = db.get_table(database=file_format['databaseName'], table_name=file_format['tableName'])
     input_path = table_metadata.path_location
   elif file_format['inputFormat'] == 'file':
-    input_path = '${nameNode}%s' % file_format["path"]
+    input_path = '${nameNode}%s' % urllib.unquote(file_format["path"])
   else:
     input_path = None
 
   morphline = indexer.generate_morphline_config(collection_name, file_format, unique_field, lib_path=lib_path)
 
   return indexer.run_morphline(request, collection_name, morphline, input_path, query, start_time=start_time, lib_path=lib_path)
+
+
+def _envelope_job(request, file_format, destination, start_time=None, lib_path=None):
+  collection_name = destination['name']
+  indexer = EnvelopeIndexer(request.user, request.fs)
+
+  lib_path = '/tmp/envelope-0.5.0.jar'
+  input_path = None
+
+  if file_format['inputFormat'] == 'table':
+    db = dbms.get(request.user)
+    table_metadata = db.get_table(database=file_format['databaseName'], table_name=file_format['tableName'])
+    input_path = table_metadata.path_location
+  elif file_format['inputFormat'] == 'file':
+    input_path = '${nameNode}%s' % file_format["path"]
+    properties = {
+      'format': 'json'
+    }
+  elif file_format['inputFormat'] == 'stream':
+    if file_format['streamSelection'] == 'sfdc':
+      properties = {
+        'streamSelection': file_format['streamSelection'],
+        'streamUsername': file_format['streamUsername'],
+        'streamPassword': file_format['streamPassword'],
+        'streamToken': file_format['streamToken'],
+        'streamEndpointUrl': file_format['streamEndpointUrl'],
+        'streamObject': file_format['streamObject'],
+      }
+    elif file_format['streamSelection'] == 'kafka':
+      manager = ManagerApi()
+      properties = {
+        "brokers": manager.get_kafka_brokers(),
+        "output_table": "impala::%s" % collection_name,
+        "topics": file_format['kafkaSelectedTopics'],
+        "kafkaFieldType": file_format['kafkaFieldType'],
+        "kafkaFieldDelimiter": file_format['kafkaFieldDelimiter'],
+        "kafkaFieldNames": file_format['kafkaFieldNames'],
+        "kafkaFieldTypes": file_format['kafkaFieldTypes']
+      }
+
+    if destination['outputFormat'] == 'table':
+      if destination['isTargetExisting']:
+        # Todo: check if format matches
+        pass
+      else:
+        sql = SQLIndexer(user=request.user, fs=request.fs).create_table_from_a_file(file_format, destination).get_str()
+        print sql
+      if destination['tableFormat'] == 'kudu':
+        manager = ManagerApi()
+        properties["output_table"] = "impala::%s" % collection_name
+        properties["kudu_master"] = manager.get_kudu_master()
+      else:
+        properties['output_table'] = collection_name
+    elif destination['outputFormat'] == 'file':
+      properties['path'] = file_format["path"]
+      properties['format'] = file_format['tableFormat'] # or csv
+    elif destination['outputFormat'] == 'index':
+      properties['collectionName'] = collection_name
+      properties['connection'] = SOLR_URL.get()
+      if destination['isTargetExisting']:
+        # Todo: check if format matches
+        pass
+      else:
+        client = SolrClient(request.user)
+        kwargs = {}
+        _create_solr_collection(request.user, request.fs, client, destination, collection_name, kwargs)
+
+  properties["app_name"] = 'Data Ingest'
+  properties["inputFormat"] = file_format['inputFormat']
+  properties["ouputFormat"] = destination['ouputFormat']
+  properties["streamSelection"] = file_format["streamSelection"]
+
+  envelope = indexer.generate_config(properties)
+
+  return indexer.run(request, collection_name, envelope, input_path, start_time=start_time, lib_path=lib_path)
+
+
+def _create_solr_collection(user, fs, client, destination, index_name, kwargs):
+  unique_key_field = destination['indexerPrimaryKey'] and destination['indexerPrimaryKey'][0] or None
+  df = destination['indexerDefaultField'] and destination['indexerDefaultField'][0] or None
+
+  indexer = MorphlineIndexer(user, fs)
+  fields = indexer.get_field_list(destination['columns'])
+  skip_fields = [field['name'] for field in fields if not field['keep']]
+
+  kwargs['fieldnames'] = ','.join([field['name'] for field in fields])
+  for field in fields:
+    for operation in field['operations']:
+      if operation['type'] == 'split':
+        field['multiValued'] = True # Solr requires multiValued to be set when splitting
+        kwargs['f.%(name)s.split' % field] = 'true'
+        kwargs['f.%(name)s.separator' % field] = operation['settings']['splitChar'] or ','
+
+  if skip_fields:
+    kwargs['skip'] = ','.join(skip_fields)
+    fields = [field for field in fields if field['name'] not in skip_fields]
+
+  if not unique_key_field:
+    unique_key_field = 'hue_id'
+    fields += [{"name": unique_key_field, "type": "string"}]
+    kwargs['rowid'] = unique_key_field
+
+  if not destination['hasHeader']:
+    kwargs['header'] = 'false'
+  else:
+    kwargs['skipLines'] = 1
+
+  if not client.exists(index_name):
+    client.create_index(
+        name=index_name,
+        config_name=destination.get('indexerConfigSet'),
+        fields=fields,
+        unique_key_field=unique_key_field,
+        df=df,
+        shards=destination['indexerNumShards'],
+        replication=destination['indexerReplicationFactor']
+    )

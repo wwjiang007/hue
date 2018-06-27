@@ -358,7 +358,7 @@ var ApiHelper = (function () {
             } else {
               errorMessage = errorResponse.responseText;
             }
-          } catch(err) {
+          } catch (err) {
             errorMessage = errorResponse.responseText;
           }
         } else if (typeof errorResponse.message !== 'undefined' && errorResponse.message !== null) {
@@ -374,7 +374,9 @@ var ApiHelper = (function () {
 
       if (!options || !options.silenceErrors) {
         hueUtils.logError(errorResponse);
-        $(document).trigger("error", errorMessage);
+        if (errorMessage && errorMessage.indexOf('AuthorizationException') === -1) {
+          $(document).trigger("error", errorMessage);
+        }
       }
 
       if (options && options.errorCallback) {
@@ -558,7 +560,7 @@ var ApiHelper = (function () {
     if (options.pathParts.length > 0 && (options.pathParts[0] === '/' || options.pathParts[0] === '')) {
       options.pathParts.shift();
     }
-    var url = HDFS_API_PREFIX + options.pathParts.join("/") + '?format=json&sortby=name&descending=false&pagesize=' + (options.pageSize || 500) + '&pagenum=' + (options.page || 1);
+    var url = HDFS_API_PREFIX + encodeURI(options.pathParts.join("/")) + '?format=json&sortby=name&descending=false&pagesize=' + (options.pageSize || 500) + '&pagenum=' + (options.page || 1);
     if (options.filter) {
       url += '&filter=' + options.filter;
     }
@@ -613,7 +615,7 @@ var ApiHelper = (function () {
   ApiHelper.prototype.fetchAdlsPath = function (options) {
     var self = this;
     options.pathParts.shift();
-    var url = ADLS_API_PREFIX + options.pathParts.join("/") + '?format=json&sortby=name&descending=false&pagesize=' + (options.pageSize || 500) + '&pagenum=' + (options.page || 1);
+    var url = ADLS_API_PREFIX + encodeURI(options.pathParts.join("/")) + '?format=json&sortby=name&descending=false&pagesize=' + (options.pageSize || 500) + '&pagenum=' + (options.page || 1);
     if (options.filter) {
       url += '&filter=' + options.filter;
     }
@@ -664,7 +666,7 @@ var ApiHelper = (function () {
    */
   ApiHelper.prototype.fetchGitContents = function (options) {
     var self = this;
-    var url = GIT_API_PREFIX + '?path=' + options.pathParts.join("/") + '&fileType=' + options.fileType;
+    var url = GIT_API_PREFIX + '?path=' + encodeURI(options.pathParts.join("/")) + '&fileType=' + options.fileType;
     var fetchFunction = function (storeInCache) {
       if (options.timeout === 0) {
         self.assistErrorCallback(options)({ status: -1 });
@@ -715,7 +717,7 @@ var ApiHelper = (function () {
   ApiHelper.prototype.fetchS3Path = function (options) {
     var self = this;
     options.pathParts.shift(); // remove the trailing /
-    var url = S3_API_PREFIX + options.pathParts.join("/") + '?format=json&sortby=name&descending=false&pagesize=' + (options.pageSize || 500) + '&pagenum=' + (options.page || 1);
+    var url = S3_API_PREFIX + encodeURI(options.pathParts.join("/")) + '?format=json&sortby=name&descending=false&pagesize=' + (options.pageSize || 500) + '&pagenum=' + (options.page || 1);
     if (options.filter) {
       url += '&filter=' + options.filter;
     }

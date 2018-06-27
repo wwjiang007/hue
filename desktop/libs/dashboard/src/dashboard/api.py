@@ -52,7 +52,7 @@ def search(request):
 
   query['download'] = 'download' in request.POST
   fetch_result = 'fetch_result' in request.POST
-
+  
   if collection:
     try:
       if fetch_result:
@@ -101,8 +101,8 @@ def index_fields_dynamic(request):
   result = {'status': -1, 'message': 'Error'}
 
   try:
-    name = request.POST['name']
-    engine = request.POST['engine']
+    name = request.POST.get('name')
+    engine = request.POST.get('engine')
     source = request.POST.get('source')
 
     dynamic_fields = get_engine(request.user, engine, source=source).luke(name)
@@ -358,13 +358,15 @@ def new_facet(request):
   try:
     collection = json.loads(request.POST.get('collection', '{}'))
 
-    facet_id = request.POST['id']
-    facet_label = request.POST['label']
-    facet_field = request.POST['field']
-    widget_type = request.POST['widget_type']
+    facet_id = request.POST.get('id')
+    facet_label = request.POST.get('label')
+    facet_field = request.POST.get('field')
+    widget_type = request.POST.get('widget_type')
+    window_size = request.POST.get('window_size')
+
 
     result['message'] = ''
-    result['facet'] = _create_facet(collection, request.user, facet_id, facet_label, facet_field, widget_type)
+    result['facet'] = _create_facet(collection, request.user, facet_id, facet_label, facet_field, widget_type, window_size)
     result['status'] = 0
   except Exception, e:
     result['message'] = force_unicode(e)
@@ -372,15 +374,16 @@ def new_facet(request):
   return JsonResponse(result)
 
 
-def _create_facet(collection, user, facet_id, facet_label, facet_field, widget_type):
+def _create_facet(collection, user, facet_id, facet_label, facet_field, widget_type, window_size):
   properties = {
     'sort': 'desc',
     'canRange': False,
     'stacked': False,
     'limit': 10,
-    'mincount': 1,
+    'mincount': 0,
     'missing': False,
     'isDate': False,
+    'slot': 0,
     'aggregate': {'function': 'unique', 'formula': '', 'plain_formula': '', 'percentile': 50}
   }
 
@@ -391,11 +394,11 @@ def _create_facet(collection, user, facet_id, facet_label, facet_field, widget_t
     properties['uuid'] = facet_field
     properties['engine'] = 'impala'
     properties['statement'] = 'select * from web_logs limit 50'
-    properties['facets'] = [{'canRange': False, 'field': 'blank', 'limit': 10, 'mincount': 1, 'sort': 'desc', 'aggregate': {'function': 'count'}, 'isDate': False}]
+    properties['facets'] = [{'canRange': False, 'field': 'blank', 'limit': 10, 'mincount': 0, 'sort': 'desc', 'aggregate': {'function': 'count'}, 'isDate': False}]
     facet_type = 'statement'
   else:
     api = get_engine(user, collection)
-    range_properties = _new_range_facet(api, collection, facet_field, widget_type)
+    range_properties = _new_range_facet(api, collection, facet_field, widget_type, window_size)
 
     if range_properties:
       facet_type = 'range'
@@ -506,6 +509,7 @@ def _create_facet(collection, user, facet_id, facet_label, facet_field, widget_t
           'chartYMulti': [],
           'chartData': [],
           'chartMapLabel': None,
+          'chartSelectorType': 'bar'
         },
         "fieldsAttributes": [],
         "fieldsAttributesFilter": "",
@@ -551,8 +555,8 @@ def get_collection(request):
   result = {'status': -1, 'message': ''}
 
   try:
-    name = request.POST['name']
-    engine = request.POST['engine']
+    name = request.POST.get('name')
+    engine = request.POST.get('engine')
     source = request.POST.get('source')
 
     collection = Collection2(request.user, name=name, engine=engine, source=source)

@@ -19,7 +19,7 @@
 import json
 
 from django.contrib.auth.models import User
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from nose.tools import assert_true, assert_false, assert_equal, assert_not_equal
 
@@ -512,7 +512,7 @@ class TestWithMockedSolr(TestSearchBase):
                                    data=json.dumps(self.collection.data), parent_directory=self.home_dir)
     try:
       response = self.c.get(reverse('dashboard:index') + ('?collection=%s' % doc.id) + '&q=</script><script>alert(%27XSS%27)</script>')
-      assert_equal('{"fqs": [], "qs": [{"q": "alert(\'XSS\')"}], "start": 0}', response.context['query'])
+      assert_equal('{"fqs": [], "qs": [{"q": "alert(\'XSS\')"}], "start": 0}', response.context[0]['query'])
     finally:
       doc.delete()
 

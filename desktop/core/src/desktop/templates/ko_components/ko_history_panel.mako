@@ -177,6 +177,9 @@ from desktop.views import _ko
             sqoop1: {
               sqlDialect: false
             },
+            spark: {
+              sqlDialect: false
+            },
           }
         });
         self.editorViewModel.editorMode(true);
@@ -234,7 +237,7 @@ from desktop.views import _ko
 
                   if (notebook.onSuccessUrl() === 'assist.db.refresh') {
                     DataCatalog.getEntry({ sourceType: snippet.type(), path: [] }).done(function (entry) {
-                      entry.clear('cache', true);
+                      entry.clearCache({ invalidate: 'cache', cascade: true, silenceErrors: true });
                     });
                   } else if (notebook.onSuccessUrl()) {
                     huePubSub.publish(notebook.pubSubUrl());
