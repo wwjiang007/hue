@@ -79,7 +79,9 @@ def config_settings_loader(request):
         'optional_attributes': libsaml.conf.OPTIONAL_ATTRIBUTES.get(),
 
         'logout_requests_signed': str(libsaml.conf.LOGOUT_REQUESTS_SIGNED.get()).lower(),
-        'authn_requests_signed': str(libsaml.conf.AUTHN_REQUESTS_SIGNED.get()).lower()
+        'authn_requests_signed': str(libsaml.conf.AUTHN_REQUESTS_SIGNED.get()).lower(),
+        'want_response_signed': str(libsaml.conf.WANT_RESPONSE_SIGNED.get()).lower(),
+        'want_assertions_signed': str(libsaml.conf.WANT_ASSERTIONS_SIGNED.get()).lower()
       },
     },
 
@@ -99,7 +101,7 @@ def config_settings_loader(request):
     # Encryption
     'encryption_keypairs': [{
       'key_file': libsaml.conf.KEY_FILE.get(),  # private part
-      'key_file_passphrase': libsaml.conf.get_key_file_password(), # TODO: need test because might need implementation
+      'key_file_passphrase': libsaml.conf.get_key_file_password(),
       'cert_file': libsaml.conf.CERT_FILE.get(),  # public part
     }],
   })

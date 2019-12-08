@@ -15,16 +15,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
+from future import standard_library
+standard_library.install_aliases()
+from builtins import chr
+from builtins import range
 import unittest
 import logging
-import StringIO
 import random
+import sys
+import subprocess
 
-import xxd
+from filebrowser.lib import xxd
+
+from nose.plugins.skip import SkipTest
 
 from subprocess import Popen, PIPE
 
-logger = logging.getLogger(__name__)
+if sys.version_info[0] > 2:
+  from io import StringIO as string_io
+else:
+  from cStringIO import StringIO as string_io
+
+LOG = logging.getLogger(__name__)
 
 LENGTH = 1024*10 # 10KB
 
@@ -73,6 +86,11 @@ class XxdTest(unittest.TestCase):
     To be honest, this test was written after this was working.
     I tested using a temporary file and a side-by-side diff tool (vimdiff).
     """
+    try:
+      subprocess.check_output('type xxd', shell=True)
+    except subprocess.CalledProcessError as e:
+      LOG.warn('xxd not found')
+      raise SkipTest
     # /dev/random tends to hang on Linux, so we use python instead.
     # It's inefficient, but it's not terrible.
     random_text = "".join(chr(random.getrandbits(8)) for _ in range(LENGTH))
@@ -80,8 +98,8 @@ class XxdTest(unittest.TestCase):
     (stdin, stderr) = p.communicate(random_text)
     self.assertFalse(stderr)
 
-    output = StringIO.StringIO()
-    xxd.main(StringIO.StringIO(random_text), output)
+    output = string_io()
+    xxd.main(string_io(random_text), output)
     self._verify_content(stdin, output.getvalue())
 
 if __name__ == "__main__":

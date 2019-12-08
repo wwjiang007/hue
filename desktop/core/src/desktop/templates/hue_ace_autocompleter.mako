@@ -387,7 +387,7 @@ from desktop.views import _ko
         self.snippet = params.snippet || {};
         self.foreachVisible = ko.observable();
 
-        self.autocompleter = params.autocompleter || new SqlAutocompleter3(params);
+        self.autocompleter = params.autocompleter || new SqlAutocompleter(params);
         self.suggestions = self.autocompleter.suggestions;
 
         self.active = ko.observable(false).extend({ rateLimit: 10 }); // to prevent flickering on empty result
@@ -581,18 +581,22 @@ from desktop.views import _ko
           var newBase = session.doc.createAnchor(pos.row, pos.column - prefix.length);
           self.top(data.position.top + data.lineHeight + 3);
           self.left(data.position.left);
-          var newAutocomp = false;
+
+          var afterAutocomp = function () {
+            newBase.$insertRight = true;
+            self.base = newBase;
+            self.suggestions.filter(prefix);
+            self.active(true);
+            self.selectedIndex(0);
+          };
+
           if (!self.active() || (!self.base || newBase.column !== self.base.column || newBase.row !== self.base.row)) {
-            self.autocompleter.autocomplete();
-            newAutocomp = true;
-          }
-          newBase.$insertRight = true;
-          self.base = newBase;
-          self.suggestions.filter(prefix);
-          self.active(true);
-          self.selectedIndex(0);
-          if (newAutocomp) {
-            self.attach();
+            self.autocompleter.autocomplete().then(function () {
+              afterAutocomp();
+              self.attach();
+            }).catch(afterAutocomp);
+          } else {
+            afterAutocomp();
           }
         });
 

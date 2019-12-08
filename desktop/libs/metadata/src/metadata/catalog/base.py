@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 from django.utils.translation import ugettext as _
 
 from desktop.lib.exceptions_renderable import PopupException
@@ -26,6 +27,9 @@ def get_api(request, interface):
   if interface == 'navigator':
     from metadata.catalog.navigator_client import NavigatorApi
     return NavigatorApi(user=request.user)
+  elif interface == 'atlas':
+    from metadata.catalog.atlas_client import AtlasApi
+    return AtlasApi(user=request.user)
   elif interface == 'dummy':
     from metadata.catalog.dummy_client import DummyApi
     return DummyApi(user=request.user)

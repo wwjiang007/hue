@@ -25,7 +25,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.utils.translation import ugettext as _
 
-from desktop.conf import USE_NEW_EDITOR, IS_HUE_4
+from desktop.conf import USE_NEW_EDITOR
 from desktop.models import Directory, Document, Document2, Document2Permission
 from hadoop import cluster
 from liboozie.submittion import create_directories
@@ -156,7 +156,7 @@ class Command(BaseCommand):
             description=data['description'],
             data=json.dumps(data)
           )
-      except Exception, e:
+      except Exception as e:
         LOG.exception("Failed to create sample mapreduce job document: %s" % e)
         # Just to be sure we delete Doc2 object incase of exception.
         # Possible when there are mixed InnoDB and MyISAM tables
@@ -208,7 +208,7 @@ class Command(BaseCommand):
             description=data['description'],
             data=json.dumps(data)
           )
-      except Exception, e:
+      except Exception as e:
         LOG.exception("Failed to create sample Java job document: %s" % e)
         # Just to be sure we delete Doc2 object incase of exception.
         # Possible when there are mixed InnoDB and MyISAM tables
@@ -261,7 +261,7 @@ class Command(BaseCommand):
             description=data['description'],
             data=json.dumps(data)
           )
-      except Exception, e:
+      except Exception as e:
         LOG.exception("Failed to create sample Spark job document: %s" % e)
         # Just to be sure we delete Doc2 object incase of exception.
         # Possible when there are mixed InnoDB and MyISAM tables
@@ -312,7 +312,7 @@ class Command(BaseCommand):
             description=data['description'],
             data=json.dumps(data)
           )
-      except Exception, e:
+      except Exception as e:
         LOG.exception("Failed to create sample PySpark job document: %s" % e)
         # Just to be sure we delete Doc2 object incase of exception.
         # Possible when there are mixed InnoDB and MyISAM tables
@@ -363,44 +363,23 @@ class Command(BaseCommand):
     LOG.info(_("Installing examples..."))
 
     if ENABLE_V2.get():
-      management.call_command('loaddata', 'initial_oozie_examples.json', verbosity=2)
+      with transaction.atomic():
+        management.call_command('loaddata', 'initial_oozie_examples.json', verbosity=2, commit=False)
 
-    if IS_HUE_4.get():
-      # Install editor oozie examples without doc1 link
-      LOG.info("Using Hue 4, will install oozie editor samples.")
+    # Install editor oozie examples without doc1 link
+    LOG.info("Using Hue 4, will install oozie editor samples.")
 
-      example_jobs = []
-      example_jobs.append(self._install_mapreduce_example())
-      example_jobs.append(self._install_java_example())
-      example_jobs.append(self._install_spark_example())
-      example_jobs.append(self._install_pyspark_example())
+    example_jobs = []
+    example_jobs.append(self._install_mapreduce_example())
+    example_jobs.append(self._install_java_example())
+    example_jobs.append(self._install_spark_example())
+    example_jobs.append(self._install_pyspark_example())
 
-      # If documents exist but have been trashed, recover from Trash
-      for doc in example_jobs:
-        if doc is not None and doc.parent_directory != examples_dir:
-          doc.parent_directory = examples_dir
-          doc.save()
-
-    elif USE_NEW_EDITOR.get():
-      # Install as link-workflow doc2 to old Job Designs
-      docs = Document.objects.get_docs(self.user, Workflow).filter(owner=self.user)
-      for doc in docs:
-        if doc.content_object:
-          data = doc.content_object.data_dict
-          data.update({'content_type': doc.content_type.model, 'object_id': doc.object_id})
-          data = json.dumps(data)
-
-          # Don't overwrite
-          doc2, created = Document2.objects.get_or_create(
-            owner=self.user,
-            parent_directory=examples_dir,
-            name=doc.name,
-            type='link-workflow',
-            description=doc.description,
-            data=data
-          )
-
-          LOG.info('Successfully installed sample link to jobsub: %s' % (doc2.name,))
+    # If documents exist but have been trashed, recover from Trash
+    for doc in example_jobs:
+      if doc is not None and doc.parent_directory != examples_dir:
+        doc.parent_directory = examples_dir
+        doc.save()
 
     # Share oozie examples with default group
     oozie_examples = Document2.objects.filter(
@@ -410,7 +389,3 @@ class Command(BaseCommand):
     )
     oozie_examples.update(parent_directory=examples_dir)
     examples_dir.share(self.user, Document2Permission.READ_PERM, groups=[get_default_user_group()])
-
-    if not IS_HUE_4.get():
-      self.install_examples()
-      Document.objects.sync()

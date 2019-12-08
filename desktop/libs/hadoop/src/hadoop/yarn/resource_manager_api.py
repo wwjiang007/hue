@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import json
 import logging
 import posixpath
@@ -129,8 +130,11 @@ class ResourceManagerApi(object):
     return self._execute(self._root.get, 'cluster/apps/%(app_id)s/appattempts' % {'app_id': app_id}, params=params, headers={'Accept': _JSON_CONTENT_TYPE})
 
   def appattempts_attempt(self, app_id, attempt_id):
-    params = self._get_params()
-    return self._execute(self._root.get, 'cluster/apps/%(app_id)s/appattempts/%(attempt_id)s' % {'app_id': app_id, 'attempt_id': attempt_id}, params=params, headers={'Accept': _JSON_CONTENT_TYPE})
+    attempts = self.appattempts(app_id)
+    for attempt in attempts['appAttempts']['appAttempt']:
+      if attempt['id'] == attempt_id or attempt.get('appAttemptId'):
+        return attempt
+    raise PopupException('Application {} does not have application attempt with id {}'.format(app_id, attempt_id))
 
   def kill(self, app_id):
     data = {'state': 'KILLED'}
@@ -166,6 +170,6 @@ class ResourceManagerApi(object):
     response = None
     try:
       response = function(*args, **kwargs)
-    except Exception, e:
+    except Exception as e:
       raise PopupException(_('YARN RM returned a failed response: %s') % e)
     return response

@@ -16,12 +16,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import json
 
 from nose.tools import assert_equal, assert_false, assert_true
-from django.contrib.auth.models import User, Group
 
 from desktop.lib.django_test_util import make_logged_in_client
+
+from useradmin.models import User, Group
 
 
 class TestUseradminApi(object):

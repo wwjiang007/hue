@@ -15,24 +15,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import datetime
 from nose.tools import assert_true, assert_false, assert_equal
 
 from django_auth_ldap import backend as django_auth_ldap_backend
 from django.conf import settings
-from django.contrib.auth.models import User, Group
 from django.test.client import Client
 
 from hadoop.test_base import PseudoHdfsTestBase
 from hadoop import pseudo_hdfs4
 from useradmin import ldap_access
-from useradmin.models import get_default_user_group
+from useradmin.models import get_default_user_group, User, Group
 from useradmin.tests import LdapTestConnection
 from useradmin.views import import_ldap_groups
 
 from desktop import conf, middleware
 from desktop.auth import backend
-from desktop.conf import is_hue4
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.test_utils import add_to_group
 
@@ -44,7 +43,7 @@ def get_mocked_config():
   }}
 
 class TestLoginWithHadoop(PseudoHdfsTestBase):
-
+  integration = True
   reset = []
   test_username = 'test_login_with_hadoop'
 
@@ -65,6 +64,7 @@ class TestLoginWithHadoop(PseudoHdfsTestBase):
     self.c = Client()
 
     self.reset.append( conf.AUTH.BACKEND.set_for_testing(['desktop.auth.backend.AllowFirstUserDjangoBackend']) )
+    self.reset.append(conf.LDAP.SYNC_GROUPS_ON_LOGIN.set_for_testing(False))
 
   def tearDown(self):
     User.objects.all().delete()
@@ -72,7 +72,7 @@ class TestLoginWithHadoop(PseudoHdfsTestBase):
     for finish in self.reset:
       finish()
 
-    if self.fs.exists("/user/%s" % self.test_username):
+    if self.cluster.fs.do_as_user(self.test_username, self.cluster.fs.exists, "/user/%s" % self.test_username):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/%s" % self.test_username)
 
   def test_login(self):
@@ -82,24 +82,21 @@ class TestLoginWithHadoop(PseudoHdfsTestBase):
 
     response = self.c.post('/hue/accounts/login/', dict(username=self.test_username, password="foo"))
     assert_equal(302, response.status_code, "Expected ok redirect status.")
-    assert_true(self.fs.exists("/user/%s" % self.test_username))
-
-    response = self.c.get('/hue/accounts/login/')
-    assert_equal(200, response.status_code, "Expected ok status.")
-    assert_false(response.context[0]['first_login_ever'])
+    assert_equal(response.url, "/")
+    assert_true(self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username))
 
   def test_login_old(self):
     response = self.c.get('/accounts/login/')
     assert_equal(200, response.status_code, "Expected ok status.")
-    assert_true(response.context['first_login_ever'])
+    assert_true(response.context[0]['first_login_ever'])
 
     response = self.c.post('/accounts/login/', dict(username=self.test_username, password="foo"), follow=True)
     assert_equal(200, response.status_code, "Expected ok status.")
-    assert_true(self.fs.exists("/user/%s" % self.test_username))
+    assert_true(self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username))
 
     response = self.c.get('/accounts/login/')
-    assert_equal(200, response.status_code, "Expected ok status.")
-    assert_false(response.context['first_login_ever'])
+    assert_equal(302, response.status_code, "Expected ok redirect status.")
+    assert_equal(response.url, "/")
 
   def test_login_home_creation_failure(self):
     response = self.c.get('/hue/accounts/login/')
@@ -118,7 +115,7 @@ class TestLoginWithHadoop(PseudoHdfsTestBase):
       }, follow=True)
 
     assert_equal(200, response.status_code, "Expected ok status.")
-    assert_true('/beeswax' in response.content, response.content)
+    assert_true('/about' in response.content, response.content)
     # Custom login process should not do 'http-equiv="refresh"' but call the correct view
     # 'Could not create home directory.' won't show up because the messages are consumed before
 
@@ -184,6 +181,7 @@ class TestLdapLogin(PseudoHdfsTestBase):
     self.c = Client()
     self.reset.append( conf.AUTH.BACKEND.set_for_testing(['desktop.auth.backend.LdapBackend']) )
     self.reset.append(conf.LDAP.LDAP_URL.set_for_testing('does not matter'))
+    self.reset.append(conf.LDAP.SYNC_GROUPS_ON_LOGIN.set_for_testing(False))
 
   def tearDown(self):
     User.objects.all().delete()
@@ -191,10 +189,10 @@ class TestLdapLogin(PseudoHdfsTestBase):
     for finish in self.reset:
       finish()
 
-    if self.fs.exists("/user/%s" % self.test_username):
+    if self.cluster.fs.do_as_user(self.test_username, self.cluster.fs.exists, "/user/%s" % self.test_username):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/%s" % self.test_username)
 
-    if self.fs.exists("/user/curly"):
+    if self.cluster.fs.do_as_user("curly", self.cluster.fs.exists, "/user/curly"):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/curly")
 
   def test_login(self):
@@ -207,12 +205,10 @@ class TestLdapLogin(PseudoHdfsTestBase):
         'password': "ldap1",
         'server': "LDAP"
     })
-    assert_equal(302, response.status_code, "Expected ok redirect status.")
-    assert_true(self.fs.exists("/user/%s" % self.test_username))
 
-    response = self.c.get('/hue/accounts/login/')
-    assert_equal(200, response.status_code, "Expected ok status.")
-    assert_false(response.context[0]['first_login_ever'])
+    assert_equal(302, response.status_code, "Expected ok redirect status.")
+    assert_equal(response.url, "/")
+    assert_true(self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username))
 
   def test_login_failure_for_bad_username(self):
     self.reset.append(conf.LDAP.LDAP_SERVERS.set_for_testing(get_mocked_config()))
@@ -273,7 +269,7 @@ class TestLdapLogin(PseudoHdfsTestBase):
     # Create home directory as a file in order to fail in the home creation later
     cluster = pseudo_hdfs4.shared_cluster()
     fs = cluster.fs
-    assert_false(cluster.fs.exists("/user/%s" % self.test_username))
+    assert_false(self.cluster.fs.do_as_user(self.test_username, cluster.fs.exists, "/user/%s" % self.test_username))
     fs.do_as_superuser(fs.create, "/user/%s" % self.test_username)
 
     response = self.c.post('/hue/accounts/login/', {
@@ -282,7 +278,7 @@ class TestLdapLogin(PseudoHdfsTestBase):
         'server': "LDAP"
     }, follow=True)
     assert_equal(200, response.status_code, "Expected ok status.")
-    assert_true('/beeswax' in response.content, response.content)
+    assert_true('/about' in response.content, response.content)
     # Custom login process should not do 'http-equiv="refresh"' but call the correct view
     # 'Could not create home directory.' won't show up because the messages are consumed before
 
@@ -407,10 +403,10 @@ class TestRemoteUserLogin(PseudoHdfsTestBase):
 
     User.objects.all().delete()
 
-    if self.fs.exists("/user/%s" % self.test_username):
+    if self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/%s" % self.test_username)
 
-    if self.fs.exists("/user/%s_%s" % (self.test_username, '2')):
+    if self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s_%s" % (self.test_username, '2')):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/%s_%s" % (self.test_username, '2'))
 
   def test_normal(self):
@@ -496,7 +492,7 @@ class TestRemoteUserLogin(PseudoHdfsTestBase):
 
 
 class TestMultipleBackendLogin(PseudoHdfsTestBase):
-
+  integration = True
   reset = []
   test_username = "test_multiple_login"
 
@@ -536,7 +532,7 @@ class TestMultipleBackendLogin(PseudoHdfsTestBase):
     for finish in self.reset:
       finish()
 
-    if self.fs.exists("/user/%s" % self.test_username):
+    if self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/%s" % self.test_username)
 
   def test_login_with_ldap(self):
@@ -559,10 +555,11 @@ class TestMultipleBackendLogin(PseudoHdfsTestBase):
 
     response = self.c.post('/hue/accounts/login/', dict(username=self.test_username, password="foo", server="LDAP"))
     assert_equal(302, response.status_code, "Expected ok redirect status.")
-    assert_true(self.fs.exists("/user/%s" % self.test_username))
+    assert_true(self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username))
 
 
 class TestMultipleBackendLoginNoHadoop(object):
+  integration = True
   reset = []
   test_username = "test_mlogin_no_hadoop"
 
@@ -613,10 +610,7 @@ class TestMultipleBackendLoginNoHadoop(object):
         'server': "Local"
     })
     assert_equal(302, response.status_code, "Expected ok redirect status.")
-
-    response = self.c.get('/hue/accounts/login/')
-    assert_equal(200, response.status_code, "Expected ok status.")
-    assert_false(response.context[0]['first_login_ever'])
+    assert_equal(response.url, "/")
 
     self.c.get('/accounts/logout')
 
@@ -626,6 +620,7 @@ class TestMultipleBackendLoginNoHadoop(object):
         'server': "LDAP"
     })
     assert_equal(302, response.status_code, "Expected ok redirect status.")
+    assert_equal(response.url, "/")
 
 
 class TestLogin(PseudoHdfsTestBase):
@@ -658,7 +653,7 @@ class TestLogin(PseudoHdfsTestBase):
 
     User.objects.all().delete()
 
-    if self.fs.exists("/user/%s" % self.test_username):
+    if self.cluster.fs.do_as_user(self.test_username, self.fs.exists, "/user/%s" % self.test_username):
       self.cluster.fs.do_as_superuser(self.cluster.fs.rmtree, "/user/%s" % self.test_username)
 
   def test_bad_first_user(self):
@@ -679,10 +674,7 @@ class TestLogin(PseudoHdfsTestBase):
     client.get('/accounts/logout')
     # Login
     response = client.post('/hue/accounts/login/', dict(username=self.test_username, password="test"), follow=True)
-    if is_hue4():
-      template = 'hue.mako'
-    else:
-      template = 'admin_wizard.mako'
+    template = 'hue.mako'
     assert_true(any([template in _template.filename for _template in response.templates]), response.content) # Go to superuser wizard
 
   def test_login_expiration(self):

@@ -17,15 +17,18 @@
 */
 @import (reference) "cui/colors.less";
 @import (reference) "hue-mixins.less";
-
+@import "components/hue-app-switcher.less";
 @import "components/hue-breadcrumbs.less";
 @import "components/hue-catalog-entries-table.less";
 @import "components/hue-demi-modal.less";
+@import "components/hue-sidebar.less";
+@import "components/hue-execution-analysis.less";
 @import "components/hue-filechooser.less";
 @import "components/hue-gridster.less";
 @import "components/hue-inputautocomplete.less";
 @import "components/hue-nav-properties.less";
 @import "components/hue-notify.less";
+@import "components/hue-performance-graph.less";
 @import "components/hue-popover.less";
 @import "components/hue-qq-upload.less";
 @import "components/hue-query-builder.less";
@@ -36,11 +39,13 @@
 @import "components/hue-selector.less";
 @import "components/hue-shepherd.less";
 @import "components/hue-simple-ace.less";
+@import "components/hue-snippet-editor-actions.less";
+@import "components/hue-snippet-execute-actions.less";
 @import "components/hue-spinner.less";
 @import "components/hue-tables.less";
 @import "components/hue-wizard.less";
 @import "hue-helpers.less";
-
+@import "hue-c3-overrides.less";
 
 ::-webkit-scrollbar {
   width: 9px;
@@ -80,10 +85,12 @@ input[type='password']::-ms-reveal {
   padding-left: 0;
   color: @hue-primary-color-dark;
   cursor: pointer;
+
   .favorite-app {
     opacity: 0;
     .hue-linear-transition(opacity);
   }
+
   &:hover {
     .favorite-app {
       opacity: 1;
@@ -110,10 +117,11 @@ input[type='password']::-ms-reveal {
   color: @hue-primary-color-dark !important;
   padding: 0 !important;
   border: none !important;
-  max-width: none!important;
+  max-width: none !important;
 }
 
-.app-header a:focus, .app-header a:hover {
+.app-header a:focus,
+.app-header a:hover {
   color: @hue-primary-color-dark !important;
 }
 
@@ -130,14 +138,14 @@ input[type='password']::-ms-reveal {
   text-align: center !important;
 }
 
-.nowrap, .no-wrap {
+.nowrap,
+.no-wrap {
   white-space: nowrap;
 }
 
 .no-padding {
   padding: 0;
 }
-
 
 // Hue Checkbox
 
@@ -165,9 +173,8 @@ input[type='password']::-ms-reveal {
   }
 
   &.hide {
-    display: none!important;
+    display: none !important;
   }
-
 }
 
 .hueCheckboxText {
@@ -196,9 +203,11 @@ input[type='password']::-ms-reveal {
   height: 1em !important; //d3 conflict
   fill: currentColor;
   margin-bottom: 0.2em;
+
   &.hi-fw {
     width: 1.28571429em !important;
   }
+
   &.hi-bigger {
     height: 1.1em !important;
   }
@@ -233,30 +242,106 @@ input[type='password']::-ms-reveal {
   border-radius: 0 !important;
 }
 
-.hue-ace-location {
-  position: absolute;
-  background-color: @hue-primary-color-light;
-  border: 1px solid @hue-primary-color-light;
-  border-radius: 1px;
-  margin-left: -1px;
-  margin-top: -1px;
-}
-
-.ace_gutter-cell {
-  border-right: 1px solid transparent;
-  &.ace-active-gutter-decoration {
-    background-color: @hue-primary-color-light !important;
-    border-right: 1px solid @hue-primary-color-dark;
-  }
-  &.ace_error {
-    background-color: @cui-pink-010 !important;
-    border-right: 1px solid @cui-red-700;
-    border-left: none!important;
-  }
-}
-
 .ace-hue {
+  .ace_gutter-cell {
+    border-right: 1px solid transparent;
+
+    &.ace-active-gutter-decoration {
+      background-color: @hue-primary-color-light;
+      border-right: 1px solid @hue-primary-color-dark;
+    }
+
+    &.ace-executing-gutter-decoration {
+      background-color: @hue-primary-color-light;
+      border-right: 1px solid @hue-primary-color-dark;
+      .animation(execute-pulse 2s infinite ease-in-out);
+    }
+
+    .keyframes(execute-pulse, {
+      0% { background-color: rgba(0, 140, 255, 0.1); }
+      50% {
+        background-color: rgba(0, 140, 255, 0.4);
+        color: #505050;
+      }
+      100% { background-color: rgba(0, 140, 255, 0.1); }
+    });
+
+    &.ace-failed-gutter-decoration {
+      background-color: @cui-pink-010;
+      border-right: 1px solid @cui-red-700;
+    }
+
+    &.ace-completed-gutter-decoration {
+      background-color: @cui-green-050;
+      border-right: 1px solid @cui-green-400;
+    }
+
+    &.ace_error {
+      background-color: @cui-pink-010;
+      border-right: 1px solid @cui-red-700;
+      border-left: none;
+    }
+  }
+
+  .hue-ace-location {
+    position: absolute;
+    background-color: @hue-primary-color-light;
+    border: 1px solid @hue-primary-color-light;
+    border-radius: 1px;
+    margin-left: -1px;
+    margin-top: -1px;
+  }
+
   .ace_marker-layer {
+    .ace-failed-marker {
+      position: absolute;
+      width: 100% !important;
+      margin-left: -3px;
+    }
+
+    .ace-failed-marker,
+    .ace_error-line {
+      background-color: @cui-pink-050 !important;
+      opacity: 0.5;
+      z-index: 6;
+    }
+  }
+}
+
+.ace-hue-dark {
+  .ace_gutter-cell {
+    border-right: 1px solid transparent;
+
+    &.ace-active-gutter-decoration {
+      background-color: @cui-blue-gray-700;
+      color: @cui-blue-gray-100;
+      border-right: 1px solid @cui-blue-gray-600;
+    }
+
+    &.ace_error {
+      background-color: @cui-pink-010;
+      border-right: 1px solid @cui-red-700;
+      border-left: none;
+    }
+  }
+
+  .hue-ace-location {
+    position: absolute;
+    background-color: @cui-blue-gray-700;
+    border: 1px solid @cui-blue-gray-700;
+    border-radius: 1px;
+    margin-left: -1px;
+    margin-top: -1px;
+  }
+
+  .ace_marker-layer {
+    .ace-failed-marker {
+      position: absolute;
+      width: 100% !important;
+      margin-left: -3px;
+    }
+
+    .ace-failed-marker,
     .ace_error-line {
       background-color: @cui-pink-050 !important;
       opacity: 0.5;
@@ -277,6 +362,7 @@ input[type='password']::-ms-reveal {
     margin-left: 15px;
     vertical-align: text-top;
   }
+
   .config-property {
     display: inline !important;
   }
@@ -319,13 +405,13 @@ input[type='password']::-ms-reveal {
 }
 
 .dockable {
-  background-color: #FFF;
+  background-color: @cui-white;
   z-index: 1000;
   padding-bottom: 2px;
 }
 
 .pointer {
- cursor: pointer!important;
+  cursor: pointer !important;
 }
 
 .actionbar-creation {
@@ -341,12 +427,15 @@ input[type='password']::-ms-reveal {
   width: 8px;
   height: 8px;
   display: inline-block;
+
   &.green {
     background-color: @cui-green;
   }
+
   &.orange {
-    background-color: @cui-orange;
+    background-color: @cui-orange-200;
   }
+
   &.red {
     background-color: @cui-red;
   }
@@ -354,66 +443,109 @@ input[type='password']::-ms-reveal {
 
 .status-border-container {
   tr {
-    border-left: 3px solid @cui-gray-300;
+    border-left: 4px solid @cui-gray-300;
   }
 }
 
 .status-border {
   &.completed {
-    border-color: @cui-green!important;
+    background-color: @cui-white;
+    border-color: @cui-green !important;
+
+    .job-status-label {
+      background-color: @cui-green !important;
+    }
   }
+
   &.running {
-    border-color: @cui-orange!important;
+    background-color: @cui-white;
+    border-color: @cui-orange-200 !important;
+
+    .job-status-label {
+      background-color: @cui-orange-200 !important;
+    }
   }
+
   &.failed {
-    border-color: @cui-red!important;
+    background-color: @cui-white;
+    border-color: @cui-red !important;
+
+    .job-status-label {
+      background-color: @cui-red !important;
+    }
+  }
+
+  &.info {
+    > td {
+      background-color: @cui-white !important;
+    }
+
+    border-color: @hue-primary-color-dark !important;
+
+    .job-status-label {
+      background-color: @hue-primary-color-dark !important;
+    }
   }
 }
 
 .status-background {
   &.completed {
-    background-color: @cui-green!important;
+    background-color: @cui-green !important;
   }
+
   &.running {
-    background-color: @cui-orange!important;
+    background-color: @cui-orange-200 !important;
   }
+
   &.failed {
-    background-color: @cui-red!important;
+    background-color: @cui-red !important;
+  }
+
+  &.info {
+    background-color: @hue-primary-color-dark !important;
   }
 }
 
 .status-content {
   &.completed {
-    color: @cui-green!important;
+    color: @cui-green !important;
   }
+
   &.running {
-    color: @cui-orange!important;
+    color: @cui-orange-200 !important;
   }
+
   &.failed {
-    color: @cui-red!important;
+    color: @cui-red !important;
+  }
+
+  &.info {
+    color: @hue-primary-color-dark !important;
   }
 }
-
 
 .blue,
 .card-heading-blue {
-  color: @hue-primary-color-dark!important;
+  color: @hue-primary-color-dark !important;
 }
 
 .red {
-  color: @cui-red-400!important;
+  color: @cui-red-400 !important;
 }
 
 #ace_settingsmenu {
   width: 350px;
+
   label {
     display: inline-block;
     height: 31px;
     line-height: 31px;
   }
+
   input {
     margin-bottom: 0;
   }
+
   input[type='checkbox'] {
     margin-right: 2px;
     margin-top: 10px;
@@ -423,6 +555,7 @@ input[type='password']::-ms-reveal {
 ul.errorlist {
   list-style: none outside none;
   margin: 0;
+
   li {
     color: @cui-red-700;
     padding: 2px;
@@ -433,15 +566,18 @@ ul.errorlist {
 
 .mega-popover {
   max-width: 1200px;
+
   .content {
     height: 300px;
     overflow-y: scroll;
   }
+
   .popover-content {
     min-height: 360px;
     min-width: 440px;
     max-width: 660px;
   }
+
   input[type="text"] {
     border-radius: 20px;
     margin: 0;
@@ -462,7 +598,6 @@ ul.errorlist {
   }
 
   .dropdown-menu {
-    min-width: 190px;
     max-width: 250px;
     min-height: 34px;
     max-height: 200px;
@@ -472,6 +607,16 @@ ul.errorlist {
     .hue-inner-drop-down {
       overflow-x: hidden;
     }
+  }
+}
+
+.hue-drop-down-container-searchable {
+  .dropdown-menu {
+    min-width: 190px;
+  }
+
+  .hue-inner-drop-down > li {
+    min-width: 170px;
   }
 }
 
@@ -486,10 +631,17 @@ ul.errorlist {
   padding: 1px !important;
   padding-left: 4px !important;
   font-size: 12px !important;
-  border: 1px solid rgba(0,0,0,0.2) !important;
+  border: 1px solid rgba(0, 0, 0, 0.2) !important;
   border-radius: 2px !important;
   box-shadow: none !important;
   margin-left: -1px;
+}
+
+.hue-drop-down-selected {
+  display: inline-block;
+  max-width: 192px; // Same as text search input when drop down is open
+  vertical-align: bottom;
+  .nowrap-ellipsis();
 }
 
 .jHueHdfsTree .content {
@@ -554,8 +706,10 @@ ul.errorlist {
   white-space: initial !important;
 }
 
-.nav-pills-border, .nav-tabs-border {
+.nav-pills-border,
+.nav-tabs-border {
   border-bottom: 1px solid @cui-default-border-color;
+
   li.active {
     margin-bottom: -1px;
   }
@@ -569,6 +723,7 @@ ul.errorlist {
   margin-top: 50px;
   color: @cui-gray-500;
   line-height: 60px;
+
   i {
     font-size: 100px;
   }
@@ -596,19 +751,19 @@ ul.errorlist {
   .nowrap-ellipsis();
 }
 
-.inline-autocomplete-container {
+.inline-autocomp-container {
   position: relative;
   border-radius: 2px;
   border: 1px solid @cui-gray-300;
   background-color: @cui-white;
 
   > div {
-    position:absolute;
+    position: absolute;
     left: 0;
     right: 0;
     height: 30px;
 
-    .inline-autocomplete-magnify-icon {
+    .inline-autocomp-magnify-icon {
       position: absolute;
       left: 10px;
       top: 7px;
@@ -628,15 +783,15 @@ ul.errorlist {
       line-height: 15px;
       background-color: transparent;
 
-      &.inline-autocomplete-magnify-input {
+      &.inline-autocomp-magnify-input {
         padding-left: 35px;
       }
 
-      &.inline-autocomplete-input {
+      &.inline-autocomp-input {
         z-index: 2;
       }
 
-      &.inline-autocomplete-autocomplete {
+      &.inline-autocomp-autocomp {
         color: @cui-gray-500;
         outline: none;
         z-index: 1;
@@ -645,8 +800,8 @@ ul.errorlist {
   }
 }
 
-.hue-autocomplete-item:hover > a,
-.hue-autocomplete-item:focus > a {
+.hue-autocomp-item:hover > a,
+.hue-autocomp-item:focus > a {
   background-color: @cui-blue-700 !important;
 }
 
@@ -656,7 +811,7 @@ ul.errorlist {
   overflow: auto;
 }
 
-.hue-autocomplete-item {
+.hue-autocomp-item {
   a {
     display: block;
     clear: both;
@@ -666,13 +821,22 @@ ul.errorlist {
     color: @cui-gray-800;
     white-space: nowrap;
     padding: 6px 20px !important;
-    span{
+
+    span {
       font-size: 15px;
     }
   }
+
   div.no-match {
     width: 200px;
     height: 25px;
-    font-size : 15px
+    font-size: 15px;
   }
+}
+
+.hue-modal-search {
+  float: right;
+  margin-right: 30px;
+  margin-top: 15px;
+  margin-bottom: 0;
 }

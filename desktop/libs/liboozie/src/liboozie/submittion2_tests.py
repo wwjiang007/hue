@@ -15,9 +15,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import print_function
+from builtins import object
 import logging
 
-from django.contrib.auth.models import User
 from nose.plugins.attrib import attr
 from nose.tools import assert_equal, assert_true, assert_not_equal, assert_raises
 
@@ -29,6 +30,7 @@ from hadoop.conf import HDFS_CLUSTERS, MR_CLUSTERS, YARN_CLUSTERS
 from desktop.lib.test_utils import clear_sys_caches
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.exceptions_renderable import PopupException
+from useradmin.models import User
 from useradmin.views import ensure_home_directory
 from oozie.models2 import Node
 from oozie.tests import OozieMockBase
@@ -42,6 +44,7 @@ from liboozie.submission2 import Submission
 LOG = logging.getLogger(__name__)
 
 
+@attr('integration')
 @attr('requires_hadoop')
 def test_copy_files():
   cluster = pseudo_hdfs4.shared_cluster()
@@ -74,7 +77,7 @@ def test_copy_files():
     cluster.fs.create(deployment_dir + '/' + jar_5)
     cluster.fs.create(deployment_dir + '/' + jar_6)
 
-    class MockJob():
+    class MockJob(object):
       XML_FILE_NAME = 'workflow.xml'
 
       def __init__(self):
@@ -115,13 +118,13 @@ def test_copy_files():
       assert_true(jar_2 in submission.properties['oozie.libpath'])
       assert_true(jar_3 in submission.properties['oozie.libpath'])
       assert_true(jar_4 in submission.properties['oozie.libpath'])
-      print deployment_dir + '/' + jar_5
+      print(deployment_dir + '/' + jar_5)
       assert_true((deployment_dir + '/' + jar_5) in submission.properties['oozie.libpath'], submission.properties['oozie.libpath'])
       assert_true((deployment_dir + '/' + jar_6) in submission.properties['oozie.libpath'], submission.properties['oozie.libpath'])
     else:
       list_dir_workspace = cluster.fs.listdir(deployment_dir)
       list_dir_deployement = cluster.fs.listdir(external_deployment_dir)
-  
+
       # All destinations there
       assert_true(cluster.fs.exists(deployment_dir + '/udf1.jar'), list_dir_workspace)
       assert_true(cluster.fs.exists(deployment_dir + '/udf2.jar'), list_dir_workspace)
@@ -129,23 +132,23 @@ def test_copy_files():
       assert_true(cluster.fs.exists(deployment_dir + '/udf4.jar'), list_dir_workspace)
       assert_true(cluster.fs.exists(deployment_dir + '/udf5.jar'), list_dir_workspace)
       assert_true(cluster.fs.exists(deployment_dir + '/udf6.jar'), list_dir_workspace)
-  
+
       assert_true(cluster.fs.exists(external_deployment_dir + '/udf1.jar'), list_dir_deployement)
       assert_true(cluster.fs.exists(external_deployment_dir + '/udf2.jar'), list_dir_deployement)
       assert_true(cluster.fs.exists(external_deployment_dir + '/udf3.jar'), list_dir_deployement)
       assert_true(cluster.fs.exists(external_deployment_dir + '/udf4.jar'), list_dir_deployement)
       assert_true(cluster.fs.exists(external_deployment_dir + '/udf5.jar'), list_dir_deployement)
       assert_true(cluster.fs.exists(external_deployment_dir + '/udf6.jar'), list_dir_deployement)
-  
+
       stats_udf1 = cluster.fs.stats(deployment_dir + '/udf1.jar')
       stats_udf2 = cluster.fs.stats(deployment_dir + '/udf2.jar')
       stats_udf3 = cluster.fs.stats(deployment_dir + '/udf3.jar')
       stats_udf4 = cluster.fs.stats(deployment_dir + '/udf4.jar')
       stats_udf5 = cluster.fs.stats(deployment_dir + '/udf5.jar')
       stats_udf6 = cluster.fs.stats(deployment_dir + '/udf6.jar')
-  
+
       submission._copy_files('%s/workspace' % prefix, "<xml>My XML</xml>", {'prop1': 'val1'})
-  
+
       assert_not_equal(stats_udf1['fileId'], cluster.fs.stats(deployment_dir + '/udf1.jar')['fileId'])
       assert_not_equal(stats_udf2['fileId'], cluster.fs.stats(deployment_dir + '/udf2.jar')['fileId'])
       assert_not_equal(stats_udf3['fileId'], cluster.fs.stats(deployment_dir + '/udf3.jar')['fileId'])
@@ -164,14 +167,14 @@ def test_copy_files():
       LOG.exception('failed to remove %s' % prefix)
 
 
-class MockFs():
+class MockFs(object):
   def __init__(self, logical_name=None):
 
     self.fs_defaultfs = 'hdfs://curacao:8020'
     self.logical_name = logical_name if logical_name else ''
 
 
-class MockJt():
+class MockJt(object):
   def __init__(self, logical_name=None):
 
     self.logical_name = logical_name if logical_name else ''
@@ -319,7 +322,7 @@ oozie.wf.application.path=${nameNode}/user/${user.name}/${examplesRoot}/apps/pig
 
   def test_update_credentials_from_hive_action(self):
 
-    class TestJob():
+    class TestJob(object):
       XML_FILE_NAME = 'workflow.xml'
 
       def __init__(self):
@@ -370,7 +373,7 @@ oozie.wf.application.path=${nameNode}/user/${user.name}/${examplesRoot}/apps/pig
 
   def test_update_credentials_from_hive_action_when_jdbc_url_is_variable(self):
 
-    class TestJob():
+    class TestJob(object):
       XML_FILE_NAME = 'workflow.xml'
 
       def __init__(self):
@@ -407,3 +410,50 @@ oozie.wf.application.path=${nameNode}/user/${user.name}/${examplesRoot}/apps/pig
     finally:
       for f in finish:
         f()
+
+  def test_generate_altus_action_start_cluster(self):
+
+    class TestJob(object):
+      XML_FILE_NAME = 'workflow.xml'
+
+      def __init__(self):
+        self.deployment_dir = '/tmp/test'
+        self.nodes = [
+            Node({'id': '1', 'type': 'hive-document', 'properties': {'jdbc_url': u"${wf:actionData('shell-31b5')['hiveserver']}", 'password': u'test'}})
+        ]
+
+    user = User.objects.get(username='test')
+    submission = Submission(user, job=TestJob(), fs=MockFs(logical_name='fsname'), jt=MockJt(logical_name='jtname'))
+
+    command = submission._generate_altus_action_script(
+      service='dataeng',
+      command='listClusters',
+      arguments={},
+      auth_key_id='altus_auth_key_id',
+      auth_key_secret='altus_auth_key_secret'
+    )
+
+    assert_true('''#!/usr/bin/env python
+
+from navoptapi.api_lib import ApiLib
+
+hostname = 'dataengapi.us-west-1.altus.cloudera.com'
+auth_key_id = 'altus_auth_key_id'
+auth_key_secret = \'\'\'altus_auth_key_secret\'\'\'
+
+def _exec(service, command, parameters=None):
+  if parameters is None:
+    parameters = {}
+
+  try:
+    api = ApiLib(service, hostname, auth_key_id, auth_key_secret)
+    resp = api.call_api(command, parameters)
+    return resp.json()
+  except Exception, e:
+    print e
+    raise e
+
+print _exec('dataeng', 'listClusters', {})
+''' in command,
+      command
+    )

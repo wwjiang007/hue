@@ -16,8 +16,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
 import ldap
 
+from django.conf import settings
+from django.urls import reverse
 from nose.plugins.attrib import attr
 from nose.plugins.skip import SkipTest
 from nose.tools import assert_true, assert_equal, assert_false
@@ -25,20 +28,15 @@ from nose.tools import assert_true, assert_equal, assert_false
 import desktop.conf
 from desktop.lib.test_utils import grant_access
 from desktop.lib.django_test_util import make_logged_in_client
-from django.conf import settings
-from django.contrib.auth.models import User, Group
-from django.urls import reverse
-
-from useradmin.models import LdapGroup, UserProfile
-from useradmin.models import get_profile
-
 from hadoop import pseudo_hdfs4
 from hadoop.pseudo_hdfs4 import is_live_cluster
-from views import sync_ldap_users, sync_ldap_groups, import_ldap_users, import_ldap_groups, \
-                  add_ldap_users, add_ldap_groups, sync_ldap_users_groups
 
-import ldap_access
-from tests import BaseUserAdminTests, LdapTestConnection, reset_all_groups, reset_all_users
+from useradmin import ldap_access
+from useradmin.models import LdapGroup, UserProfile
+from useradmin.models import get_profile, User, Group
+from useradmin.views import sync_ldap_users, sync_ldap_groups, import_ldap_users, import_ldap_groups, \
+    add_ldap_users, add_ldap_groups, sync_ldap_users_groups
+from useradmin.tests import BaseUserAdminTests, LdapTestConnection, reset_all_groups, reset_all_users
 
 
 def get_multi_ldap_config():
@@ -400,6 +398,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
         finish()
 
 
+  @attr('integration')
   def test_useradmin_ldap_user_integration(self):
     if is_live_cluster():
       raise SkipTest('HUE-2897: Skipping because the DB may not be case sensitive')
@@ -506,6 +505,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
         finish()
 
 
+  @attr('integration')
   def test_add_ldap_users(self):
     if is_live_cluster():
       raise SkipTest('HUE-2897: Skipping because the DB may not be case sensitive')
@@ -720,6 +720,7 @@ class TestUserAdminLdap(BaseUserAdminTests):
 
 class TestUserAdminLdapWithHadoop(BaseUserAdminTests):
   requires_hadoop = True
+  integration = True
 
   def test_ensure_home_directory_add_ldap_users(self):
     URL = reverse(add_ldap_users)

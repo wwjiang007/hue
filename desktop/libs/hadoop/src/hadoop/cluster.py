@@ -15,27 +15,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import logging
+import os
 
 from django.utils.functional import wraps
 
 from hadoop import conf
 from hadoop.fs import webhdfs, LocalSubFileSystem
 
-from desktop.conf import DEFAULT_USER
+from desktop.conf import DEFAULT_USER, has_connectors
+from desktop.lib.connectors.api import _get_installed_connectors
 from desktop.lib.paths import get_build_dir
 
 
 LOG = logging.getLogger(__name__)
-
 
 FS_CACHE = None
 FS_DEFAULT_NAME = 'default'
 MR_CACHE = None # MR now means YARN
 MR_NAME_CACHE = 'default'
 DEFAULT_USER = DEFAULT_USER.get()
-
 
 
 def rm_ha(funct):
@@ -45,7 +44,7 @@ def rm_ha(funct):
   def decorate(api, *args, **kwargs):
     try:
       return funct(api, *args, **kwargs)
-    except Exception, ex:
+    except Exception as ex:
       ex_message = str(ex)
       if 'Connection refused' in ex_message or 'Connection aborted' in ex_message or 'standby RM' in ex_message:
         LOG.info('Resource Manager not available, trying another RM: %s.' % ex)
@@ -60,10 +59,10 @@ def rm_ha(funct):
   return wraps(funct)(decorate)
 
 
-def get_hdfs(identifier="default"):
+def get_hdfs(identifier="default", user=None):
   global FS_CACHE
   get_all_hdfs()
-  return FS_CACHE[identifier]
+  return FS_CACHE[list(FS_CACHE.keys())[0]] if has_connectors() else FS_CACHE[identifier]
 
 
 def get_defaultfs():
@@ -77,12 +76,20 @@ def get_defaultfs():
 
 def get_all_hdfs():
   global FS_CACHE
-  if FS_CACHE is not None:
+  if FS_CACHE:
     return FS_CACHE
 
   FS_CACHE = {}
-  for identifier in conf.HDFS_CLUSTERS.keys():
-    FS_CACHE[identifier] = _make_filesystem(identifier)
+  if has_connectors():
+    for connector in _get_installed_connectors(category='browsers', dialect='hdfs', interface='rest'):
+      settings = {setting['name']: setting['value'] for setting in connector['settings']}
+      FS_CACHE[connector['name']] = webhdfs.WebHdfs(
+        url=settings['server_url'],
+        fs_defaultfs=settings['default_fs']
+      )
+  else:
+    for identifier in list(conf.HDFS_CLUSTERS.keys()):
+      FS_CACHE[identifier] = _make_filesystem(identifier)
   return FS_CACHE
 
 
@@ -110,7 +117,7 @@ def get_yarn():
   if MR_NAME_CACHE in conf.YARN_CLUSTERS and conf.YARN_CLUSTERS[MR_NAME_CACHE].SUBMIT_TO.get():
     return conf.YARN_CLUSTERS[MR_NAME_CACHE]
 
-  for name in conf.YARN_CLUSTERS.keys():
+  for name in list(conf.YARN_CLUSTERS.keys()):
     yarn = conf.YARN_CLUSTERS[name]
     if yarn.SUBMIT_TO.get():
       return yarn
@@ -123,9 +130,9 @@ def get_next_ha_yarncluster(current_user=None):
   from hadoop.yarn.resource_manager_api import ResourceManagerApi
   global MR_NAME_CACHE
 
-  has_ha = sum([conf.YARN_CLUSTERS[name].SUBMIT_TO.get() for name in conf.YARN_CLUSTERS.keys()]) >= 2
+  has_ha = sum([conf.YARN_CLUSTERS[name].SUBMIT_TO.get() for name in list(conf.YARN_CLUSTERS.keys())]) >= 2
 
-  for name in conf.YARN_CLUSTERS.keys():
+  for name in list(conf.YARN_CLUSTERS.keys()):
     config = conf.YARN_CLUSTERS[name]
     if config.SUBMIT_TO.get():
       rm = ResourceManagerApi(config.RESOURCE_MANAGER_API_URL.get(), config.SECURITY_ENABLED.get(), config.SSL_CERT_CA_VERIFY.get())
@@ -145,7 +152,7 @@ def get_next_ha_yarncluster(current_user=None):
             return (config, rm)
           else:
             LOG.info('RM %s is not RUNNING, skipping it: %s' % (name, cluster_info))
-        except Exception, ex:
+        except Exception as ex:
           LOG.exception('RM %s is not available, skipping it: %s' % (name, ex))
       else:
         return (config, rm)

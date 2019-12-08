@@ -18,8 +18,8 @@ from django.utils.translation import ugettext as _
 from django.template.defaultfilters import escape, escapejs
 
 from desktop import conf
-from desktop.conf import IS_EMBEDDED
 from desktop.lib.i18n import smart_unicode
+from desktop.views import _ko
 
 from beeswax.conf import LIST_PARTITIONS_LIMIT
 from indexer.conf import ENABLE_NEW_INDEXER
@@ -46,7 +46,7 @@ from metadata.conf import has_optimizer, OPTIMIZER
     }
 
     // check for IE document modes
-    if (document.documentMode && document.documentMode < 9){
+    if (document.documentMode && document.documentMode < 9) {
       location.href = "${ url('desktop_views_unsupported') }";
     }
 
@@ -67,7 +67,7 @@ from metadata.conf import has_optimizer, OPTIMIZER
       try {
         mTime = new Date(mTime);
         if (moment(mTime).isValid()) {
-          return moment.utc(mTime).format("L LT");
+          return moment.utc(mTime).local().format("L LT Z"); // [Local Date] [Local Time] [Timezone offset]
         }
       }
       catch (e) {
@@ -86,6 +86,20 @@ from metadata.conf import has_optimizer, OPTIMIZER
       }
     }
 
+
+    var xhrOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function () {
+      if (arguments[1].indexOf(window.HUE_BASE_URL) < 0) {
+        var index = arguments[1].indexOf(window.location.host);
+        if (index >= 0 && window.HUE_BASE_URL.length) { //Host is present in the url when using an html form.
+          index += window.location.host.length;
+            arguments[1] = arguments[1].substring(0, index) + window.HUE_BASE_URL + arguments[1].substring(index);
+        } else {
+          arguments[1] = window.HUE_BASE_URL + arguments[1];
+        }
+      }
+      return xhrOpen.apply(this, arguments);
+    };
     var xhrSend = XMLHttpRequest.prototype.send;
     XMLHttpRequest.prototype.send = function (data) {
       // Add CSRF Token to all XHR Requests
@@ -159,41 +173,6 @@ from metadata.conf import has_optimizer, OPTIMIZER
         delay: 0,
         placement: "bottom"
       });
-
-      % if 'jobbrowser' in apps:
-      if (!IS_HUE_4) {
-        var JB_CHECK_INTERVAL_IN_MILLIS = 30000;
-        var checkJobBrowserStatusIdx = window.setTimeout(checkJobBrowserStatus, 10);
-        var lastJobBrowserRequest = null;
-
-        function checkJobBrowserStatus() {
-          if (lastJobBrowserRequest !== null && lastJobBrowserRequest.readyState < 4) {
-            return;
-          }
-          window.clearTimeout(checkJobBrowserStatusIdx);
-          lastJobBrowserRequest = $.post("/jobbrowser/jobs/", {
-                "format": "json",
-                "state": "running",
-                "user": "${user.username}"
-              },
-              function (data) {
-                if (data != null && data.jobs != null) {
-                  huePubSub.publish('jobbrowser.data', data.jobs);
-                  if (data.jobs.length > 0) {
-                    $("#jobBrowserCount").show().text(data.jobs.length);
-                  } else {
-                    $("#jobBrowserCount").hide();
-                  }
-                }
-                checkJobBrowserStatusIdx = window.setTimeout(checkJobBrowserStatus, JB_CHECK_INTERVAL_IN_MILLIS);
-              }).fail(function () {
-            window.clearTimeout(checkJobBrowserStatusIdx);
-          });
-        }
-
-        huePubSub.subscribe('check.job.browser', checkJobBrowserStatus);
-      }
-      % endif
 
       function openDropdown(which, timeout){
         var _this = which;
@@ -296,30 +275,43 @@ from metadata.conf import has_optimizer, OPTIMIZER
 <div id="rowDetailsModal" class="modal transparent-modal hide" data-backdrop="true" style="width:90%;margin-left:-45%!important;z-index:1071">
   <div class="modal-header">
     <button type="button" class="close" data-dismiss="modal" aria-label="${ _('Close') }"><span aria-hidden="true">&times;</span></button>
+    <input class="input-medium hue-modal-search" type="text" placeholder="${ _('Search...') }">
     <h2 class="modal-title">${_('Row details')}</h2>
   </div>
   <div class="modal-body">
     <table class="table table-condensed">
-
     </table>
   </div>
 </div>
 
+<div id="gistModal" class="modal hide fade">
+  <div class="modal-header">
+    <button type="button" class="close" data-dismiss="modal" aria-label="${ _('Close') }"><span aria-hidden="true">&times;</span></button>
+    <h2 class="modal-title">${ _('Shareable link') }</h2>
+  </div>
+  <div class="modal-body">
+    <div class="row-fluid">
+      <div class="span12">
+        <div class="input-group">
+          <input class="input-xxlarge" onfocus="this.select()" name="gist-link" id="gist-link" type="text" placeholder="${ _('Link') }"/>
+        </div>
+        <div class="input-prepend">
+          <a class="btn gist-link-btn" data-clipboard-target="#gist-link" data-dismiss="modal">${_('Copy')}</a>
+          <button class="add-on muted gist-link-btn" data-clipboard-target="#gist-link">
+            <i class="fa fa-clipboard"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="modal-footer">
+    <a class="btn" data-dismiss="modal">${_('Close')}</a>
+  </div>
+</div>
+
+<div class="clipboard-content"></div>
+
 <script type="text/javascript">
-
-  huePubSub.subscribe('set.hue.version', function (version) {
-    $.post("/desktop/api2/user_preferences/hue_version", {
-      set: version
-    }, function (data) {
-      if (data && data.status == 0) {
-        location.href = version === 3 && '${ conf.DISABLE_HUE_3.get() }' == 'False' ? window.location.pathname.substr(4) + window.location.search : '/hue' + window.location.pathname + window.location.search
-      }
-      else {
-        $.jHueNotify.error("${ _('An error occurred while saving your default Hue preference. Please try again...') }");
-      }
-    });
-  });
-
 
   $(document).ready(function () {
 
@@ -344,10 +336,11 @@ from metadata.conf import has_optimizer, OPTIMIZER
           else {
             value = $el.data('data')[data.idx][colIdx];
           }
-          var link = typeof value == 'string' && value.match(/^https?:\/\//i) ? '<a href="' + escapeOutput(value) + '" target="_blank">' + value + ' <i class="fa fa-external-link"></i></a>' : value;
-          html += '<tr><th width="10%" title="' + $(col).attr("title") + '">' + hueUtils.deXSS($(col).text()) + '</th><td class="multi-line-ellipsis" style="word-break: break-all"><div style="position: relative">' + hueUtils.deXSS(link) + '</div></td></tr>';
+          var link = typeof value == 'string' && value.match(/^https?:\/\//i) ? '<a href="' + hueUtils.escapeOutput(value) + '" target="_blank">' + value + ' <i class="fa fa-external-link"></i></a>' : value;
+          html += '<tr><th width="10%" title="' + $(col).attr("title") + '">' + hueUtils.deXSS($(col).text()) + '</th><td class="multi-line-ellipsis" style="word-break: break-all"><div style="position: relative">' + $('<span>').text(hueUtils.deXSS(link)).html() + '</div></td></tr>';
         }
       });
+      html += '<tr class="hide no-results"><td class="muted" colspan="2">${ _ko('Your search did not return any result.') }</td></tr>';
       $t.html(html);
       $t.find('.multi-line-ellipsis div').each(function(cnt, el){
         multiLineHandlers.push(new MultiLineEllipsisHandler({
@@ -370,6 +363,24 @@ from metadata.conf import has_optimizer, OPTIMIZER
       multiLineHandlers.forEach(function (multiLineEllipsisHandler) {
         multiLineEllipsisHandler.dispose();
       });
+    });
+
+    $('#rowDetailsModal .hue-modal-search').jHueDelayedInput(function () {
+      var $t = $('#rowDetailsModal').find('table');
+      $('#rowDetailsModal .no-results').addClass('hide');
+      $t.find('tr').removeClass('hide');
+      var shown = 0;
+      $t.find('tr').each(function () {
+        if ($(this).text().toLowerCase().indexOf($('#rowDetailsModal .hue-modal-search').val().toLowerCase()) == -1) {
+          $(this).addClass('hide');
+        }
+        else {
+          shown++;
+        }
+      });
+      if (shown === 0) {
+        $('#rowDetailsModal .no-results').removeClass('hide');
+      }
     });
 
     if ($.fn.editableform) {
@@ -418,7 +429,7 @@ from metadata.conf import has_optimizer, OPTIMIZER
         if ($('#login-modal').length > 0 && $('#login-modal').is(':hidden')) {
           $('#login-modal .link-message').hide();
           if (isAutoLogout) {
-            $(HUE_CONTAINER).children(':not(#login-modal)').addClass('blurred');
+            $('body').children(':not(#login-modal)').addClass('blurred');
             $('#login-modal .auto-logged-out').show();
             $('#login-modal').modal({
               backdrop: 'static',
@@ -491,7 +502,7 @@ from metadata.conf import has_optimizer, OPTIMIZER
       resetPrimaryButtonsStatus();
     });
 
-    $(window).unload(function () {
+    $(window).on('beforeunload', function () {
       window.clearInterval(pendingRequestsInterval);
       window.clearTimeout(resetTimeout);
     });
@@ -578,9 +589,12 @@ from metadata.conf import has_optimizer, OPTIMIZER
     };
   }
 
+  $(document).on('showGistModal', (e, data) => {
+    $('#gistModal input[name="gist-link"]').val(data['link']);
+    $('#gistModal').modal('show');
+  });
 
-  %if collect_usage and not IS_EMBEDDED.get():
-
+  % if collect_usage:
     (function(i,s,o,g,r,a,m){i['GoogleAnalyticsObject']=r;i[r]=i[r]||function(){
     (i[r].q=i[r].q||[]).push(arguments)},i[r].l=1*new Date();a=s.createElement(o),
     m=s.getElementsByTagName(o)[0];a.async=1;a.src=g;m.parentNode.insertBefore(a,m)
@@ -595,19 +609,18 @@ from metadata.conf import has_optimizer, OPTIMIZER
     _pathName = _splits[0] + (_splits.length > 1 && $.trim(_splits[1]) != "" ? "/" + _splits[1] : "");
 
     ga('send', 'pageview', {
-      'page': '/remote/${ version }/' + (IS_HUE_4 ? '4/' : '3/') + _pathName
+      'page': '/remote/${ version }/4/' + _pathName
     });
 
     function trackOnGA(path) {
       if (typeof ga != "undefined" && ga != null) {
         ga('set', 'referrer', 'http://gethue.com'); // we force the referrer to prevent leaking sensitive information
         ga('send', 'pageview', {
-          'page': '/remote/${ version }/' + (IS_HUE_4 ? '4/' : '3/') + path
+          'page': '/remote/${ version }/4/' + path
         });
       }
     }
-
-  %endif
+  % endif
 
 </script>
 </%def>

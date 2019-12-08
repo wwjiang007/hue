@@ -19,7 +19,6 @@ import os.path
 
 from django.utils.translation import ugettext as _, ugettext_lazy as _t
 
-from desktop.conf import is_hue4
 from desktop.lib.conf import Config, coerce_bool
 from desktop.lib import paths
 from liboozie.conf import get_oozie_status
@@ -64,7 +63,7 @@ REMOTE_SAMPLE_DIR = Config(
 
 def get_oozie_job_count():
   '''Returns the maximum of jobs fetched by the API depending on the Hue version'''
-  return 100 if is_hue4() else 50
+  return 100
 
 OOZIE_JOBS_COUNT = Config(
   key='oozie_jobs_count',
@@ -97,14 +96,21 @@ ENABLE_OOZIE_BACKEND_FILTERING = Config(
 ENABLE_DOCUMENT_ACTION = Config(
   key="enable_document_action",
   help=_t("Flag to enable the saved Editor queries to be dragged and dropped into a workflow."),
-  type=bool,
+  type=coerce_bool,
   default=True
 )
 
 ENABLE_IMPALA_ACTION = Config(
   key="enable_impala_action",
   help=_t("Flag to enable the Impala action."),
-  type=bool,
+  type=coerce_bool,
+  default=False
+)
+
+ENABLE_ALTUS_ACTION = Config(
+  key="enable_altus_action",
+  help=_t("Flag to enable the Altus action."),
+  type=coerce_bool,
   default=False
 )
 

@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import json
+import logging
 import os
 import subprocess
 
@@ -23,6 +24,7 @@ from django.utils.translation import ugettext_lazy as _t, ugettext as _
 
 from desktop.lib.conf import Config, coerce_bool, coerce_csv, coerce_password_from_script
 
+LOG = logging.getLogger(__name__)
 
 BASEDIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -36,14 +38,15 @@ def xmlsec():
   try:
     proc = subprocess.Popen(['which', 'xmlsec1'], stdout=subprocess.PIPE)
     return proc.stdout.read().strip()
-  except subprocess.CalledProcessError:
+  except Exception as e:
+    LOG.debug("xmlsec: %s" % e)
     return '/usr/local/bin/xmlsec1'
 
 
 def dict_list_map(value):
   if isinstance(value, str):
     d = {}
-    for k, v in json.loads(value).iteritems():
+    for k, v in json.loads(value).items():
       d[k] = (v,)
     return d
   elif isinstance(value, dict):
@@ -142,6 +145,18 @@ AUTHN_REQUESTS_SIGNED = Config(
   type=coerce_bool,
   help=_t("Have Hue initiated authn requests be signed and provide a certificate."))
 
+WANT_RESPONSE_SIGNED = Config(
+  key="want_response_signed",
+  default=False,
+  type=coerce_bool,
+  help=_t("Have Hue initiated authn response be signed."))
+
+WANT_ASSERTIONS_SIGNED = Config(
+  key="want_assertions_signed",
+  default=False,
+  type=coerce_bool,
+  help=_t("Have Hue initiated authn assertions response be signed."))
+
 LOGOUT_REQUESTS_SIGNED = Config(
   key="logout_requests_signed",
   default=False,
@@ -166,6 +181,7 @@ NAME_ID_FORMAT = Config(
   type=str,
   help=_t("Request this NameID format from the server"))
 
+
 def get_key_file_password():
   password = os.environ.get('HUE_SAML_KEY_FILE_PASSWORD')
   if password is not None:
@@ -176,6 +192,7 @@ def get_key_file_password():
     password = KEY_FILE_PASSWORD_SCRIPT.get()
 
   return password
+
 
 def config_validator(user):
   res = []

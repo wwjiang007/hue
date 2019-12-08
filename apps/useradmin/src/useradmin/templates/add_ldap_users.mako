@@ -16,7 +16,6 @@
 <%!
 from desktop.views import commonheader, commonfooter
 from desktop.lib.django_util import extract_field_data
-import urllib
 from django.utils.translation import ugettext as _
 %>
 
@@ -80,6 +79,9 @@ ${ layout.menubar(section='users') }
           huePubSub.publish('open.link', '${ url('useradmin.views.list_users') }');
           $.jHueNotify.info("${ _('User added/synced correctly') }");
         }
+      },
+      error: function (data) {
+        $.jHueNotify.error(data.responseJSON['message']);
       }
     });
     %endif

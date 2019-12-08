@@ -15,17 +15,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import str
 import json
 import logging
 import re
 
-from django.contrib.auth.models import User
 from django.urls import reverse
 from django.db import models
 from django.utils.html import escape
 from django.utils.translation import ugettext_lazy as _t
 
 from libsolr.api import SolrApi
+from useradmin.models import User
 
 from search.conf import SOLR_URL
 
@@ -255,7 +256,7 @@ class Collection(models.Model):
       if self.cores != '{}': # Convert collections from < Hue 3.6
         try:
           self._import_hue_3_5_collections(props, user)
-        except Exception, e:
+        except Exception as e:
           LOG.error('Could not import collection: %s' % e)
 
     if 'layout' not in props:
@@ -364,7 +365,7 @@ class Collection(models.Model):
     schema_fields = SolrApi(SOLR_URL.get(), user).fields(self.name)
     schema_fields = schema_fields['schema']['fields']
 
-    return sorted([self._make_field(field, attributes) for field, attributes in schema_fields.iteritems()])
+    return sorted([self._make_field(field, attributes) for field, attributes in schema_fields.items()])
 
   @property
   def properties_dict(self):

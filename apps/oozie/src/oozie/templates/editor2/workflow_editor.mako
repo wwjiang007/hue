@@ -19,7 +19,7 @@ from django.utils.translation import ugettext as _
 from desktop import conf
 from desktop.views import commonheader, commonfooter, commonshare, _ko
 
-from oozie.conf import ENABLE_DOCUMENT_ACTION, ENABLE_IMPALA_ACTION
+from oozie.conf import ENABLE_DOCUMENT_ACTION, ENABLE_IMPALA_ACTION, ENABLE_ALTUS_ACTION
 %>
 
 <%namespace name="dashboard" file="/common_dashboard.mako" />
@@ -109,10 +109,8 @@ ${ layout.menubar(section='workflows', is_editor=True, pullright=buttons, is_emb
 
 
 <script type="text/javascript">
-  if (window.location.hash != "") {
-    if (window.location.hash.indexOf("workflow") > -1) {
-      location.href = (IS_HUE_4 ? '/hue' : '') + "/oozie/editor/workflow/edit/?" + window.location.hash.substr(1).replace(/(<([^>]+)>)/ig, "");
-    }
+  if (window.location.hash && window.location.hash.indexOf('workflow') !== -1) {
+    location.href = '/hue/oozie/editor/workflow/edit/?' + window.location.hash.substr(1).replace(/(<([^>]+)>)/ig, '');
   }
 </script>
 
@@ -141,10 +139,21 @@ ${ layout.menubar(section='workflows', is_editor=True, pullright=buttons, is_emb
     </ul>
     % endif
   </%def>
+
   <%def name="widgets()">
     % if ENABLE_DOCUMENT_ACTION.get():
+
     <!-- ko if: $root.currentDraggableSection() === 'documents' -->
     <div class="draggable-documents">
+
+    % if ENABLE_ALTUS_ACTION.get():
+    <div data-bind="css: { 'draggable-widget': true },
+                    draggable: {data: draggableAltusAction(), isEnabled: true,
+                    options: {'refreshPositions': true, 'stop': function(){ $root.isDragging(false); }, 'start': function(event, ui){ $root.isDragging(true); $root.currentlyDraggedWidget(draggableAltusAction());}}}"
+         title="${_('Altus Command')}" rel="tooltip" data-placement="top">
+         <a class="draggable-icon"><i class="fa fa-cloud"></i></a>
+    </div>
+    % endif
 
     <!-- ko if: $root.availableActions().length == 0 || $root.availableActions().indexOf('hive') != -1 -->
     <div data-bind="css: { 'draggable-widget': true },
@@ -413,22 +422,27 @@ ${ layout.menubar(section='workflows', is_editor=True, pullright=buttons, is_emb
 
 
   <div class="container-fluid">
-  <div class="row-fluid">
-    %if is_embeddable:
-    <div class="span12 margin-top-20">
-    %else:
-    <div class="span12" data-bind="style:{'marginTop' : $root.isEditing() ? '120px': '50px'}">
-    %endif
-    <div class="object-name" style="text-align: center">
-      <span data-bind="editable: $root.workflow.name, editableOptions: {enabled: $root.isEditing(), placement: 'right'}"></span>
-    </div>
-    <div class="object-description" style="text-align: center; margin-top: 10px">
-      <span data-bind="editable: $root.workflow.properties.description, editableOptions: {enabled: $root.isEditing(), placement: 'right', emptytext: '${_ko('Add a description...')}'}"></span>
-    </div>
+    <span class="pull-right">
+    <!-- ko if: availableComputes().length > 1 -->
+      <div data-bind="component: { name: 'hue-drop-down', params: { value: compute, entries: availableComputes, labelAttribute: 'name', searchable: true, linkTitle: '${ _ko('Active compute') }' } }"></div>
+    <!-- /ko -->
+    </span>
+
+    <div class="row-fluid">
+      %if is_embeddable:
+      <div class="span12 margin-top-20">
+      %else:
+      <div class="span12" data-bind="style:{'marginTop' : $root.isEditing() ? '120px': '50px'}">
+      %endif
+      <div class="object-name" style="text-align: center">
+        <span data-bind="editable: $root.workflow.name, editableOptions: {enabled: $root.isEditing(), placement: 'right'}"></span>
+      </div>
+      <div class="object-description" style="text-align: center; margin-top: 10px">
+        <span data-bind="editable: $root.workflow.properties.description, editableOptions: {enabled: $root.isEditing(), placement: 'right', emptytext: '${_ko('Add a description...')}'}"></span>
+      </div>
     </div>
   </div>
 </div>
-
 
 
 
@@ -570,9 +584,6 @@ ${ workflow.render() }
 </div>
 
 <link rel="stylesheet" href="${ static('desktop/ext/css/hue-filetypes.css') }">
-<link rel="stylesheet" href="${ static('desktop/ext/css/hue-charts.css') }">
-<link rel="stylesheet" href="${ static('desktop/ext/chosen/chosen.min.css') }">
-<link rel="stylesheet" href="${ static('desktop/ext/css/select2.min.css') }">
 <link rel="stylesheet" href="${ static('oozie/css/common-editor.css') }">
 <link rel="stylesheet" href="${ static('oozie/css/workflow-editor.css') }">
 
@@ -583,10 +594,6 @@ ${ dashboard.import_layout() }
 ${ commonshare() | n,unicode }
 %endif
 
-<script src="${ static('desktop/ext/js/bootstrap-editable.min.js') }" type="text/javascript" charset="utf-8"></script>
-<script src="${ static('desktop/js/hue.utils.js') }"></script>
-<script src="${ static('desktop/js/ko.editable.js') }" type="text/javascript" charset="utf-8"></script>
-<script src="${ static('desktop/ext/chosen/chosen.jquery.min.js') }" type="text/javascript" charset="utf-8"></script>
 <script src="${ static('desktop/js/select2.full.patched.js') }" type="text/javascript" charset="utf-8"></script>
 % if not is_embeddable:
 <script src="${ static('desktop/js/share2.vm.js') }"></script>
@@ -613,10 +620,10 @@ ${ utils.submit_popup_event() }
 <script type="text/javascript">
   ${ utils.slaGlobal() }
 
-  var apiHelper = ApiHelper.getInstance();
+  var apiHelper = window.apiHelper;
 
-  var viewModel = new WorkflowEditorViewModel(${ layout_json | n,unicode }, ${ workflow_json | n,unicode }, ${ credentials_json | n,unicode }, ${ workflow_properties_json | n,unicode }, ${ subworkflows_json | n,unicode }, ${ can_edit_json | n,unicode });
-  ko.applyBindings(viewModel, $("#oozie_workflowComponents")[0]);
+  window.workflowEditorViewModel = new WorkflowEditorViewModel(${ layout_json | n,unicode }, ${ workflow_json | n,unicode }, ${ credentials_json | n,unicode }, ${ workflow_properties_json | n,unicode }, ${ subworkflows_json | n,unicode }, ${ can_edit_json | n,unicode });
+  ko.applyBindings(window.workflowEditorViewModel, $("#oozie_workflowComponents")[0]);
 
   % if not is_embeddable:
   var shareViewModel = initSharing("#documentShareModal");
@@ -630,10 +637,10 @@ ${ utils.submit_popup_event() }
   var defaultSection = 'actions';
   % endif
 
-  viewModel.currentDraggableSection(defaultSection);
+  window.workflowEditorViewModel.currentDraggableSection(defaultSection);
 
-  viewModel.init();
-  fullLayout(viewModel);
+  window.workflowEditorViewModel.init();
+  fullLayout(window.workflowEditorViewModel);
 
   var globalFilechooserOptions = {
     skipInitialPathIfEmpty: true,
@@ -643,9 +650,9 @@ ${ utils.submit_popup_event() }
     extraHomeProperties: {
       label: '${ _('Workspace') }',
       icon: 'fa-folder-open',
-      path: viewModel.workflow.properties.deployment_dir()
+      path: window.workflowEditorViewModel.workflow.properties.deployment_dir()
     },
-    deploymentDir: viewModel.workflow.properties.deployment_dir()
+    deploymentDir: window.workflowEditorViewModel.workflow.properties.deployment_dir()
   }
 
   function columnDropAdditionalHandler(widget) {
@@ -654,25 +661,25 @@ ${ utils.submit_popup_event() }
 
   function widgetDraggedAdditionalHandler(widget) {
     $("canvas").remove();
-    if (viewModel.currentlyDraggedWidget() && viewModel.currentlyDraggedWidget().id() == ""){
-      viewModel.workflow.newNode(widget, function() {
+    if (window.workflowEditorViewModel.currentlyDraggedWidget() && window.workflowEditorViewModel.currentlyDraggedWidget().id() == ""){
+      window.workflowEditorViewModel.workflow.newNode(widget, function() {
         showAddActionDemiModal(widget);
       });
     }
     else {
-      if (viewModel.currentlyDraggedOp() == "move"){
-        viewModel.workflow.moveNode(widget);
+      if (window.workflowEditorViewModel.currentlyDraggedOp() == "move"){
+        window.workflowEditorViewModel.workflow.moveNode(widget);
       }
       else { // Copy
-        var _sourceNode = viewModel.workflow.getNodeById(viewModel.currentlyDraggedWidget().id());
-        viewModel.workflow.newNode(widget, viewModel.workflow.addNode, _sourceNode);
+        var _sourceNode = window.workflowEditorViewModel.workflow.getNodeById(window.workflowEditorViewModel.currentlyDraggedWidget().id());
+        window.workflowEditorViewModel.workflow.newNode(widget, window.workflowEditorViewModel.workflow.addNode, _sourceNode);
       }
       $(document).trigger("drawArrows");
     }
   }
 
   function showAddActionDemiModal(widget) {
-    viewModel.newAction(widget);
+    window.workflowEditorViewModel.newAction(widget);
     $("#exposeOverlay").fadeIn(300);
     var _el = $("#wdg_" + widget.id());
     _el.css("zIndex", "1032");
@@ -701,25 +708,25 @@ ${ utils.submit_popup_event() }
   }
 
   function addActionDemiModalFieldPreview(field) {
-    if (viewModel.newAction() != null) {
-      var _el = $("#wdg_" + viewModel.newAction().id());
+    if (window.workflowEditorViewModel.newAction() != null) {
+      var _el = $("#wdg_" + window.workflowEditorViewModel.newAction().id());
       _el.css("position", "static");
       _el.css("width", "");
-      viewModel.workflow.addNode(viewModel.newAction());
+      window.workflowEditorViewModel.workflow.addNode(window.workflowEditorViewModel.newAction());
       $("#addActionDemiModal").modal("hide");
-      $("#wdg_" + viewModel.newAction().id()).css("zIndex", "0");
+      $("#wdg_" + window.workflowEditorViewModel.newAction().id()).css("zIndex", "0");
       $("#exposeOverlay").fadeOut(300);
-      viewModel.newAction(null);
+      window.workflowEditorViewModel.newAction(null);
     }
   }
 
   function addActionDemiModalFieldCancel() {
     $("#exposeOverlay").fadeOut(300);
     $("#addActionDemiModal").modal("hide");
-    if (viewModel.newAction()){
-      viewModel.removeWidgetById(viewModel.newAction().id());
+    if (window.workflowEditorViewModel.newAction()){
+      window.workflowEditorViewModel.removeWidgetById(window.workflowEditorViewModel.newAction().id());
     }
-    viewModel.newAction(null);
+    window.workflowEditorViewModel.newAction(null);
   }
 
   function resizeDrops() {
@@ -734,8 +741,8 @@ ${ utils.submit_popup_event() }
 
   function renderChangeables() {
     resizeDrops();
-    if (viewModel.workflow && viewModel.workflow.properties && viewModel.workflow.properties.show_arrows()){
-      viewModel.drawArrows();
+    if (window.workflowEditorViewModel.workflow && window.workflowEditorViewModel.workflow.properties && window.workflowEditorViewModel.workflow.properties.show_arrows()){
+      window.workflowEditorViewModel.drawArrows();
     }
     $("#oozie_workflowComponents .widget-main-section").removeClass("zoom-in");
     $("#oozie_workflowComponents .widget-main-section").each(function(){
@@ -760,7 +767,7 @@ ${ utils.submit_popup_event() }
         _el.css("z-index", "1032");
         lastSeenPosition = _el.position();
         var _width = _el.width();
-        _el.parent().css("height", viewModel.isEditing() ? _el.height() : (_el.height() + 17) + "px");
+        _el.parent().css("height", window.workflowEditorViewModel.isEditing() ? _el.height() : (_el.height() + 17) + "px");
         _el.css("position", "absolute");
         _el.css({
           "width": _width,
@@ -795,11 +802,11 @@ ${ utils.submit_popup_event() }
 
   function validateAndSave() {
     validateFields();
-    if (viewModel.isInvalid() && viewModel.isEditing()) {
+    if (window.workflowEditorViewModel.isInvalid() && window.workflowEditorViewModel.isEditing()) {
       var $firstElWithErrors = $("[validate].with-errors").eq(0);
       if (!$firstElWithErrors.is(":visible")) {
         var widgetId = $firstElWithErrors.parents(".card-widget").attr("id").substr(4);
-        viewModel.getWidgetById(widgetId).ooziePropertiesExpanded(true);
+        window.workflowEditorViewModel.getWidgetById(widgetId).ooziePropertiesExpanded(true);
       }
       window.setTimeout(function () {
         $("html,body").animate({
@@ -808,13 +815,17 @@ ${ utils.submit_popup_event() }
       }, 200);
     }
 
-    viewModel.save();
+    window.workflowEditorViewModel.save();
   }
 
   function validateFields() {
     var _hasErrors = false;
     $("[validate]").each(function () {
-      if ($(this).attr("validate") == "nonempty" && $.trim($(this).val()) == "") {
+      if ($(this).attr("validate") == "nospace" && ($(this).val().indexOf(' ') >= 0 || $.trim($(this).val()) == "")) {
+        $(this).addClass("with-errors");
+        _hasErrors = true;
+      }
+      else if ($(this).attr("validate") == "nonempty" && $.trim($(this).val()) == "") {
         $(this).addClass("with-errors");
         _hasErrors = true;
       }
@@ -822,7 +833,7 @@ ${ utils.submit_popup_event() }
         $(this).removeClass("with-errors");
       }
     });
-    viewModel.isInvalid(_hasErrors);
+    window.workflowEditorViewModel.isInvalid(_hasErrors);
   }
 
   $(document).ready(function(){
@@ -832,7 +843,7 @@ ${ utils.submit_popup_event() }
       if (window.location.pathname.indexOf('/oozie/editor/workflow') > -1) {
         $("canvas").remove();
         exposeOverlayClickHandler();
-        if (viewModel.isEditing()) {
+        if (window.workflowEditorViewModel.isEditing()) {
           hueUtils.waitForRendered('#oozie_workflowComponents .card-toolbar-content', function (el) {
             return el.height() > 40 && el.height() < 200
           }, function () {
@@ -907,7 +918,7 @@ ${ utils.submit_popup_event() }
       if (clusterConfig['cluster_type'] != 'dataeng') {
         interpreters = interpreters.concat(['subworkflow', 'fs', 'email', 'ssh', 'streaming', 'generic', 'stop']);
       }
-      viewModel.availableActions(interpreters);
+      window.workflowEditorViewModel.availableActions(interpreters);
     }, 'oozie');
 
     huePubSub.publish('cluster.config.get.config');

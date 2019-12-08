@@ -62,7 +62,7 @@ ${ layout.menubar(section='hive1', is_embeddable=is_embeddable) }
         <i class="fa fa-fw fa-1halfx muted" data-bind="css: {'fa-circle-o': privilegeType() != 'db' , 'fa-check-circle-o': privilegeType() == 'db'}"></i>
       </a>
     </div>
-    <input type="text" data-bind="hivechooser: $data.path, enable: privilegeType() == 'db', apiHelperUser: '${ user }', apiHelperType: 'hive'" placeholder="dbName.tableName <CTRL+SPACE>">
+    <input type="text" data-bind="hiveChooser: $data.path, enable: privilegeType() == 'db', apiHelperUser: '${ user }', apiHelperType: 'hive'" placeholder="dbName.tableName <CTRL+SPACE>">
 
     <div class="inline-block" style="vertical-align: middle">
       <a class="pointer" style="padding-top: 4px" data-bind="click: function(){ privilegeType('uri'); action('ALL'); }">
@@ -228,6 +228,7 @@ ${ layout.menubar(section='hive1', is_embeddable=is_embeddable) }
                 </div>
                 <div data-bind="visible: $root.assist.privileges().length == 0 && $root.isLoadingPrivileges()"><i class="fa fa-spinner fa-spin" data-bind="visible: $root.isLoadingPrivileges()"></i> <em class="muted">${ _('Loading privileges...')}</em></div>
                 <h4 style="margin-top: 4px" data-bind="visible: $root.assist.privileges().length > 0 && ! $root.isLoadingPrivileges()">${ _('Privileges') } &nbsp;</h4>
+
                 <div data-bind="visible: $root.assist.privileges().length == 0 && ! $root.isLoadingPrivileges()">
                   <div class="span10 offset1 center" style="cursor: pointer" data-bind="click: function(){ if ($root.is_sentry_admin) { $root.showCreateRole(true); $('#createRoleModal').modal('show'); } }">
                     <i data-bind="visible: $root.is_sentry_admin" class="fa fa-plus-circle waiting"></i>
@@ -550,7 +551,6 @@ ${ tree.import_templates(itemClick='$root.assist.setPath', iconClick='$root.assi
 
 
 <script src="${ static('security/js/hive.ko.js') }" type="text/javascript" charset="utf-8"></script>
-<script src="${ static('desktop/js/jquery.filechooser.js') }" type="text/javascript" charset="utf-8"></script>
 
 <script type="text/javascript">
   (function () {
@@ -778,8 +778,10 @@ ${ tree.import_templates(itemClick='$root.assist.setPath', iconClick='$root.assi
 
       huePubSub.subscribe('app.gained.focus', function (app) {
         if (app === 'security_hive') {
-          window.location.hash = viewModel.lastHash;
-          showMainSection(viewModel.getSectionHash());
+          window.setTimeout(function () {
+            window.location.hash = viewModel.lastHash;
+            showMainSection(viewModel.getSectionHash());
+          }, 0);
         }
       }, 'security_hive');
     });

@@ -15,20 +15,31 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from future import standard_library
+standard_library.install_aliases()
+from builtins import zip
+from builtins import range
 import logging
-import urllib
+import sys
+import urllib.request, urllib.error
 
 from django import forms
-from django.contrib.auth.models import User, Group
 from django.forms import FileField, CharField, BooleanField, Textarea
 from django.forms.formsets import formset_factory, BaseFormSet
+from django.utils.translation import ugettext_lazy as _
 
 from aws.s3 import S3A_ROOT, normpath as s3_normpath
+from azure.abfs.__init__ import ABFS_ROOT, normpath as abfs_normpath
 from desktop.lib import i18n
 from hadoop.fs import normpath
+from useradmin.models import User, Group, default_organization
+
 from filebrowser.lib import rwx
 
-from django.utils.translation import ugettext_lazy as _
+if sys.version_info[0] > 2:
+  from urllib.parse import unquote as urllib_unquote
+else:
+  from urllib import unquote as urllib_unquote
 
 
 logger = logging.getLogger(__name__)
@@ -64,6 +75,8 @@ class PathField(CharField):
     cleaned_path = CharField.clean(self, value)
     if value.lower().startswith(S3A_ROOT):
       cleaned_path = s3_normpath(cleaned_path)
+    elif value.lower().startswith(ABFS_ROOT):
+      cleaned_path = abfs_normpath(cleaned_path)
     else:
       cleaned_path = normpath(cleaned_path)
     return cleaned_path
@@ -75,7 +88,7 @@ class EditorForm(forms.Form):
   encoding = CharField(label=_('Encoding'), required=False)
 
   def clean_path(self):
-    return urllib.unquote(self.cleaned_data.get('path', ''))
+    return urllib_unquote(self.cleaned_data.get('path', ''))
 
   def clean_contents(self):
     return self.cleaned_data.get('contents', '').replace('\r\n', '\n')
@@ -224,7 +237,7 @@ class ChmodForm(forms.Form):
   def full_clean(self):
     forms.Form.full_clean(self)
     if hasattr(self, "cleaned_data"):
-      self.cleaned_data["mode"] = rwx.compress_mode(map(lambda name: self.cleaned_data[name], self.names))
+      self.cleaned_data["mode"] = rwx.compress_mode([self.cleaned_data[name] for name in self.names])
 
 class BaseChmodFormSet(FormSet):
   op = "chmod"

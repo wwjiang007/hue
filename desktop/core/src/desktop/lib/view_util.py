@@ -15,13 +15,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """Utilities for views (text and number formatting, etc)"""
+from __future__ import division
 
-import math
 import datetime
+import logging
+import math
 
 from django.urls import reverse
 
 from hadoop.fs.hadoopfs import Hdfs
+
+
+LOG = logging.getLogger(__name__)
 
 
 def big_filesizeformat(bytes):
@@ -38,7 +43,7 @@ def big_filesizeformat(bytes):
   index = int(math.floor(math.log(bytes, 1024)))
   index = min(len(units) - 1, index)
 
-  return( "%.1f %s" % (bytes / math.pow(1024, index), units[index]) )
+  return( "%.1f %s" % ((bytes / math.pow(1024, index)), units[index]) )
 
 def format_time_diff(start=None, end=None):
   """
@@ -103,7 +108,13 @@ def location_to_url(location, strict=True, is_embeddable=False):
     if split_path[0] == 'hdfs':
       path = split_path[2]
 
-    filebrowser_path = reverse("filebrowser.views.view", kwargs=dict(path=path))
+    try:
+      filebrowser_path = reverse("filebrowser.views.view", kwargs=dict(path=path))
+    except Exception as e:
+      LOG.warn('No table filesystem link: %s' % e)
+      return None
+
     if is_embeddable and not filebrowser_path.startswith('/hue'):
         filebrowser_path = '/hue' + filebrowser_path
+
     return filebrowser_path

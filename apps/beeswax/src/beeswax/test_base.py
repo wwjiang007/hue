@@ -17,6 +17,10 @@
 # limitations under the License.
 #
 
+from builtins import str
+from builtins import chr
+from builtins import range
+from builtins import object
 import atexit
 import json
 import logging
@@ -27,7 +31,6 @@ import time
 
 from nose.tools import assert_true, assert_false
 from django.urls import reverse
-from django.contrib.auth.models import User
 
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.paths import get_run_root
@@ -37,9 +40,9 @@ from desktop.lib.security_util import get_localhost_name
 from desktop.lib.test_utils import add_to_group, grant_access
 from hadoop import cluster, pseudo_hdfs4
 from hadoop.pseudo_hdfs4 import is_live_cluster, get_db_prefix
+from useradmin.models import User
 
 import beeswax.conf
-
 from beeswax.server.dbms import get_query_server_config
 from beeswax.server import dbms
 
@@ -129,13 +132,13 @@ def get_shared_beeswax_server(db_name='default'):
       while not started and time.time() - start <= 60:
         try:
           db.open_session(user)
-        except StructuredThriftTransportException, e:
+        except StructuredThriftTransportException as e:
           LOG.exception('Failed to open Hive Server session')
 
           # Don't loop if we had an authentication error.
           if 'Bad status: 3' in e.message:
             raise
-        except Exception, e:
+        except Exception as e:
           LOG.exception('Failed to open Hive Server session')
         else:
           started = True
@@ -192,7 +195,7 @@ def _start_mini_hs2(cluster):
   if _SHARED_HIVE_SERVER_PROCESS is None:
     p = _start_server(cluster)
     LOG.info("started")
-    cluster.fs.do_as_superuser(cluster.fs.chmod, '/tmp', 01777)
+    cluster.fs.do_as_superuser(cluster.fs.chmod, '/tmp', 0o1777)
 
     _SHARED_HIVE_SERVER_PROCESS = p
     def kill():
@@ -355,6 +358,8 @@ def verify_history(client, fragment, design=None, reverse=False, server_name='be
 
 
 class BeeswaxSampleProvider(object):
+  integration = True
+
   """
   Setup the test db and install sample data
   """
@@ -512,7 +517,7 @@ class BeeswaxSampleProvider(object):
     """
     cls.cluster.fs.setuser(cls.cluster.superuser)
     f = cls.cluster.fs.open(filename, "w")
-    for x in xrange(256):
+    for x in range(256):
       f.write("%d\t0x%x\n" % (x, x))
     f.close()
 
@@ -526,8 +531,8 @@ class BeeswaxSampleProvider(object):
     """
     cls.cluster.fs.setuser(cls.cluster.superuser)
     f = cls.cluster.fs.open(filename, "w")
-    for x in xrange(256):
-      f.write("%d\t%s\n" % (x, unichr(x).encode(encoding)))
+    for x in range(256):
+      f.write("%d\t%s\n" % (x, chr(x).encode(encoding)))
     f.close()
 
   @classmethod

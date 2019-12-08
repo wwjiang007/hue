@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import json
 import os
 import uuid
@@ -28,7 +29,7 @@ from librdbms import conf as rdbms_conf
 from librdbms.server import dbms
 
 
-class MockRdbms:
+class MockRdbms(object):
   def get_databases(self):
     return ['db1', 'db2']
 
@@ -36,7 +37,7 @@ class MockRdbms:
     return ['table1', 'table2']
 
 
-class TestMockedRdbms:
+class TestMockedRdbms(object):
   def setUp(self):
     self.client = make_logged_in_client()
 
@@ -128,6 +129,9 @@ class TestAPI(TestSQLiteRdbmsBase):
       'query': 'SELECT * FROM test1'
     }
     response = self.client.post(reverse('rdbms:api_execute_query'), data, follow=True)
+    import traceback
+    for tb in traceback.extract_stack():
+      print(tb)
     response_dict = json.loads(response.content)
     assert_equal(1, len(response_dict['results']['rows']), response_dict)
 
@@ -145,6 +149,6 @@ class TestAPI(TestSQLiteRdbmsBase):
     finish = rdbms_conf.DATABASES['sqlitee'].OPTIONS.set_for_testing({'nonsensical': None})
     try:
       self.client.get(reverse('rdbms:api_tables', args=['sqlitee', self.database]))
-    except TypeError, e:
+    except TypeError as e:
       assert_true('nonsensical' in str(e), e)
     finish()

@@ -15,35 +15,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from future import standard_library
+standard_library.install_aliases()
 import json
 import logging
 
 import sqlparse
-import urllib
+import sys
 
 from django.urls import reverse
 from django.db.models import Q
 from django.utils.translation import ugettext as _
 from django.views.decorators.http import require_GET, require_POST
+import opentracing.tracer
 
-from desktop.api2 import __paginate
+from azure.abfs.__init__ import abfspath
+from desktop.conf import TASK_SERVER
 from desktop.lib.i18n import smart_str
 from desktop.lib.django_util import JsonResponse
-from desktop.models import Document2, Document
+from desktop.models import Document2, Document, __paginate, _get_gist_document
 from indexer.file_format import HiveFormat
 from indexer.fields import Field
 
-from notebook.connectors.base import get_api, Notebook, QueryExpired, SessionExpired, QueryError, _get_snippet_name
-from notebook.connectors.dataeng import DataEngApi
+from notebook.connectors.base import Notebook, QueryExpired, SessionExpired, QueryError, _get_snippet_name
 from notebook.connectors.hiveserver2 import HS2Api
-from notebook.connectors.oozie_batch import OozieApi
 from notebook.decorators import api_error_handler, check_document_access_permission, check_document_modify_permission
-from notebook.models import escape_rows, make_notebook
-from notebook.views import upgrade_session_properties
+from notebook.models import escape_rows, make_notebook, upgrade_session_properties, get_api
+
+if sys.version_info[0] > 2:
+  from urllib.parse import unquote as urllib_unquote
+else:
+  from urllib import unquote as urllib_unquote
 
 
 LOG = logging.getLogger(__name__)
-
 
 DEFAULT_HISTORY_NAME = ''
 
@@ -54,9 +59,23 @@ def create_notebook(request):
   response = {'status': -1}
 
   editor_type = request.POST.get('type', 'notebook')
+  gist_id = request.POST.get('gist')
   directory_uuid = request.POST.get('directory_uuid')
 
-  editor = Notebook()
+  if gist_id:
+    gist_doc = _get_gist_document(uuid=gist_id)
+    statement = json.loads(gist_doc.data)['statement']
+
+    editor = make_notebook(
+      name='',
+      description='',
+      editor_type=editor_type,
+      statement=statement,
+      is_presentation_mode=True
+    )
+  else:
+    editor = Notebook()
+
   data = editor.get_data()
 
   if editor_type != 'notebook':
@@ -73,12 +92,11 @@ def create_notebook(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def create_session(request):
   response = {'status': -1}
 
-  notebook = json.loads(request.POST.get('notebook', '{}'))
   session = json.loads(request.POST.get('session', '{}'))
 
   properties = session.get('properties', [])
@@ -90,7 +108,7 @@ def create_session(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def close_session(request):
   response = {'status': -1}
@@ -112,11 +130,22 @@ def _execute_notebook(request, notebook, snippet):
 
   try:
     try:
+      session = notebook.get('sessions') and notebook['sessions'][0] # Session reference for snippet execution without persisting it
+
+      active_executable = json.loads(request.POST.get('executable', '{}')) # Editor v2
+
+      # TODO: Use statement, database etc. from active_executable
+
       if historify:
         history = _historify(notebook, request.user)
         notebook = Notebook(document=history).get_data()
 
-      response['handle'] = get_api(request, snippet).execute(notebook, snippet)
+      interpreter = get_api(request, snippet)
+      if snippet.get('interface') == 'sqlalchemy':
+        interpreter.options['session'] = session
+
+      with opentracing.tracer.start_span('interpreter') as span:
+        response['handle'] = interpreter.execute(notebook, snippet)
 
       # Retrieve and remove the result from the handle
       if response['handle'].get('sync'):
@@ -124,7 +153,21 @@ def _execute_notebook(request, notebook, snippet):
     finally:
       if historify:
         _snippet = [s for s in notebook['snippets'] if s['id'] == snippet['id']][0]
+
+        if 'id' in active_executable: # Editor v2
+          # notebook_executable is the 1-to-1 match of active_executable in the notebook structure
+          notebook_executable = [e for e in _snippet['executor']['executables'] if e['id'] == active_executable['id']][0]
+          notebook_executable['handle'] = response['handle']
+          if history:
+            notebook_executable['history'] = {
+              'id': history.id,
+              'uuid': history.uuid
+            }
+            notebook_executable['operationId'] = history.uuid
+
         if 'handle' in response: # No failure
+          if 'result' not in _snippet: # Editor v2
+            _snippet['result'] = {}
           _snippet['result']['handle'] = response['handle']
           _snippet['result']['statements_count'] = response['handle'].get('statements_count', 1)
           _snippet['result']['statement_id'] = response['handle'].get('statement_id', 0)
@@ -132,7 +175,7 @@ def _execute_notebook(request, notebook, snippet):
         else:
           _snippet['status'] = 'failed'
 
-        if history:  # If _historify failed, history will be None
+        if history: # If _historify failed, history will be None. If we get Atomic block exception, something underneath interpreter.execute() crashed and is not handled.
           history.update_data(notebook)
           history.save()
 
@@ -140,7 +183,7 @@ def _execute_notebook(request, notebook, snippet):
           response['history_uuid'] = history.uuid
           if notebook['isSaved']: # Keep track of history of saved queries
             response['history_parent_uuid'] = history.dependencies.filter(type__startswith='query-').latest('last_modified').uuid
-  except QueryError, ex: # We inject the history information from _historify() to the failed queries
+  except QueryError as ex: # We inject the history information from _historify() to the failed queries
     if response.get('history_id'):
       ex.extra['history_id'] = response['history_id']
     if response.get('history_uuid'):
@@ -158,34 +201,50 @@ def _execute_notebook(request, notebook, snippet):
 
   return response
 
+
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def execute(request, engine=None):
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
-  response = _execute_notebook(request, notebook, snippet)
+  with opentracing.tracer.start_span('notebook-execute') as span:
+    span.set_tag('user-id', request.user.username)
+
+    response = _execute_notebook(request, notebook, snippet)
+
+    span.set_tag(
+      'query-id',
+      response['handle']['guid'] if response.get('handle') and response['handle'].get('guid') else None
+    )
 
   return JsonResponse(response)
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def check_status(request):
   response = {'status': -1}
 
+  operation_id = request.POST.get('operationId')
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
-  if not snippet:
-    nb_doc = Document2.objects.get_by_uuid(user=request.user, uuid=notebook['id'])
-    notebook = Notebook(document=nb_doc).get_data()
+  if operation_id or not snippet: # To unify with _get_snippet
+    nb_doc = Document2.objects.get_by_uuid(user=request.user, uuid=operation_id or notebook['uuid'])
+    notebook = Notebook(document=nb_doc).get_data() # Used below
     snippet = notebook['snippets'][0]
 
   try:
-    response['query_status'] = get_api(request, snippet).check_status(notebook, snippet)
+    with opentracing.tracer.start_span('notebook-check_status') as span:
+      span.set_tag('user-id', request.user.username)
+      span.set_tag(
+        'query-id',
+        snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+      )
+      response['query_status'] = get_api(request, snippet).check_status(notebook, snippet)
 
     response['status'] = 0
   except SessionExpired:
@@ -201,13 +260,19 @@ def check_status(request):
       status = 'expired'
     else:
       status = 'failed'
+    if response.get('query_status'):
+      has_result_set = response['query_status'].get('has_result_set')
+    else:
+      has_result_set = None
 
     if notebook['type'].startswith('query') or notebook.get('isManaged'):
-      nb_doc = Document2.objects.get(id=notebook['id'])
+      nb_doc = Document2.objects.get_by_uuid(user=request.user, uuid=operation_id or notebook['uuid'])
       if nb_doc.can_write(request.user):
         nb = Notebook(document=nb_doc).get_data()
-        if status != nb['snippets'][0]['status']:
+        if status != nb['snippets'][0]['status'] or has_result_set != nb['snippets'][0].get('has_result_set'):
           nb['snippets'][0]['status'] = status
+          if has_result_set is not None:
+            nb['snippets'][0]['has_result_set'] = has_result_set
           nb_doc.update_data(nb)
           nb_doc.save()
 
@@ -215,21 +280,33 @@ def check_status(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def fetch_result_data(request):
   response = {'status': -1}
 
+  operation_id = request.POST.get('operationId')
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
-  rows = json.loads(request.POST.get('rows', 100))
-  start_over = json.loads(request.POST.get('startOver', False))
 
-  response['result'] = get_api(request, snippet).fetch_result(notebook, snippet, rows, start_over)
+  rows = json.loads(request.POST.get('rows', '100'))
+  start_over = json.loads(request.POST.get('startOver', 'false'))
+
+  snippet = _get_snippet(request.user, notebook, snippet, operation_id)
+
+  with opentracing.tracer.start_span('notebook-fetch_result_data') as span:
+    response['result'] = get_api(request, snippet).fetch_result(notebook, snippet, rows, start_over)
+
+    span.set_tag('user-id', request.user.username)
+    span.set_tag(
+      'query-id',
+      snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+    )
 
   # Materialize and HTML escape results
-  if response['result'].get('data') and response['result'].get('type') == 'table':
+  if response['result'].get('data') and response['result'].get('type') == 'table' and not response['result'].get('isEscaped'):
     response['result']['data'] = escape_rows(response['result']['data'])
+    response['result']['isEscaped'] = True
 
   response['status'] = 0
 
@@ -237,77 +314,119 @@ def fetch_result_data(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def fetch_result_metadata(request):
   response = {'status': -1}
 
+  operation_id = request.POST.get('operationId')
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
-  response['result'] = get_api(request, snippet).fetch_result_metadata(notebook, snippet)
+  snippet = _get_snippet(request.user, notebook, snippet, operation_id)
+
+  with opentracing.tracer.start_span('notebook-fetch_result_metadata') as span:
+    response['result'] = get_api(request, snippet).fetch_result_metadata(notebook, snippet)
+
+    span.set_tag('user-id', request.user.username)
+    span.set_tag(
+      'query-id',
+      snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+    )
+
   response['status'] = 0
 
   return JsonResponse(response)
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def fetch_result_size(request):
   response = {'status': -1}
 
+  operation_id = request.POST.get('operationId')
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
-  response['result'] = get_api(request, snippet).fetch_result_size(notebook, snippet)
+  snippet = _get_snippet(request.user, notebook, snippet, operation_id)
+
+  with opentracing.tracer.start_span('notebook-fetch_result_size') as span:
+    response['result'] = get_api(request, snippet).fetch_result_size(notebook, snippet)
+
+    span.set_tag('user-id', request.user.username)
+    span.set_tag(
+      'query-id',
+      snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+    )
+
   response['status'] = 0
 
   return JsonResponse(response)
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def cancel_statement(request):
   response = {'status': -1}
 
   notebook = json.loads(request.POST.get('notebook', '{}'))
-  snippet = json.loads(request.POST.get('snippet', '{}'))
+  snippet = None
+  operation_id = request.POST.get('operationId') or notebook['uuid']
 
-  response['result'] = get_api(request, snippet).cancel(notebook, snippet)
+  snippet = _get_snippet(request.user, notebook, snippet, operation_id)
+
+  with opentracing.tracer.start_span('notebook-cancel_statement') as span:
+    response['result'] = get_api(request, snippet).cancel(notebook, snippet)
+
+    span.set_tag('user-id', request.user.username)
+    span.set_tag(
+      'query-id',
+      snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+    )
+
   response['status'] = 0
 
   return JsonResponse(response)
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def get_logs(request):
   response = {'status': -1}
 
+  operation_id = request.POST.get('operationId')
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
 
   startFrom = request.POST.get('from')
   startFrom = int(startFrom) if startFrom else None
-
   size = request.POST.get('size')
   size = int(size) if size else None
+  full_log = smart_str(request.POST.get('full_log', ''))
+
+  snippet = _get_snippet(request.user, notebook, snippet, operation_id)
 
   db = get_api(request, snippet)
 
-  full_log = smart_str(request.POST.get('full_log', ''))
-  logs = db.get_log(notebook, snippet, startFrom=startFrom, size=size)
+  with opentracing.tracer.start_span('notebook-get_logs') as span:
+    logs = smart_str(db.get_log(notebook, snippet, startFrom=startFrom, size=size))
+
+    span.set_tag('user-id', request.user.username)
+    span.set_tag(
+      'query-id',
+      snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+    )
   full_log += logs
 
   jobs = db.get_jobs(notebook, snippet, full_log)
 
   response['logs'] = logs.strip()
-  response['progress'] = min(db.progress(snippet, full_log), 99) if snippet['status'] != 'available' and snippet['status'] != 'success' else 100
+  response['progress'] = min(db.progress(notebook, snippet, logs=full_log), 99) if snippet['status'] != 'available' and snippet['status'] != 'success' else 100
   response['jobs'] = jobs
-  response['isFullLogs'] = isinstance(db, (OozieApi, DataEngApi))
+  response['isFullLogs'] = db.get_log_is_full_log(notebook, snippet)
   response['status'] = 0
 
   return JsonResponse(response)
@@ -364,7 +483,7 @@ def save_notebook(request):
 
 
 def _clear_sessions(notebook):
-  notebook['sessions'] = [_s for _s in notebook['sessions'] if _s['type'] in ('scala', 'spark', 'pyspark', 'sparkr')]
+  notebook['sessions'] = [_s for _s in notebook['sessions'] if _s['type'] in ('scala', 'spark', 'pyspark', 'sparkr', 'r')]
 
 
 def _historify(notebook, user):
@@ -408,20 +527,13 @@ def _historify(notebook, user):
 
 
 def _get_statement(notebook):
-  statement = ''
   if notebook['snippets'] and len(notebook['snippets']) > 0:
-    try:
-      statement = notebook['snippets'][0]['result']['handle']['statement']
-      if type(statement) == dict:  # Old format
-        statement = notebook['snippets'][0]['statement_raw']
-    except KeyError:  # Old format
-      statement = notebook['snippets'][0]['statement_raw']
-  return statement
-
+    return Notebook.statement_with_variables(notebook['snippets'][0])
+  return ''
 
 @require_GET
 @api_error_handler
-@check_document_access_permission()
+@check_document_access_permission
 def get_history(request):
   response = {'status': -1}
 
@@ -477,7 +589,7 @@ def get_history(request):
 def clear_history(request):
   response = {'status': -1}
 
-  notebook = json.loads(request.POST.get('notebook'), '{}')
+  notebook = json.loads(request.POST.get('notebook', '{}'))
   doc_type = request.POST.get('doc_type')
   is_notification_manager = request.POST.get('is_notification_manager', 'false') == 'true'
 
@@ -494,7 +606,7 @@ def clear_history(request):
 
 
 @require_GET
-@check_document_access_permission()
+@check_document_access_permission
 def open_notebook(request):
   response = {'status': -1}
 
@@ -508,29 +620,29 @@ def open_notebook(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 def close_notebook(request):
   response = {'status': -1, 'result': []}
 
   notebook = json.loads(request.POST.get('notebook', '{}'))
 
-  for session in [_s for _s in notebook['sessions'] if _s['type'] in ('scala', 'spark', 'pyspark', 'sparkr')]:
+  for session in [_s for _s in notebook['sessions'] if _s['type'] in ('scala', 'spark', 'pyspark', 'sparkr', 'r')]:
     try:
       response['result'].append(get_api(request, session).close_session(session))
     except QueryExpired:
       pass
-    except Exception, e:
+    except Exception as e:
       LOG.exception('Error closing session %s' % str(e))
 
   for snippet in [_s for _s in notebook['snippets'] if _s['type'] in ('hive', 'impala')]:
     try:
       if snippet['status'] != 'running':
-        response['result'].append(get_api(request, snippet).close_statement(snippet))
+        response['result'].append(get_api(request, snippet).close_statement(notebook, snippet))
       else:
         LOG.info('Not closing SQL snippet as still running.')
     except QueryExpired:
       pass
-    except Exception, e:
+    except Exception as e:
       LOG.exception('Error closing statement %s' % str(e))
 
   response['status'] = 0
@@ -540,16 +652,25 @@ def close_notebook(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 def close_statement(request):
   response = {'status': -1}
 
-  # Passed by check_document_access_permission but unused by APIs
   notebook = json.loads(request.POST.get('notebook', '{}'))
-  snippet = json.loads(request.POST.get('snippet', '{}'))
+  snippet = None
+  operation_id = request.POST.get('operationId') or notebook['uuid']
+
+  snippet = _get_snippet(request.user, notebook, snippet, operation_id)
 
   try:
-    response['result'] = get_api(request, snippet).close_statement(snippet)
+    with opentracing.tracer.start_span('notebook-close_statement') as span:
+      response['result'] = get_api(request, snippet).close_statement(notebook, snippet)
+
+      span.set_tag('user-id', request.user.username)
+      span.set_tag(
+        'query-id',
+        snippet['result']['handle']['guid'] if snippet['result'].get('handle') and snippet['result']['handle'].get('guid') else None
+      )
   except QueryExpired:
     pass
 
@@ -560,7 +681,7 @@ def close_statement(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def autocomplete(request, server=None, database=None, table=None, column=None, nested=None):
   response = {'status': -1}
@@ -581,7 +702,7 @@ def autocomplete(request, server=None, database=None, table=None, column=None, n
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def get_sample_data(request, server=None, database=None, table=None, column=None):
   response = {'status': -1}
@@ -589,9 +710,10 @@ def get_sample_data(request, server=None, database=None, table=None, column=None
   # Passed by check_document_access_permission but unused by APIs
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
-  async = json.loads(request.POST.get('async', 'false'))
+  is_async = json.loads(request.POST.get('async', 'false'))
+  operation = json.loads(request.POST.get('operation', '"default"'))
 
-  sample_data = get_api(request, snippet).get_sample_data(snippet, database, table, column, async=async)
+  sample_data = get_api(request, snippet).get_sample_data(snippet, database, table, column, is_async=is_async, operation=operation)
   response.update(sample_data)
 
   response['status'] = 0
@@ -600,7 +722,7 @@ def get_sample_data(request, server=None, database=None, table=None, column=None
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def explain(request):
   response = {'status': -1}
@@ -625,7 +747,7 @@ def format(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def export_result(request):
   response = {'status': -1, 'message': _('Success')}
@@ -633,8 +755,8 @@ def export_result(request):
   # Passed by check_document_access_permission but unused by APIs
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
-  data_format = json.loads(request.POST.get('format', 'hdfs-file'))
-  destination = urllib.unquote(json.loads(request.POST.get('destination', '')))
+  data_format = json.loads(request.POST.get('format', '"hdfs-file"'))
+  destination = urllib_unquote(json.loads(request.POST.get('destination', '""')))
   overwrite = json.loads(request.POST.get('overwrite', 'false'))
   is_embedded = json.loads(request.POST.get('is_embedded', 'false'))
   start_time = json.loads(request.POST.get('start_time', '-1'))
@@ -682,6 +804,8 @@ def export_result(request):
       'allowed': True
     }
   elif data_format == 'hdfs-directory':
+    if destination.lower().startswith("abfs"):
+      destination = abfspath(destination)
     if is_embedded:
       sql, success_url = api.export_large_data_to_hdfs(notebook, snippet, destination)
 
@@ -742,7 +866,7 @@ def export_result(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def statement_risk(request):
   response = {'status': -1, 'message': ''}
@@ -759,7 +883,7 @@ def statement_risk(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def statement_compatibility(request):
   response = {'status': -1, 'message': ''}
@@ -778,7 +902,7 @@ def statement_compatibility(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def statement_similarity(request):
   response = {'status': -1, 'message': ''}
@@ -796,7 +920,7 @@ def statement_similarity(request):
 
 
 @require_POST
-@check_document_access_permission()
+@check_document_access_permission
 @api_error_handler
 def get_external_statement(request):
   response = {'status': -1, 'message': ''}
@@ -821,3 +945,25 @@ def _get_statement_from_file(user, fs, snippet):
     script_path = script_path.replace('hdfs://', '')
     if fs.do_as_user(user, fs.isfile, script_path):
       return fs.do_as_user(user, fs.read, script_path, 0, 16 * 1024 ** 2)
+
+
+@require_POST
+@api_error_handler
+def describe(request, database, table=None, column=None):
+  response = {'status': -1, 'message': ''}
+  notebook = json.loads(request.POST.get('notebook', '{}'))
+  source_type = request.POST.get('source_type', '')
+  snippet = {'type': source_type}
+
+  describe = get_api(request, snippet).describe(notebook, snippet, database, table, column=column)
+  response.update(describe)
+
+  return JsonResponse(response)
+
+
+def _get_snippet(user, notebook, snippet, operation_id):
+  if operation_id or not snippet:
+    nb_doc = Document2.objects.get_by_uuid(user=user, uuid=operation_id or notebook['uuid'])
+    notebook = Notebook(document=nb_doc).get_data()
+    snippet = notebook['snippets'][0]
+  return snippet

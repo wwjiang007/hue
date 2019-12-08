@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import logging
 
 from django.utils.translation import ugettext as _
@@ -32,7 +33,7 @@ LOG = logging.getLogger(__name__)
 
 try:
   from libsolr.api import SolrApi as NativeSolrApi
-except (ImportError, AttributeError), e:
+except (ImportError, AttributeError) as e:
   LOG.exception('Search is not enabled')
 
 
@@ -40,9 +41,9 @@ def query_error_handler(func):
   def decorator(*args, **kwargs):
     try:
       return func(*args, **kwargs)
-    except QueryError, e:
+    except QueryError as e:
       raise e
-    except Exception, e:
+    except Exception as e:
       message = force_unicode(str(e))
       raise QueryError(message)
   return decorator
@@ -72,7 +73,7 @@ class SolrApi(Api):
 
     headers = []
     for row in response['result-set']['docs']:
-      for col in row.keys():
+      for col in list(row.keys()):
         if col not in headers:
           headers.append(col)
 
@@ -128,13 +129,8 @@ class SolrApi(Api):
   def get_log(self, notebook, snippet, startFrom=None, size=None):
     return 'No logs'
 
-
-  def download(self, notebook, snippet, format, user_agent=None):
-    raise PopupException('Downloading is not supported yet')
-
-
   @query_error_handler
-  def close_statement(self, snippet):
+  def close_statement(self, notebook, snippet):
     return {'status': -1}
 
 
@@ -159,7 +155,7 @@ class SolrApi(Api):
 
 
   @query_error_handler
-  def get_sample_data(self, snippet, database=None, table=None, column=None, async=False):
+  def get_sample_data(self, snippet, database=None, table=None, column=None, is_async=False, operation=None):
     from search.conf import SOLR_URL
     db = NativeSolrApi(SOLR_URL.get(), self.user)
 
@@ -182,7 +178,7 @@ class SolrApi(Api):
     return response
 
 
-class Assist():
+class Assist(object):
 
   def __init__(self, api, user, db):
     self.api = api

@@ -16,6 +16,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import logging
 import json
 import os
@@ -84,7 +85,7 @@ class SolrClient(object):
         for name in solr_cores:
           indexes.append({'name': name, 'type': 'core', 'collections': []})
 
-    except Exception, e:
+    except Exception as e:
       msg = _('Solr server could not be contacted properly: %s') % e
       LOG.warn(msg)
       raise PopupException(msg, detail=smart_str(e))
@@ -95,17 +96,12 @@ class SolrClient(object):
   def create_index(self, name, fields, config_name=None, unique_key_field=None, df=None, shards=1, replication=1):
     if self.is_solr_cloud_mode():
       if self.is_solr_six_or_more():
-        if not config_name:
-          config_sets = self.list_configs()
-          if self.is_sentry_protected():
-            config_sets = [config for config in config_sets if 'Secure' in config]
-          if not config_sets:
-            raise PopupException(_('Solr does not have any predefined (secure: %s) configSets: %s') % (self.is_sentry_protected(), self.list_configs()))
+        config_sets = self.list_configs()
+        if not config_sets:
+          raise PopupException(_('Solr does not have any predefined (secure: %s) configSets: %s') % (self.is_sentry_protected(), self.list_configs()))
 
+        if not config_name or config_name not in config_sets:
           config_name_target = 'managedTemplate'
-          if self.is_sentry_protected():
-            config_name_target += 'Secure'
-
           if config_name_target in config_sets:
             config_name = config_name_target
           elif '_default' in config_sets:
@@ -113,8 +109,8 @@ class SolrClient(object):
           else:
             config_name = config_sets[0]
 
-          # Note: uniqueKey is always 'id'
-          self.api.create_config(name, config_name, immutable=False)
+        # Note: uniqueKey is always 'id'
+        self.api.create_config(name, config_name, immutable=False)
 
         self.api.create_collection2(name, config_name=name, shards=shards, replication=replication)
 
@@ -167,7 +163,7 @@ class SolrClient(object):
     try:
       self.api.get_schema(name)
       return True
-    except Exception, e:
+    except Exception as e:
       LOG.info('Check if index %s existed failed: %s' % (name, e))
       return False
 
@@ -188,7 +184,7 @@ class SolrClient(object):
             root_node = '%s/%s' % (ZK_SOLR_CONFIG_NAMESPACE, name)
             with ZookeeperClient(hosts=self.get_zookeeper_host(), read_only=False) as zc:
               zc.delete_path(root_node)
-          except Exception, e:
+          except Exception as e:
             # Re-create collection so that we don't have an orphan config
             self.api.add_collection(name)
             raise PopupException(_('Error in deleting Solr configurations.'), detail=e)
@@ -286,7 +282,7 @@ class SolrClient(object):
           zc.copy_path(root_node, config_root_path)
         else:
           LOG.warn('Config %s already existing.' % name)
-      except Exception, e:
+      except Exception as e:
         if zc.path_exists(root_node):
           zc.delete_path(root_node)
         raise PopupException(_('Could not create index: %s') % e)
@@ -311,7 +307,7 @@ class SolrClient(object):
 
       if not self.api.create_core(name, instancedir):
         raise Exception('Failed to create core: %s' % name)
-    except Exception, e:
+    except Exception as e:
       raise PopupException(_('Could not create index. Check error logs for more info.'), detail=e)
     finally:
       shutil.rmtree(instancedir)
@@ -348,7 +344,8 @@ class SolrClient(object):
     return field
 
 
-  def _reset_properties(self):
+  @staticmethod
+  def _reset_properties():
     global _IS_SOLR_CLOUD
     global _IS_SOLR_6_OR_MORE
     global _IS_SOLR_WITH_HDFS
@@ -365,6 +362,6 @@ class SolrClient(object):
       fields = self._format_flags(field_data['schema']['fields'])
       uniquekey = self.api.uniquekey(index_name)
       return uniquekey, fields
-    except Exception, e:
+    except Exception as e:
       LOG.exception(e.message)
       raise SolrClientException(_("Error in getting schema information for index '%s'" % index_name))

@@ -18,24 +18,25 @@
 """
 Interfaces for ADLS via HttpFs/WebHDFS
 """
+from future import standard_library
+standard_library.install_aliases()
 import logging
 import threading
 
-from urlparse import urlparse
+from urllib.parse import urlparse
 
 from hadoop.fs.webhdfs import WebHdfs as HadoopWebHdfs
 from hadoop.fs.exceptions import WebHdfsException
 from hadoop.hdfs_site import get_umask_mode
 
 from desktop.lib.rest import http_client, resource
-from azure.conf import get_default_adls_url, get_default_adls_fs
+from azure.conf import get_default_adls_url, get_default_adls_fs, PERMISSION_ACTION_ADLS
 
 
 LOG = logging.getLogger(__name__)
 
 #Azure has a 30MB block limit on upload.
 UPLOAD_CHUCK_SIZE = 30 * 1000 * 1000
-PERMISSION_ACTION_ADLS = "adls_access"
 
 
 class WebHdfs(HadoopWebHdfs):
@@ -47,9 +48,11 @@ class WebHdfs(HadoopWebHdfs):
                security_enabled=False,
                ssl_cert_ca_verify=True,
                temp_dir="/tmp",
-               umask=01022,
+               umask=0o1022,
                hdfs_supergroup=None,
-               auth_provider=None):
+               access_token=None,
+               token_type=None,
+               expiration=None):
     self._url = url
     self._superuser = hdfs_superuser
     self._security_enabled = security_enabled
@@ -59,7 +62,8 @@ class WebHdfs(HadoopWebHdfs):
     self._fs_defaultfs = fs_defaultfs
     self._logical_name = logical_name
     self._supergroup = hdfs_supergroup
-    self._auth_provider = auth_provider
+    self._access_token = access_token
+    self._token_type = token_type
     split = urlparse(fs_defaultfs)
     self._scheme = split.scheme
     self._netloc = split.netloc
@@ -67,8 +71,8 @@ class WebHdfs(HadoopWebHdfs):
     self._has_trash_support = False
     self._filebrowser_action = PERMISSION_ACTION_ADLS
 
-    self._client = http_client.HttpClient(url, exc_class=WebHdfsException, logger=LOG)
-    self._root = resource.Resource(self._client)
+    self._root = self.get_client(url)
+    self.expiration = expiration
 
     # To store user info
     self._thread_local = threading.local()
@@ -77,6 +81,7 @@ class WebHdfs(HadoopWebHdfs):
 
   @classmethod
   def from_config(cls, hdfs_config, auth_provider):
+    credentials = auth_provider.get_credentials()
     fs_defaultfs = get_default_adls_fs()
     url = get_default_adls_url()
     return cls(url=url,
@@ -87,12 +92,20 @@ class WebHdfs(HadoopWebHdfs):
                temp_dir=None,
                umask=get_umask_mode(),
                hdfs_supergroup=None,
-               auth_provider=auth_provider)
+               access_token=credentials.get('access_token'),
+               token_type=credentials.get('token_type'),
+               expiration=int(credentials.get('expires_on')) * 1000 if credentials.get('expires_on')  is not None else None)
+
+  def get_client(self, url):
+    return resource.Resource(http_client.HttpClient(url, exc_class=WebHdfsException, logger=LOG))
 
   def _getheaders(self):
     return {
-      "Authorization": self._auth_provider.get_token(),
+      "Authorization": self._token_type + " " + self._access_token,
     }
+
+  def is_web_accessible(self):
+    return False # Does not support OP=GETDELEGATIONTOKEN HADOOP-14579
 
   def get_upload_chuck_size(self):
     return UPLOAD_CHUCK_SIZE

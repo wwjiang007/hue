@@ -17,9 +17,12 @@
 #
 # Utilities for dealing with file modes.
 
+from past.builtins import basestring
+from builtins import object
 import bz2
 import os
 import posixpath
+import sys
 import tarfile
 import tempfile
 
@@ -65,7 +68,10 @@ class ZipArchive(Archive):
   """
 
   def __init__(self, file):
-    self.file = isinstance(file, basestring) and open(file) or file
+    if sys.version_info[0] > 2:
+      self.file = isinstance(file, basestring) and file
+    else:
+      self.file = isinstance(file, basestring) and open(file) or file
     self.zfh = ZipFile(self.file)
 
   def extract(self):
@@ -113,7 +119,10 @@ class ZipArchive(Archive):
     for f in files:
       new_path = os.path.join(basepath, f)
       new_file = open(new_path, 'w')
-      new_file.write(self.zfh.read(f))
+      zdata = self.zfh.read(f)
+      if not isinstance(zdata, str):
+        zdata = zdata.decode('utf-8')
+      new_file.write(zdata)
       new_file.close()
 
 
@@ -174,7 +183,10 @@ class TarballArchive(Archive):
     for f in files:
       new_path = os.path.join(basepath, f)
       new_file = open(new_path, 'w')
-      new_file.write(self.fh.extractfile(f).read())
+      extracted_data = self.fh.extractfile(f).read()
+      if not isinstance(extracted_data, str):
+        extracted_data = extracted_data.decode('utf-8')
+      new_file.write(extracted_data)
       new_file.close()
 
 

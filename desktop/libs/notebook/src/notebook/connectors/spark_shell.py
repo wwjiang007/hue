@@ -15,6 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import range
+from builtins import object
 import logging
 import re
 import time
@@ -37,7 +39,7 @@ LOG = logging.getLogger(__name__)
 try:
   from spark.conf import LIVY_SERVER_SESSION_KIND
   from spark.job_server_api import get_api as get_spark_api
-except ImportError, e:
+except ImportError as e:
   LOG.exception('Spark is not enabled')
 
 
@@ -241,8 +243,9 @@ class SparkApi(Api):
       return {
           'id': response['id'],
           'has_result_set': True,
+          'sync': False
       }
-    except Exception, e:
+    except Exception as e:
       message = force_unicode(str(e)).lower()
       if re.search("session ('\d+' )?not found", message) or 'connection refused' in message or 'session is in state busy' in message:
         raise SessionExpired(e)
@@ -259,7 +262,7 @@ class SparkApi(Api):
       return {
           'status': response['state'],
       }
-    except Exception, e:
+    except Exception as e:
       message = force_unicode(str(e)).lower()
       if re.search("session ('\d+' )?not found", message):
         raise SessionExpired(e)
@@ -273,7 +276,7 @@ class SparkApi(Api):
 
     try:
       response = api.fetch_data(session['id'], cell)
-    except Exception, e:
+    except Exception as e:
       message = force_unicode(str(e)).lower()
       if re.search("session ('\d+' )?not found", message):
         raise SessionExpired(e)
@@ -293,9 +296,15 @@ class SparkApi(Api):
           images = [data['image/png']]
         except KeyError:
           images = []
-        data = [[data['text/plain']]]
-        meta = [{'name': 'Header', 'type': 'STRING_TYPE', 'comment': ''}]
-        type = 'text'
+        if 'application/json' in data:
+          result = data['application/json']
+          data = result['data']
+          meta = [{'name': field['name'], 'type': field['type'], 'comment': ''} for field in result['schema']['fields']]
+          type = 'table'
+        else:
+          data = [[data['text/plain']]]
+          meta = [{'name': 'Header', 'type': 'STRING_TYPE', 'comment': ''}]
+          type = 'text'
       else:
         data = table['data']
         headers = table['headers']
@@ -326,16 +335,6 @@ class SparkApi(Api):
 
       raise QueryError(msg)
 
-  def download(self, notebook, snippet, format, user_agent=None):
-    try:
-      api = get_spark_api(self.user)
-      session = _get_snippet_session(notebook, snippet)
-      cell = snippet['result']['handle']['id']
-
-      return spark_download(api, session['id'], cell, format, user_agent=None)
-    except Exception, e:
-      raise PopupException(e)
-
   def cancel(self, notebook, snippet):
     api = get_spark_api(self.user)
     session = _get_snippet_session(notebook, snippet)
@@ -349,10 +348,7 @@ class SparkApi(Api):
 
     return api.get_log(session['id'], startFrom=startFrom, size=size)
 
-  def progress(self, snippet, logs):
-    return 50
-
-  def close_statement(self, snippet): # Individual statements cannot be closed
+  def close_statement(self, notebook, snippet): # Individual statements cannot be closed
     pass
 
   def close_session(self, session):
@@ -365,7 +361,7 @@ class SparkApi(Api):
           'session': session['id'],
           'status': 0
         }
-      except RestException, e:
+      except RestException as e:
         if e.code == 404 or e.code == 500: # TODO remove the 500
           raise SessionExpired(e)
     else:

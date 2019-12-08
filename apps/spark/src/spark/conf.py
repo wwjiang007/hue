@@ -58,6 +58,12 @@ SECURITY_ENABLED = Config(
   default=False,
   type=coerce_bool)
 
+CSRF_ENABLED = Config(
+  key="csrf_enabled",
+  help=_t("Whether Livy requres client to have CSRF enabled."),
+  default=False,
+  type=coerce_bool)
+
 # Spark SQL
 SQL_SERVER_HOST = Config(
   key="sql_server_host",
@@ -74,6 +80,13 @@ SSL_CERT_CA_VERIFY = Config(
   key="ssl_cert_ca_verify",
   help=_t("Choose whether Hue should validate certificates received from the server."),
   dynamic_default=default_ssl_validate,
+  type=coerce_bool
+)
+
+USE_SASL = Config(
+  key="use_sasl",
+  help=_t("Use SASL framework to establish connection to host."),
+  default=False,
   type=coerce_bool
 )
 

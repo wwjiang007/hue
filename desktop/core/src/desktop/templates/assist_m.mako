@@ -19,19 +19,7 @@ from desktop.views import commonheader_m, commonfooter_m
 from django.utils.translation import ugettext as _
 %>
 
-<%namespace name="assist" file="assist.mako" />
-
 ${ commonheader_m(_('Assist'), 'assist', user, request) | n,unicode }
-
-<script src="${ static('desktop/ext/js/jquery/plugins/jquery-ui-1.10.4.custom.min.js') }"></script>
-<script src="${ static('desktop/ext/js/selectize.min.js') }"></script>
-<script src="${ static('metastore/js/metastore.ko.js') }"></script>
-<script src="${ static('desktop/ext/js/knockout-sortable.min.js') }"></script>
-<script src="${ static('desktop/js/ko.editable.js') }"></script>
-
-${ assist.assistJSModels() }
-
-${ assist.assistPanel() }
 
 <style type="text/css">
   .assist {
@@ -71,7 +59,7 @@ ${ assist.assistPanel() }
 
     function AssistViewModel(options) {
       var self = this;
-      self.apiHelper = ApiHelper.getInstance();
+      self.apiHelper = window.apiHelper;
       self.assistAvailable = ko.observable(true);
       self.isLeftPanelVisible = ko.observable();
       self.apiHelper.withTotalStorage('assist', 'assist_panel_visible', self.isLeftPanelVisible, true);

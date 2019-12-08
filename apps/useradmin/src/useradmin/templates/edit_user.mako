@@ -16,6 +16,8 @@
 <%!
 from django.utils.translation import ugettext as _
 
+from desktop.auth.backend import is_admin
+from desktop.conf import ENABLE_ORGANIZATIONS
 from desktop.views import commonheader, commonfooter
 
 from useradmin.hue_password_policy import is_password_policy_enabled, get_password_hint
@@ -24,9 +26,9 @@ from useradmin.views import is_user_locked_out
 
 <%namespace name="layout" file="layout.mako" />
 
-%if not is_embeddable:
+% if not is_embeddable:
 ${ commonheader(_('Hue Users'), "useradmin", user, request) | n,unicode }
-%endif
+% endif
 
 ${ layout.menubar(section='users') }
 
@@ -52,24 +54,29 @@ ${ layout.menubar(section='users') }
           % endif
           </a>
         </li>
-        <li><a href="javascript:void(0)" class="step" data-step="step2">${ user.is_superuser and _('Step 2: Profile and Groups') or _('Step 2: Profile') }</a>
+        <li><a href="javascript:void(0)" class="step" data-step="step2">${ is_admin(user) and _('Step 2: Profile and Groups') or _('Step 2: Profile') }</a>
         </li>
-        % if user.is_superuser:
-            <li><a href="javascript:void(0)" class="step" data-step="step3">${ _('Step 3: Advanced') }</a></li>
+        % if is_admin(user):
+          <li><a href="javascript:void(0)" class="step" data-step="step3">${ _('Step 3: Advanced') }</a></li>
         % endif
       </ul>
 
     <div class="steps">
       <div id="step1" class="stepDetails">
-        ${layout.render_field(form["username"], extra_attrs={'validate':'true'})}
+        % if ENABLE_ORGANIZATIONS.get():
+          ${ layout.render_field(form["email"], extra_attrs={'validate':'true'}) }
+        % else:
+          ${ layout.render_field(form["username"], extra_attrs={'validate':'true'}) }
+        % endif
+
         % if "password1" in form.fields:
           % if username and "password_old" in form.fields:
-            ${layout.render_field(form["password_old"], extra_attrs=username is None and {'validate':'true'} or {})}
+            ${ layout.render_field(form["password_old"], extra_attrs=username is None and {'validate':'true'} or {}) }
           % endif
-          ${layout.render_field(form["password1"], extra_attrs=username is None and {'validate':'true'} or {})}
+          ${ layout.render_field(form["password1"], extra_attrs=username is None and {'validate':'true'} or {}) }
           % if is_password_policy_enabled():
             <div class="password_rule" style="margin-left:180px; width:500px;">
-              <p>${get_password_hint()}</p>
+              <p>${ get_password_hint() }</p>
             </div>
           % endif
           ${layout.render_field(form["password2"], extra_attrs=username is None and {'validate':'true'} or {})}
@@ -82,22 +89,26 @@ ${ layout.menubar(section='users') }
             ${layout.render_field(form["last_name"])}
           % endif
 
-          ${layout.render_field(form["email"])}
+          % if ENABLE_ORGANIZATIONS.get():
+            ${layout.render_field(form["organization"])}
+          % else:
+            ${layout.render_field(form["email"])}
+          % endif
 
-          %if request.user.username == username:
+          % if request.user.username == username:
             ${layout.render_field(form["language"])}
           % endif
 
-          % if user.is_superuser:
+          % if is_admin(user):
             ${layout.render_field(form["groups"])}
           % endif
         </div>
-      % if user.is_superuser:
+      % if is_admin(user):
         <div id="step3" class="stepDetails hide">
-          ${layout.render_field(form["is_active"])}
+          ${ layout.render_field(form["is_active"]) }
           ${'is_superuser' in form.fields and layout.render_field(form["is_superuser"])}
           % if is_user_locked_out(username):
-            ${layout.render_field(form["unlock_account"])}
+            ${ layout.render_field(form["unlock_account"]) }
           % endif
         </div>
       % endif
@@ -134,7 +145,7 @@ $(document).ready(function(){
 
 
   % if is_embeddable:
-  $editUserComponents.find('#editForm').attr('action', window.location.pathname.substr(4).replace(/\/$/, ''));
+  $editUserComponents.find('#editForm').attr('action', window.location.pathname.substr((window.HUE_BASE_URL + '/hue').length).replace(/\/$/, ''));
   $editUserComponents.find('#editForm').ajaxForm({
     dataType:  'json',
     success: function(data) {

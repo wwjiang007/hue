@@ -21,8 +21,8 @@ import os
 
 from django.utils.translation import ugettext_lazy as _t
 
+from desktop.conf import default_ssl_validate, has_connectors
 from desktop.lib.conf import Config, UnspecifiedConfigSection, ConfigSection, coerce_bool
-from desktop.conf import default_ssl_validate
 
 
 LOG = logging.getLogger(__name__)
@@ -35,8 +35,7 @@ def find_file_recursive(desired_glob, root):
       matches = fnmatch.filter(filenames, desired_glob)
       if matches:
         if len(matches) != 1:
-          logging.warning("Found multiple jars matching %s: %s" %
-                          (desired_glob, matches))
+          logging.warning("Found multiple jars matching %s: %s" % (desired_glob, matches))
         return os.path.join(dirpath, matches[0])
 
     logging.error("Trouble finding jars matching %s" % (desired_glob,))
@@ -46,12 +45,24 @@ def find_file_recursive(desired_glob, root):
   return f
 
 
-
 UPLOAD_CHUNK_SIZE = Config(
   key="upload_chunk_size",
   help="Size, in bytes, of the 'chunks' Django should store into memory and feed into the handler. Default is 64MB.",
   type=int,
   default=1024 * 1024 * 64)
+
+
+def has_hdfs_enabled():
+  if has_connectors():
+    from desktop.lib.connectors.api import _get_installed_connectors
+    return any([connector for connector in _get_installed_connectors() if connector['dialect'] == 'hdfs'])
+  else:
+    return list(HDFS_CLUSTERS.keys())
+
+
+def get_hadoop_conf_dir_default():
+  """ get from environment variable HADOOP_CONF_DIR or "/etc/hadoop/conf" """
+  return os.environ.get("HADOOP_CONF_DIR", "/etc/hadoop/conf")
 
 
 HDFS_CLUSTERS = UnspecifiedConfigSection(
@@ -82,7 +93,7 @@ HDFS_CLUSTERS = UnspecifiedConfigSection(
                       default='/tmp', type=str),
       HADOOP_CONF_DIR = Config(
         key="hadoop_conf_dir",
-        default=os.environ.get("HADOOP_CONF_DIR", "/etc/hadoop/conf"),
+        dynamic_default=get_hadoop_conf_dir_default,
         help=("Directory of the Hadoop configuration) Defaults to the environment variable " +
               "HADOOP_CONF_DIR when set, or '/etc/hadoop/conf'.")
       )
@@ -118,6 +129,33 @@ MR_CLUSTERS = UnspecifiedConfigSection(
   )
 )
 
+
+def get_spark_history_server_from_cm():
+  from metadata.conf import MANAGER
+  from metadata.manager_client import ManagerApi
+
+  if MANAGER.API_URL.get():
+    return ManagerApi().get_spark_history_server_url()
+  return None
+
+def get_spark_history_server_url():
+  """
+    Try to get Spark history server URL from Cloudera Manager API, otherwise give default URL
+  """
+  url = get_spark_history_server_from_cm()
+  return url if url else 'http://localhost:18088'
+
+def get_spark_history_server_security_enabled():
+  """
+    Try to get Spark history server URL from Cloudera Manager API, otherwise give default URL
+  """
+  from metadata.conf import MANAGER
+  from metadata.manager_client import ManagerApi
+  if MANAGER.API_URL.get():
+    return ManagerApi().get_spark_history_server_security_enabled()
+  return False
+
+
 YARN_CLUSTERS = UnspecifiedConfigSection(
   "yarn_clusters",
   help="One entry for each Yarn cluster",
@@ -151,8 +189,11 @@ YARN_CLUSTERS = UnspecifiedConfigSection(
                   default='http://localhost:19888',
                   help="URL of the HistoryServer API"),
       SPARK_HISTORY_SERVER_URL=Config("spark_history_server_url",
-                  default='http://localhost:18088',
+                  dynamic_default=get_spark_history_server_url,
                   help="URL of the Spark History Server"),
+      SPARK_HISTORY_SERVER_SECURITY_ENABLED=Config("spark_history_server_security_enabled",
+                  dynamic_default=get_spark_history_server_security_enabled,
+                  help="Is Spark History Server running with Kerberos authentication"),
       SSL_CERT_CA_VERIFY=Config("ssl_cert_ca_verify",
                   help="In secure mode (HTTPS), if SSL certificates from YARN Rest APIs have to be verified against certificate authority",
                   dynamic_default=default_ssl_validate,
@@ -175,27 +216,45 @@ def config_validator(user):
 
   # HDFS_CLUSTERS
   has_default = False
-  for name in HDFS_CLUSTERS.keys():
+  for name in list(HDFS_CLUSTERS.keys()):
     cluster = HDFS_CLUSTERS[name]
     res.extend(webhdfs.test_fs_configuration(cluster))
     if name == 'default':
       has_default = True
-  if not has_default:
+  if HDFS_CLUSTERS.keys() and not has_default:
     res.append(("hadoop.hdfs_clusters", "You should have an HDFS called 'default'."))
 
   # YARN_CLUSTERS
-  if YARN_CLUSTERS.keys():
-    res.extend(test_yarn_configurations(user))
-  for name in YARN_CLUSTERS.keys():
+  for name in list(YARN_CLUSTERS.keys()):
     cluster = YARN_CLUSTERS[name]
     if cluster.SUBMIT_TO.get():
       submit_to.append('yarn_clusters.' + name)
 
-  if not submit_to:
-    res.append(("hadoop", "Please designate one of the MapReduce or "
-                "Yarn clusters with `submit_to=true' in order to run jobs."))
+  if YARN_CLUSTERS.keys() and not submit_to:
+    res.append(("hadoop", "Please designate one of the MapReduce or Yarn clusters with `submit_to=true' in order to run jobs."))
+  else:
+    res.extend(test_yarn_configurations(user))
+
+  if get_spark_history_server_from_cm():
+    status = test_spark_configuration(user)
+    if status != 'OK':
+      res.append(("Spark_history_server", "Spark job can't retrieve logs of driver and executors without a running Spark history server"))
 
   return res
+
+
+def test_spark_configuration(user):
+  import hadoop.yarn.spark_history_server_api as spark_hs_api
+
+  status = None
+
+  try:
+    spark_hs_api.get_history_server_api().applications()
+    status = 'OK'
+  except:
+    LOG.exception('failed to get spark history server status')
+
+  return status
 
 
 def test_yarn_configurations(user):
@@ -203,13 +262,13 @@ def test_yarn_configurations(user):
 
   try:
     from jobbrowser.api import get_api # Required for cluster HA testing
-  except Exception, e:
+  except Exception as e:
     LOG.warn('Jobbrowser is disabled, skipping test_yarn_configurations')
     return result
 
   try:
     get_api(user, None).get_jobs(user, username=user.username, state='all', text='')
-  except Exception, e:
+  except Exception as e:
     msg = 'Failed to contact an active Resource Manager: %s' % e
     LOG.exception(msg)
     result.append(('Resource Manager', msg))

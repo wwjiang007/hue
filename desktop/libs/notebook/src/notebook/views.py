@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import json
 import logging
 
@@ -24,21 +25,22 @@ from django.shortcuts import redirect
 from django.utils.translation import ugettext as _
 from django.views.decorators.clickjacking import xframe_options_exempt
 
+from beeswax.data_export import DOWNLOAD_COOKIE_AGE
 from desktop.conf import ENABLE_DOWNLOAD, USE_NEW_EDITOR
+from desktop.lib import export_csvxls
 from desktop.lib.django_util import render, JsonResponse
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.json_utils import JSONEncoderForHTML
-from desktop.models import Document2, Document, FilesystemException
+from desktop.models import Document2, Document, FilesystemException, _get_gist_document
 from desktop.views import serve_403_error
-
-from metadata.conf import has_optimizer, has_navigator
+from metadata.conf import has_optimizer, has_catalog, has_workload_analytics
 
 from notebook.conf import get_ordered_interpreters, SHOW_NOTEBOOKS
-from notebook.connectors.base import Notebook, get_api, _get_snippet_name
+from notebook.connectors.base import Notebook, _get_snippet_name
 from notebook.connectors.spark_shell import SparkApi
 from notebook.decorators import check_editor_access_permission, check_document_access_permission, check_document_modify_permission
 from notebook.management.commands.notebook_setup import Command
-from notebook.models import make_notebook
+from notebook.models import make_notebook, _get_editor_type, get_api
 
 
 LOG = logging.getLogger(__name__)
@@ -64,9 +66,9 @@ def notebooks(request):
   })
 
 
-@check_document_access_permission()
+@check_document_access_permission
 def notebook(request, is_embeddable=False):
-  if not SHOW_NOTEBOOKS.get():
+  if not SHOW_NOTEBOOKS.get() or not request.user.has_hue_permission(action="access", app='notebook'):
     return serve_403_error(request)
 
   notebook_id = request.GET.get('notebook', request.GET.get('editor'))
@@ -86,32 +88,35 @@ def notebook(request, is_embeddable=False):
           'languages': get_ordered_interpreters(request.user),
           'session_properties': SparkApi.get_properties(),
           'is_optimizer_enabled': has_optimizer(),
-          'is_navigator_enabled': has_navigator(request.user),
+          'is_wa_enabled': has_workload_analytics(),
+          'is_navigator_enabled': has_catalog(request.user),
           'editor_type': 'notebook'
       }),
       'is_yarn_mode': is_yarn_mode,
   })
 
-@xframe_options_exempt
-def workers_embedded(request):
-  return render('workers_embedded.mako', request, {})
 
-@check_document_access_permission()
+@check_document_access_permission
 def notebook_embeddable(request):
   return notebook(request, True)
 
+
 @check_editor_access_permission()
-@check_document_access_permission()
+@check_document_access_permission
 def editor(request, is_mobile=False, is_embeddable=False):
   editor_id = request.GET.get('editor')
   editor_type = request.GET.get('type', 'hive')
+  gist_id = request.GET.get('gist')
 
   if editor_type == 'notebook' or request.GET.get('notebook'):
     return notebook(request)
 
-  if editor_id:  # Open existing saved editor document
-    document = Document2.objects.get(id=editor_id)
-    editor_type = document.type.rsplit('-', 1)[-1]
+  if editor_type == 'gist':
+    gist_doc = _get_gist_document(uuid=gist_id)
+    editor_type = gist_doc.extra
+
+  if editor_id and not gist_id:  # Open existing saved editor document
+    editor_type = _get_editor_type(editor_id)
 
   template = 'editor.mako'
   if is_mobile:
@@ -126,19 +131,20 @@ def editor(request, is_mobile=False, is_embeddable=False):
         'languages': get_ordered_interpreters(request.user),
         'mode': 'editor',
         'is_optimizer_enabled': has_optimizer(),
-        'is_navigator_enabled': has_navigator(request.user),
+        'is_wa_enabled': has_workload_analytics(),
+        'is_navigator_enabled': has_catalog(request.user),
         'editor_type': editor_type,
         'mobile': is_mobile
       })
   })
 
 
-@check_document_access_permission()
+@check_document_access_permission
 def editor_embeddable(request):
   return editor(request, False, True)
 
 
-@check_document_access_permission()
+@check_document_access_permission
 def editor_m(request):
   return editor(request, True)
 
@@ -152,12 +158,29 @@ def browse(request, database, table, partition_spec=None):
 
   statement = get_api(request, snippet).get_browse_query(snippet, database, table, partition_spec)
   editor_type = snippet['type']
+  namespace = request.POST.get('namespace', 'default')
+  compute = json.loads(request.POST.get('cluster', '{}'))
 
   if request.method == 'POST':
-    notebook = make_notebook(name='Execute and watch', editor_type=editor_type, statement=statement, status='ready-execute', is_task=True)
+    notebook = make_notebook(
+        name='Execute and watch',
+        editor_type=editor_type,
+        statement=statement,
+        status='ready-execute',
+        is_task=True,
+        namespace=namespace,
+        compute=compute
+    )
     return JsonResponse(notebook.execute(request, batch=False))
   else:
-    editor = make_notebook(name='Browse', editor_type=editor_type, statement=statement, status='ready-execute')
+    editor = make_notebook(
+        name='Browse',
+        editor_type=editor_type,
+        statement=statement,
+        status='ready-execute',
+        namespace=namespace,
+        compute=compute
+    )
 
     return render('editor.mako', request, {
         'notebooks_json': json.dumps([editor.get_data()]),
@@ -170,7 +193,7 @@ def browse(request, database, table, partition_spec=None):
     })
 
 # Deprecated in Hue 4
-@check_document_access_permission()
+@check_document_access_permission
 def execute_and_watch(request):
   notebook_id = request.GET.get('editor', request.GET.get('notebook'))
   snippet_id = int(request.GET['snippet'])
@@ -261,7 +284,7 @@ def delete(request):
         doc.can_write_or_exception(request.user)
         doc2.trash()
         ctr += 1
-      except FilesystemException, e:
+      except FilesystemException as e:
         failures.append(notebook['uuid'])
         LOG.exception("Failed to delete document with UUID %s that is writable by user %s, skipping." % (notebook['uuid'], request.user.username))
 
@@ -275,7 +298,7 @@ def delete(request):
   return JsonResponse(response)
 
 
-@check_document_access_permission()
+@check_document_access_permission
 def copy(request):
   response = {'status': -1}
 
@@ -294,7 +317,7 @@ def copy(request):
         doc2 = doc2.copy(name=name, owner=request.user)
 
         doc.copy(content_object=doc2, name=name, owner=request.user)
-      except FilesystemException, e:
+      except FilesystemException as e:
         failures.append(notebook['uuid'])
         LOG.exception("Failed to copy document with UUID %s accessible by user %s, skipping." % (notebook['uuid'], request.user.username))
 
@@ -308,7 +331,7 @@ def copy(request):
   return JsonResponse(response)
 
 
-@check_document_access_permission()
+@check_document_access_permission
 def download(request):
   if not ENABLE_DOWNLOAD.get():
     return serve_403_error(request)
@@ -316,9 +339,21 @@ def download(request):
   notebook = json.loads(request.POST.get('notebook', '{}'))
   snippet = json.loads(request.POST.get('snippet', '{}'))
   file_format = request.POST.get('format', 'csv')
+  user_agent = request.META.get('HTTP_USER_AGENT')
+  file_name = _get_snippet_name(notebook)
 
-  response = get_api(request, snippet).download(notebook, snippet, file_format, user_agent=request.META.get('HTTP_USER_AGENT'))
+  content_generator = get_api(request, snippet).download(notebook, snippet, file_format=file_format)
+  response = export_csvxls.make_response(content_generator, file_format, file_name, user_agent=user_agent)
 
+  if snippet['id']:
+    response.set_cookie(
+      'download-%s' % snippet['id'],
+      json.dumps({
+        'truncated': 'false',
+        'row_counter': '0'
+      }),
+      max_age=DOWNLOAD_COOKIE_AGE
+    )
   if response:
     request.audit = {
       'operation': 'DOWNLOAD',
@@ -336,24 +371,10 @@ def install_examples(request):
     try:
       Command().handle(user=request.user)
       response['status'] = 0
-    except Exception, err:
+    except Exception as err:
       LOG.exception(err)
       response['message'] = str(err)
   else:
     response['message'] = _('A POST request is required.')
 
   return JsonResponse(response)
-
-
-def upgrade_session_properties(request, notebook):
-  # Upgrade session data if using old format
-  data = notebook.get_data()
-
-  for session in data.get('sessions', []):
-    api = get_api(request, session)
-    if 'type' in session and hasattr(api, 'upgrade_properties'):
-      properties = session.get('properties', None)
-      session['properties'] = api.upgrade_properties(session['type'], properties)
-
-  notebook.data = json.dumps(data)
-  return notebook

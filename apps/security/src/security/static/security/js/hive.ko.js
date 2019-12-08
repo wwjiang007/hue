@@ -829,7 +829,7 @@ var HiveViewModel = (function () {
     self.availableActions = function(scope) {
       var actions = ['SELECT', 'INSERT', 'ALL'];
       var databaseActions = ['CREATE'];
-      var tableActions = ['REFRESH', 'ALTER', 'DROP'];
+      var tableActions = ['REFRESH']; //, 'ALTER', 'DROP'];
       switch (scope) {
         case 'SERVER':
         case 'DATABASE':
@@ -1096,7 +1096,7 @@ var HiveViewModel = (function () {
         'timestamp': privilege.timestamp,
         'roleName': privilege.roleName,
         'grantOption': privilege.grantOption,
-        'id': UUID()
+        'id': hueUtils.UUID()
       });
       return _privilege;
     }
@@ -1285,6 +1285,7 @@ var HiveViewModel = (function () {
 
     self.fetchUsers = function () {
       var data = {
+        'count': 2000,
         'include_myself': true,
         'extend_user': true
       };

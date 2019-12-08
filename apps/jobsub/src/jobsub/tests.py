@@ -15,31 +15,33 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import str
+from builtins import range
 import logging
 import json
 import time
 
 from nose.tools import assert_true, assert_false, assert_equal, assert_raises
-from django.contrib.auth.models import User
 from django.urls import reverse
 from nose.plugins.skip import SkipTest
 
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.test_utils import grant_access, add_to_group
 from desktop.models import Document
-
 from liboozie.oozie_api_tests import OozieServerProvider
 from oozie.models import Workflow, Node, Start, Kill, End, Link
+from useradmin.models import User
 
 
 LOG = logging.getLogger(__name__)
+
 
 class TestJobsubWithHadoop(OozieServerProvider):
 
   def setUp(self):
     OozieServerProvider.setup_class()
     self.cluster.fs.do_as_user('jobsub_test', self.cluster.fs.create_home_dir, '/user/jobsub_test')
-    self.cluster.fs.do_as_superuser(self.cluster.fs.chmod, '/user/jobsub_test', 0777, True) # Hum?
+    self.cluster.fs.do_as_superuser(self.cluster.fs.chmod, '/user/jobsub_test', 0o777, True) # Hum?
     self.client = make_logged_in_client(username='jobsub_test')
     self.user = User.objects.get(username='jobsub_test')
 
@@ -48,9 +50,9 @@ class TestJobsubWithHadoop(OozieServerProvider):
     # different user than what was previously used.
     for i in range(0,10):
       try:
-        self.cluster.fs.do_as_superuser(self.cluster.fs.chmod, '/tmp', 0777, recursive=True)
+        self.cluster.fs.do_as_superuser(self.cluster.fs.chmod, '/tmp', 0o777, recursive=True)
         break
-      except Exception, e:
+      except Exception as e:
         # chmod failure likely do to async processing of resource deletion.
         # If the directory has improper permissions, should fail later in the test case.
         LOG.warn("Received the following exception while change mode attempt %d of /tmp: %s" % (i, str(e)))

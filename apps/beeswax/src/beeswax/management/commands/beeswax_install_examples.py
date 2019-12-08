@@ -15,13 +15,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
+import csv
 import logging
+import json
 import os
 import pwd
-import json
 
 from django.core.management.base import BaseCommand
-from django.contrib.auth.models import User
 from django.utils.translation import ugettext as _
 
 from desktop.lib.exceptions_renderable import PopupException
@@ -29,11 +30,12 @@ from desktop.conf import USE_NEW_EDITOR
 from desktop.models import Directory, Document, Document2, Document2Permission
 from hadoop import cluster
 from notebook.models import import_saved_beeswax_query
-from useradmin.models import get_default_user_group, install_sample_user
+from useradmin.models import get_default_user_group, install_sample_user, User
 
 import beeswax.conf
 from beeswax.models import SavedQuery, HQL, IMPALA
 from beeswax.design import hql_query
+from beeswax.hive_site import has_concurrency_support
 from beeswax.server import dbms
 from beeswax.server.dbms import get_query_server_config, QueryServerException
 
@@ -59,7 +61,7 @@ class Command(BaseCommand):
       db_name = options.get('db_name', 'default')
       user = options['user']
 
-    tables = options['tables'] if 'tables' in options else 'tables.json'
+    tables = options['tables'] if 'tables' in options else ('tables_transactional.json' if has_concurrency_support() else 'tables.json')
 
     exception = None
 
@@ -68,22 +70,22 @@ class Command(BaseCommand):
       sample_user = install_sample_user()
       self._install_queries(sample_user, app_name)
       self._install_tables(user, app_name, db_name, tables)
-    except Exception, ex:
+    except Exception as ex:
       exception = ex
 
     Document.objects.sync()
 
     if exception is not None:
       pretty_msg = None
-      
-      if "AlreadyExistsException" in exception.message:
+
+      if "AlreadyExistsException" in str(exception):
         pretty_msg = _("SQL table examples already installed.")
-      if "Permission denied" in exception.message:
+      if "Permission denied" in str(exception):
         pretty_msg = _("Permission denied. Please check with your system administrator.")
 
       if pretty_msg is not None:
         raise PopupException(pretty_msg)
-      else: 
+      else:
         raise exception
 
   def _install_tables(self, django_user, app_name, db_name, tables):
@@ -96,7 +98,7 @@ class Command(BaseCommand):
       table = SampleTable(table_dict, app_name, db_name)
       try:
         table.install(django_user)
-      except Exception, ex:
+      except Exception as ex:
         raise InstallException(_('Could not install table: %s') % ex)
 
   def _install_queries(self, django_user, app_name):
@@ -106,13 +108,13 @@ class Command(BaseCommand):
 
     # Filter design list to app-specific designs
     app_type = HQL if app_name == 'beeswax' else IMPALA
-    design_list = filter(lambda d: int(d['type']) == app_type, design_list)
+    design_list = [d for d in design_list if int(d['type']) == app_type]
 
     for design_dict in design_list:
       design = SampleQuery(design_dict)
       try:
         design.install(django_user)
-      except Exception, ex:
+      except Exception as ex:
         raise InstallException(_('Could not install query: %s') % ex)
 
 
@@ -131,11 +133,13 @@ class SampleTable(object):
     self.query_server = get_query_server_config(app_name)
     self.app_name = app_name
     self.db_name = db_name
+    self.columns = data_dict.get('columns')
+    self.is_transactional = data_dict.get('transactional')
 
     # Sanity check
     self._data_dir = beeswax.conf.LOCAL_EXAMPLES_DATA_DIR.get()
     if self.partition_files:
-      for partition_spec, filename in self.partition_files.items():
+      for partition_spec, filename in list(self.partition_files.items()):
         filepath = os.path.join(self._data_dir, filename)
         self.partition_files[partition_spec] = filepath
         self._check_file_contents(filepath)
@@ -147,10 +151,11 @@ class SampleTable(object):
   def install(self, django_user):
     if self.create(django_user):
       if self.partition_files:
-        for partition_spec, filepath in self.partition_files.items():
-          self.load_partition(django_user, partition_spec, filepath)
+        for partition_spec, filepath in list(self.partition_files.items()):
+          self.load_partition(django_user, partition_spec, filepath, columns=self.columns)
       else:
         self.load(django_user)
+
 
   def create(self, django_user):
     """
@@ -160,7 +165,6 @@ class SampleTable(object):
     db = dbms.get(django_user, self.query_server)
 
     try:
-      # Already exists?
       if self.app_name == 'impala':
         db.invalidate(database=self.db_name, flush_all=False)
       db.get_table(self.db_name, self.name)
@@ -177,46 +181,66 @@ class SampleTable(object):
           LOG.error(msg)
           raise InstallException(msg)
         return True
-      except Exception, ex:
+      except Exception as ex:
         msg = _('Error creating table %(table)s: %(error)s.') % {'table': self.name, 'error': ex}
         LOG.error(msg)
         raise InstallException(msg)
 
-  def load_partition(self, django_user, partition_spec, filepath):
-    """
-    Upload data found at filepath to HDFS home of user, the load intto a specific partition
-    """
-    LOAD_PARTITION_HQL = \
-      """
-      ALTER TABLE %(tablename)s ADD PARTITION(%(partition_spec)s) LOCATION '%(filepath)s'
-      """
+  def load_partition(self, django_user, partition_spec, filepath, columns):
+    if has_concurrency_support() and self.is_transactional:
+      with open(filepath) as f:
+        hql = \
+          """
+          INSERT INTO TABLE %(tablename)s
+          PARTITION (%(partition_spec)s)
+          VALUES %(values)s
+          """ % {
+            'tablename': self.name,
+            'partition_spec': partition_spec,
+            'values': self._get_sql_insert_values(f, columns)
+          }
+    else:
+      # Upload data found at filepath to HDFS home of user, the load intto a specific partition
+      LOAD_PARTITION_HQL = \
+        """
+        ALTER TABLE %(tablename)s ADD PARTITION(%(partition_spec)s) LOCATION '%(filepath)s'
+        """
 
-    partition_dir = self._get_partition_dir(partition_spec)
-    hdfs_root_destination = self._get_hdfs_root_destination(django_user, subdir=partition_dir)
-    filename = filepath.split('/')[-1]
-    hdfs_file_destination = self._upload_to_hdfs(django_user, filepath, hdfs_root_destination, filename)
+      partition_dir = self._get_partition_dir(partition_spec)
+      hdfs_root_destination = self._get_hdfs_root_destination(django_user, subdir=partition_dir)
+      filename = filepath.split('/')[-1]
+      hdfs_file_destination = self._upload_to_hdfs(django_user, filepath, hdfs_root_destination, filename)
 
-    hql = LOAD_PARTITION_HQL % {'tablename': self.name, 'partition_spec': partition_spec, 'filepath': hdfs_root_destination}
-    LOG.info('Running load query: %s' % hql)
-    self._load_data_to_table(django_user, hql, hdfs_file_destination)
+      hql = LOAD_PARTITION_HQL % {'tablename': self.name, 'partition_spec': partition_spec, 'filepath': hdfs_root_destination}
+
+    self._load_data_to_table(django_user, hql)
 
 
   def load(self, django_user):
-    """
-    Upload data to HDFS home of user then load (aka move) it into the Hive table (in the Hive metastore in HDFS).
-    """
-    LOAD_HQL = \
-      """
-      LOAD DATA INPATH
-      '%(filename)s' OVERWRITE INTO TABLE %(tablename)s
-      """
+    if has_concurrency_support() and self.is_transactional:
+      with open(self._contents_file) as f:
+        hql = \
+          """
+          INSERT INTO TABLE %(tablename)s
+          VALUES %(values)s
+          """ % {
+            'tablename': self.name,
+            'values': self._get_sql_insert_values(f)
+          }
+    else:
+      # Upload data to HDFS home of user then load (aka move) it into the Hive table (in the Hive metastore in HDFS).
+      hdfs_root_destination = self._get_hdfs_root_destination(django_user)
+      hdfs_file_destination = self._upload_to_hdfs(django_user, self._contents_file, hdfs_root_destination)
+      hql = \
+        """
+        LOAD DATA INPATH
+        '%(filename)s' OVERWRITE INTO TABLE %(tablename)s
+        """ % {
+          'tablename': self.name,
+          'filename': hdfs_file_destination
+        }
 
-    hdfs_root_destination = self._get_hdfs_root_destination(django_user)
-    hdfs_file_destination = self._upload_to_hdfs(django_user, self._contents_file, hdfs_root_destination)
-
-    hql = LOAD_HQL % {'tablename': self.name, 'filename': hdfs_file_destination}
-    LOG.info('Running load query: %s' % hql)
-    self._load_data_to_table(django_user, hql, hdfs_file_destination)
+    self._load_data_to_table(django_user, hql)
 
 
   def _check_file_contents(self, filepath):
@@ -236,21 +260,25 @@ class SampleTable(object):
 
   def _get_hdfs_root_destination(self, django_user, subdir=None):
     fs = cluster.get_hdfs()
+    hdfs_root_destination = None
+    can_impersonate_hdfs = False
 
     if self.app_name == 'impala':
-      # Because Impala does not have impersonation on by default, we use a public destination for the upload.
+      # Impala can support impersonation, so use home instead of a public destination for the upload
       from impala.conf import IMPERSONATION_ENABLED
-      if not IMPERSONATION_ENABLED.get():
-        tmp_public = '/tmp/public_hue_examples'
-        if subdir:
-          tmp_public += '/%s' % subdir
-        fs.do_as_user(django_user, fs.mkdir, tmp_public, '0777')
-        hdfs_root_destination = tmp_public
-    else:
+      can_impersonate_hdfs = IMPERSONATION_ENABLED.get()
+
+    if can_impersonate_hdfs:
       hdfs_root_destination = fs.do_as_user(django_user, fs.get_home_dir)
       if subdir:
         hdfs_root_destination += '/%s' % subdir
         fs.do_as_user(django_user, fs.mkdir, hdfs_root_destination, '0777')
+    else:
+      tmp_public = '/tmp/public_hue_examples'
+      if subdir:
+        tmp_public += '/%s' % subdir
+      fs.do_as_user(django_user, fs.mkdir, tmp_public, '0777')
+      hdfs_root_destination = tmp_public
 
     return hdfs_root_destination
 
@@ -268,7 +296,7 @@ class SampleTable(object):
     return hdfs_destination
 
 
-  def _load_data_to_table(self, django_user, hql, hdfs_destination):
+  def _load_data_to_table(self, django_user, hql):
     LOG.info('Loading data into table "%s"' % (self.name,))
     query = hql_query(hql)
 
@@ -278,10 +306,29 @@ class SampleTable(object):
         msg = _('Error loading table %(table)s: Operation timeout.') % {'table': self.name}
         LOG.error(msg)
         raise InstallException(msg)
-    except QueryServerException, ex:
+    except QueryServerException as ex:
       msg = _('Error loading table %(table)s: %(error)s.') % {'table': self.name, 'error': ex}
       LOG.error(msg)
       raise InstallException(msg)
+
+
+  def _get_sql_insert_values(self, f, columns=None):
+    data = f.read()
+    dialect = csv.Sniffer().sniff(data)
+    reader = csv.reader(data.splitlines(), delimiter=dialect.delimiter)
+
+    rows = [
+      ', '.join(
+        col if is_number(col, i, columns) else "'%s'" % col.replace("'", "\\'") for i, col in enumerate(row)
+      ) for row in reader
+    ]
+
+    return ', '.join('(%s)' % row for row in rows)
+
+
+def is_number(col, i, columns):
+  '''Basic check. For proper check, use columns headers like for the web_logs table.'''
+  return columns[i]['type'] != 'string' if columns else col.isdigit() or col == 'NULL'
 
 
 class SampleQuery(object):

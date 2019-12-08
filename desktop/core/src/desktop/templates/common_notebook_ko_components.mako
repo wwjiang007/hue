@@ -21,18 +21,11 @@ from django.utils.translation import ugettext as _
 from desktop import conf
 from desktop.lib.i18n import smart_unicode
 from desktop.views import _ko
+
+from beeswax.conf import DOWNLOAD_ROW_LIMIT, DOWNLOAD_BYTES_LIMIT
 from notebook.conf import ENABLE_SQL_INDEXER
-
-
-LOG = logging.getLogger(__name__)
-
-try:
-  from beeswax.conf import DOWNLOAD_ROW_LIMIT, DOWNLOAD_BYTES_LIMIT
-except ImportError, e:
-  LOG.warn("Hive app is not enabled")
-  DOWNLOAD_ROW_LIMIT = None
-  DOWNLOAD_BYTES_LIMIT = None
 %>
+
 
 <%def name="addSnippetMenu()">
   <script type="text/html" id="add-snippet-menu-template">
@@ -162,7 +155,7 @@ except ImportError, e:
 
 <%def name="downloadSnippetResults()">
   <script type="text/html" id="download-results-template">
-    <form method="POST" action="${ url('notebook:download') }" class="download-form" style="display: inline">
+    <form method="POST" class="download-form" style="display: inline" data-bind="attr: { action: window.HUE_BASE_URL + '${ url('notebook:download') }' }">
       ${ csrf_token(request) | n,unicode }
       <input type="hidden" name="notebook"/>
       <input type="hidden" name="snippet"/>
@@ -212,6 +205,11 @@ except ImportError, e:
           </a>
         </li>
         % if ENABLE_SQL_INDEXER.get():
+        <li>
+          <a class="download" href="javascript:void(0)" data-bind="click: function() { saveTarget('dashboard'); if (notebook.canSave() ) { notebook.save() } else { $('#saveAsModaleditor').modal('show');} }" title="${ _('Visually explore the result') }">
+            <!-- ko template: { name: 'app-icon-template', data: { icon: 'report' } } --><!-- /ko --> ${ _('Report') }
+          </a>
+        </li>
         <li>
           <a class="download" href="javascript:void(0)" data-bind="click: function() { saveTarget('dashboard'); trySaveResults(); }" title="${ _('Visually explore the result') }">
             <!-- ko template: { name: 'app-icon-template', data: { icon: 'dashboard' } } --><!-- /ko --> ${ _('Dashboard') }
@@ -289,7 +287,7 @@ except ImportError, e:
                   &nbsp;${ _('Table') }
                 </label>
                 <div data-bind="visible: saveTarget() == 'hive-table'" class="inline">
-                  <input data-bind="hivechooser: savePath, valueUpdate:'afterkeydown', skipColumns: true, apiHelperUser: '${ user }', apiHelperType: 'hive'" type="text" name="target_table" class="input-xlarge margin-left-10"  pattern="^([a-zA-Z0-9_]+\.)?[a-zA-Z0-9_]*$" title="${ _('Only alphanumeric and underscore characters') }" placeholder="${_('Table name or <database>.<table>')}">
+                  <input data-bind="hiveChooser: savePath, valueUpdate:'afterkeydown', skipColumns: true, apiHelperUser: '${ user }', apiHelperType: 'hive'" type="text" name="target_table" class="input-xlarge margin-left-10"  pattern="^([a-zA-Z0-9_]+\.)?[a-zA-Z0-9_]*$" title="${ _('Only alphanumeric and underscore characters') }" placeholder="${_('Table name or <database>.<table>')}">
                 </div>
               </div>
             </div>
@@ -368,6 +366,10 @@ except ImportError, e:
 
         self.checkDownloadInterval = -1;
 
+        if (!self.snippet.downloadResultViewModel) {
+          self.snippet.downloadResultViewModel = ko.observable({saveTarget: self.saveTarget});
+        }
+
         self.saveResultsModalId = '#saveResultsModal' + self.snippet.id();
         self.downloadProgressModalId = '#downloadProgressModal' + self.snippet.id();
 
@@ -388,31 +390,48 @@ except ImportError, e:
         });
 
         var clipboard = new Clipboard('.clipboard' + self.snippet.id().split('-')[0], {
-          text: function () {
+          target: function (trigger) {
             if (self.snippet.result && self.snippet.result.data()) {
               var data = self.snippet.result.data();
-              var result = '';
+              var result = '<table><tr>';
               for (var i = 1; i < self.snippet.result.meta().length; i++) { // Skip the row number column
-                result += hueUtils.html2text(self.snippet.result.meta()[i].name) + '\t';
+                result += '<th>' + hueUtils.html2text(self.snippet.result.meta()[i].name) + '</th>';
               }
-              result += '\n';
+              result += '</tr>';
               data.forEach(function (row) {
+                result += '<tr>';
                 for (var i = 1; i < row.length; i++) { // Skip the row number column
-                  result += hueUtils.html2text(row[i]) + '\t';
+                  result += '<td>' + hueUtils.html2text(row[i]) + '</td>';
                 }
-                result += '\n';
+                result += '</tr>';
               });
-              return result;
+              $('.clipboard-content').html(result);
             } else {
-              return HUE_I18n.copyToClipboard.error;
+              $('.clipboard-content').html(window.I18n('Error while copying results.'));
             }
+            return $('.clipboard-content')[0];
           }
         });
 
         clipboard.on('success', function (e) {
-          $.jHueNotify.info(self.snippet.result.data().length + ' ' + HUE_I18n.copyToClipboard.success);
+          $.jHueNotify.info(self.snippet.result.data().length + ' ' + window.I18n('result(s) copied to the clipboard'));
           e.clearSelection();
+          $('.clipboard-content').empty();
         });
+
+        % if conf.WEBSOCKETS.ENABLED.get():
+        var chatSocket = new WebSocket('ws://' + window.location.host + '/ws/editor/results/' + self.snippet.id() + '/');
+
+        chatSocket.onmessage = function(e) {
+          var data = JSON.parse(e.data);
+          var message = data['message'];
+          console.log(message);
+        };
+
+        chatSocket.onclose = function(e) {
+          console.error('Chat socket closed unexpectedly');
+        };
+        % endif
 
         self.trySaveResults = function () {
           if (self.isValidDestination()) {
@@ -431,30 +450,26 @@ except ImportError, e:
             format: ko.mapping.toJSON(self.saveTarget()),
             destination: ko.mapping.toJSON(self.savePath()),
             overwrite: ko.mapping.toJSON(self.saveOverwrite()),
-            is_embedded: ko.mapping.toJSON(IS_HUE_4),
+            is_embedded: ko.mapping.toJSON(true),
             start_time: ko.mapping.toJSON((new Date()).getTime())
           },
           function(resp) {
             if (resp.status == 0) {
-              if (IS_HUE_4) {
-                $(".modal-backdrop").remove();
-                if (self.saveTarget() == 'hdfs-file') {
-                  $(self.saveResultsModalId).modal('hide');
-                  huePubSub.publish('open.link', resp.watch_url);
-                } else if (self.saveTarget() == 'search-index') {
-                  $(self.saveResultsModalId).modal('hide');
-                  huePubSub.publish('open.importer.query', resp);
-                } else if (self.saveTarget() == 'dashboard') {
-                  $(self.saveResultsModalId).modal('hide');
-                  huePubSub.publish('open.link', resp.watch_url);
-                } else if (resp.history_uuid) {
-                  $(self.saveResultsModalId).modal('hide');
-                  huePubSub.publish('notebook.task.submitted', resp.history_uuid);
-                } else if (resp && resp.message) {
-                  $(document).trigger("error", resp.message);
-                }
-              } else {
-                window.location.href = resp.watch_url;
+              $(".modal-backdrop").remove();
+              if (self.saveTarget() == 'hdfs-file') {
+                $(self.saveResultsModalId).modal('hide');
+                huePubSub.publish('open.link', resp.watch_url);
+              } else if (self.saveTarget() == 'search-index') {
+                $(self.saveResultsModalId).modal('hide');
+                huePubSub.publish('open.importer.query', resp);
+              } else if (self.saveTarget() == 'dashboard') {
+                 $(self.saveResultsModalId).modal('hide');
+                huePubSub.publish('open.link', resp.watch_url);
+              } else if (resp.history_uuid) {
+                $(self.saveResultsModalId).modal('hide');
+                huePubSub.publish('notebook.task.submitted', resp.history_uuid);
+              } else if (resp && resp.message) {
+                $(document).trigger("error", resp.message);
               }
             } else {
               $(document).trigger('error', resp.message);
@@ -567,17 +582,12 @@ except ImportError, e:
         <div class="tab-pane" id="help-editor-shortcut" style="min-height: 500px">
           <input class="clearable pull-right margin-right-5" type="text" placeholder="${ _('Search...')}" data-bind="clearable: query, value: query, valueUpdate: 'afterkeydown'">
           <div class="clearfix"></div>
-          <!-- ko if: activeCategory() &&  activeCategory().filteredShortcuts().length === 0 -->
-          <div class="margin-top-30 margin-left-10">
-            <em>${ _('No matches found for your search.') }</em>
-          </div>
-          <!-- /ko -->
+          <!-- ko ifnot: query -->
           <ul class="nav nav-tabs" data-bind="foreach: categories">
-            <li data-bind="css: { 'active': $parent.activeCategory().label === $data.label }, visible: filteredShortcuts().length > 0"><a href="javascript: void(0);" data-bind="click: function () { $parent.activeCategory($data); }, text: label"></a></li>
+            <li data-bind="css: { 'active': $parent.activeCategory().label === $data.label }"><a href="javascript: void(0);" data-bind="click: function () { $parent.activeCategory($data); }, text: label"></a></li>
           </ul>
           <div class="tab-content" data-bind="with: activeCategory">
             <div class="tab-pane active">
-              <!-- ko if: filteredShortcuts().length > 0 -->
               <table class="table table-condensed">
                 <thead>
                   <tr>
@@ -586,21 +596,53 @@ except ImportError, e:
                     <th>${ _('Action')}</th>
                   </tr>
                 </thead>
-                <tbody data-bind="foreach: filteredShortcuts">
+                <tbody data-bind="foreach: shortcuts">
                   <tr>
-                    <td data-bind="text: shortcut"></td>
-                    <td data-bind="text: macShortcut"></td>
-                    <td data-bind="text: description"></td>
+                    <td data-bind="text: shortcut" style="width: 25%;"></td>
+                    <td data-bind="text: macShortcut" style="width: 25%;"></td>
+                    <td data-bind="text: description" style="width: 50%;"></td>
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </div>
+          <!-- /ko -->
+          <!-- ko if: query -->
+          <ul class="nav nav-tabs">
+            <li class="active"><a href="javascript:void(0);">${ _('Search result')}</a></li>
+          </ul>
+          <div class="tab-content">
+            <div class="tab-pane active">
+              <!-- ko if: filteredShortcuts().length -->
+              <table class="table table-condensed">
+                <thead>
+                <tr>
+                  <th>${ _('Windows/Linux')}</th>
+                  <th>${ _('Mac')}</th>
+                  <th>${ _('Action')}</th>
+                </tr>
+                </thead>
+                <tbody data-bind="foreach: filteredShortcuts">
+                <tr>
+                  <td data-bind="text: shortcut" style="width: 25%;"></td>
+                  <td data-bind="text: macShortcut" style="width: 25%;"></td>
+                  <td data-bind="text: description" style="width: 50%;"></td>
+                </tr>
+                </tbody>
+              </table>
+              <!-- /ko -->
+              <!-- ko ifnot: filteredShortcuts().length -->
+              <div>
+                <em>${ _('No shortcuts found.') }</em>
+              </div>
               <!-- /ko -->
             </div>
           </div>
+          <!-- /ko -->
         </div>
         <div class="tab-pane active" id="help-editor-syntax">
           <ul class="nav nav-tabs">
-           <li class="active">
+            <li class="active">
               <a href="#help-editor-syntax-comment" data-bind="click: function(){ $('a[href=\'#help-editor-syntax-comment\']').tab('show'); }">
                 ${ _('Comments')}
               </a>
@@ -823,7 +865,13 @@ except ImportError, e:
             { shortcut: 'Alt-Shift-0', macShortcut: 'Command-Option-Shift-0', description: '${ _('Unfold all')}' }]
         },{
           label: '${ _('Other')}',
-          shortcuts: [{ shortcut: 'Ctrl-Space', macShortcut: 'Ctrl-Space', description: '${ _('Autocomplete when Live Autocompletion is off')}' },
+          shortcuts: [
+            { shortcut: 'Ctrl-Space', macShortcut: 'Ctrl-Space', description: '${ _('Autocomplete when Live Autocompletion is off')}' },
+            { shortcut: 'Ctrl-Enter', macShortcut: 'Command-Enter', description: '${ _('Execute the active query')}' },
+            { shortcut: 'Ctrl-E', macShortcut: 'Command-E', description: '${ _('Create a new query')}' },
+            { shortcut: 'Ctrl-S', macShortcut: 'Command-S', description: '${ _('Save the query')}' },
+            { shortcut: 'Ctrl-Shift-P', macShortcut: 'Command-Shift-P', description: '${ _('Switch to/from presentation mode')}' },
+            { shortcut: 'Ctrl-Alt-T', macShortcut: 'Command-Option-T', description: '${ _('Switch to/from dark editor theme')}' },
             { shortcut: 'Ctrl-i|Ctrl-Shift-f', macShortcut: 'Command-i|Command-Shift-f', description: '${ _('Format selection or all')}' },
             { shortcut: 'Tab', macShortcut: 'Tab', description: '${ _('Indent')}' },
             { shortcut: 'Shift-Tab', macShortcut: 'Shift-Tab', description: '${ _('Outdent')}' },
@@ -841,40 +889,30 @@ except ImportError, e:
         },{
           id: 'settings',
           label: '${ _('Settings')}',
-          shortcuts: [{ shortcut: 'Ctrl - ,', macShortcut: 'Command - ,', description: '${ _('Show the settings menu')}' }]
+          shortcuts: [{ shortcut: 'Ctrl - ,', macShortcut: 'Command - ,', description: '${ _('Show the settings menu where you can control autocomplete behaviour, syntax checker, dark theme and various editor settings.')}' }]
         }];
 
         self.query = ko.observable('');
 
         self.activeCategory = ko.observable(self.categories[0]);
 
-        self.categories.forEach(function (category) {
-          category.filteredShortcuts = ko.pureComputed(function () {
-            var query = (self.query() || '').toLowerCase();
-            if (query !== '') {
-              var result = $.grep(category.shortcuts, function (shortcut) {
-                return shortcut.description.toLowerCase().indexOf(query) !== -1;
-              });
-              return result;
-            } else {
-              return category.shortcuts;
-            }
-          });
-
-          category.filteredShortcuts.subscribe(function (newVal) {
-            if (category === self.activeCategory() && newVal.length === 0) {
-              self.categories.every(function (category) {
-                if (category.filteredShortcuts().length > 0) {
-                  self.activeCategory(category);
-                  return false;
-                }
-                return true;
+        self.filteredShortcuts = ko.pureComputed(function () {
+          var query = (self.query() || '').toLowerCase();
+          if (query !== '') {
+            var result = [];
+            self.categories.forEach(function (category) {
+              category.shortcuts.forEach(function (shortcut) {
+                if (shortcut.description.toLowerCase().indexOf(query) !== -1 ||
+                  shortcut.shortcut.toLowerCase().indexOf(query) !== -1 ||
+                  shortcut.macShortcut.toLowerCase().indexOf(query) !== -1) {
+                  result.push(shortcut);
+                };
               })
-            }
-          })
-
+            });
+            return result;
+          }
+          return [];
         });
-
       }
 
       ko.components.register('aceKeyboardShortcuts', {

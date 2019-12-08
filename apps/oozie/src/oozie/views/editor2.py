@@ -15,26 +15,29 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import str
 import json
 import logging
 
+from datetime import datetime
 from django.urls import reverse
 from django.forms.formsets import formset_factory
 from django.shortcuts import redirect
 from django.utils.translation import ugettext as _
 
-from desktop.conf import USE_NEW_EDITOR
+from desktop.conf import USE_NEW_EDITOR, IS_MULTICLUSTER_ONLY
 from desktop.lib import django_mako
 from desktop.lib.django_util import JsonResponse, render
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.i18n import smart_str, force_unicode
 from desktop.lib.rest.http_client import RestException
 from desktop.lib.json_utils import JSONEncoderForHTML
-from desktop.models import Document, Document2
+from desktop.models import Document, Document2, get_cluster_config
 
 from liboozie.credentials import Credentials
 from liboozie.oozie_api import get_oozie
 from liboozie.submission2 import Submission
+from metadata.conf import DEFAULT_PUBLIC_KEY
 from notebook.connectors.base import Notebook
 
 from oozie.decorators import check_document_access_permission, check_document_modify_permission,\
@@ -76,7 +79,7 @@ def open_old_workflow(request):
   try:
     _workflow = import_workflow_from_hue_3_7(workflow)
     return _edit_workflow(request, None, _workflow)
-  except Exception, e:
+  except Exception as e:
     LOG.warn('Could not open old worklow: %s' % smart_str(e))
     return old_edit_workflow(request, workflow=workflow.id)
 
@@ -105,7 +108,7 @@ def _edit_workflow(request, doc, workflow):
 
   try:
     credentials.fetch(api)
-  except Exception, e:
+  except Exception as e:
     LOG.error(smart_str(e))
 
   can_edit_json = doc is None or (doc.can_write(request.user) if USE_NEW_EDITOR.get() else doc.doc.get().is_editable(request.user))
@@ -113,7 +116,7 @@ def _edit_workflow(request, doc, workflow):
   return render('editor2/workflow_editor.mako', request, {
       'layout_json': json.dumps(workflow_data['layout'], cls=JSONEncoderForHTML),
       'workflow_json': json.dumps(workflow_data['workflow'], cls=JSONEncoderForHTML),
-      'credentials_json': json.dumps(credentials.credentials.keys(), cls=JSONEncoderForHTML),
+      'credentials_json': json.dumps(list(credentials.credentials.keys()), cls=JSONEncoderForHTML),
       'workflow_properties_json': json.dumps(WORKFLOW_NODE_PROPERTIES, cls=JSONEncoderForHTML),
       'doc_uuid': doc.uuid if doc else '',
       'subworkflows_json': json.dumps(_get_workflows(request.user), cls=JSONEncoderForHTML),
@@ -127,7 +130,11 @@ def new_workflow(request):
   doc = None
   workflow = Workflow(user=request.user)
   workflow.set_workspace(request.user)
-  workflow.check_workspace(request.fs, request.user)
+
+  try:
+    workflow.check_workspace(request.fs, request.user)
+  except Exception as e:
+    raise PopupException(_('Could not create workflow workspace'), detail=e)
 
   return _edit_workflow(request, doc, workflow)
 
@@ -313,7 +320,7 @@ def action_parameters(request):
 
     response['status'] = 0
     response['parameters'] = list(parameters)
-  except Exception, e:
+  except Exception as e:
     response['message'] = str(e)
 
   return JsonResponse(response)
@@ -336,7 +343,7 @@ def workflow_parameters(request):
 
     response['status'] = 0
     response['parameters'] = workflow.find_all_parameters(with_lib_path=False)
-  except Exception, e:
+  except Exception as e:
     response['message'] = str(e)
 
   return JsonResponse(response)
@@ -353,7 +360,7 @@ def gen_xml_workflow(request):
 
     response['status'] = 0
     response['xml'] = workflow.to_xml()
-  except Exception, e:
+  except Exception as e:
     response['message'] = str(e)
 
   return JsonResponse(response)
@@ -380,6 +387,10 @@ def submit_single_action(request, doc_id, node_id):
   workflow.set_workspace(request.user)
 
   workflow.check_workspace(request.fs, request.user)
+
+  # The imported wf deployment directory might not neccessarily exist on first submission
+  if not request.fs.exists(parent_wf.deployment_dir):
+    request.fs.do_as_user(request.user.username, request.fs.mkdir, parent_wf.deployment_dir)
   workflow.import_workspace(request.fs, parent_wf.deployment_dir, request.user)
   workflow.document = parent_doc
 
@@ -390,6 +401,7 @@ def _submit_workflow_helper(request, workflow, submit_action):
   ParametersFormSet = formset_factory(ParameterForm, extra=0)
 
   if request.method == 'POST':
+    cluster = json.loads(request.POST.get('cluster', '{}'))
     params_form = ParametersFormSet(request.POST)
 
     if params_form.is_valid():
@@ -401,7 +413,7 @@ def _submit_workflow_helper(request, workflow, submit_action):
 
       try:
         job_id = _submit_workflow(request.user, request.fs, request.jt, workflow, mapping)
-      except Exception, e:
+      except Exception as e:
         raise PopupException(_('Workflow submission failed'), detail=smart_str(e), error_code=200)
       jsonify = request.POST.get('format') == 'json'
       if jsonify:
@@ -412,21 +424,25 @@ def _submit_workflow_helper(request, workflow, submit_action):
     else:
       request.error(_('Invalid submission form: %s' % params_form.errors))
   else:
+    cluster_json = request.GET.get('cluster', '{}')
     parameters = workflow and workflow.find_all_parameters() or []
     initial_params = ParameterForm.get_initial_params(dict([(param['name'], param['value']) for param in parameters]))
     params_form = ParametersFormSet(initial=initial_params)
 
-
-    popup = render('editor2/submit_job_popup.mako', request, {
-                     'params_form': params_form,
-                     'name': workflow.name,
-                     'action': submit_action,
-                     'show_dryrun': True,
-                     'email_id': request.user.email,
-                     'is_oozie_mail_enabled': _is_oozie_mail_enabled(request.user),
-                     'return_json': request.GET.get('format') == 'json'
-                   }, force_template=True).content
-    return JsonResponse(popup, safe=False)
+    return render(
+      '/scheduler/submit_job_popup.mako',
+      request, {
+        'params_form': params_form,
+        'name': workflow.name,
+        'action': submit_action,
+        'show_dryrun': True,
+        'email_id': request.user.email,
+        'is_oozie_mail_enabled': _is_oozie_mail_enabled(request.user),
+        'return_json': request.GET.get('format') == 'json',
+        'cluster_json': cluster_json
+      },
+      force_template=True
+    )
 
 
 def _is_oozie_mail_enabled(user):
@@ -443,7 +459,7 @@ def _submit_workflow(user, fs, jt, workflow, mapping):
     workflow.document.add_to_history(submission.user, {'properties': submission.properties, 'oozie_id': submission.oozie_id})
 
     return job_id
-  except RestException, ex:
+  except RestException as ex:
     detail = ex._headers.get('oozie-error-message', ex)
     if 'Max retries exceeded with url' in str(detail):
       detail = '%s: %s' % (_('The Oozie server is not running'), detail)
@@ -498,7 +514,7 @@ def edit_coordinator(request):
 
   try:
     credentials.fetch(api)
-  except Exception, e:
+  except Exception as e:
     LOG.error(smart_str(e))
 
   if USE_NEW_EDITOR.get():
@@ -520,7 +536,7 @@ def edit_coordinator(request):
     workflows = [dict([('uuid', d.content_object.uuid), ('name', d.content_object.name)])
                       for d in Document.objects.available_docs(Document2, request.user).filter(extra='workflow2')]
 
-    if coordinator_id and not filter(lambda a: a['uuid'] == coordinator.data['properties']['workflow'], workflows):
+    if coordinator_id and not [a for a in workflows if a['uuid'] == coordinator.data['properties']['workflow']]:
       raise PopupException(_('You don\'t have access to the workflow of this coordinator.'))
 
   if USE_NEW_EDITOR.get(): # In Hue 4, merge with above
@@ -531,7 +547,7 @@ def edit_coordinator(request):
   if request.GET.get('format') == 'json': # For Editor
     return JsonResponse({
       'coordinator': coordinator.get_data_for_json(),
-      'credentials': credentials.credentials.keys(),
+      'credentials': list(credentials.credentials.keys()),
       'workflows': workflows,
       'doc_uuid': doc.uuid if doc else '',
       'is_embeddable': request.GET.get('is_embeddable', False),
@@ -541,7 +557,7 @@ def edit_coordinator(request):
   else:
     return render('editor2/coordinator_editor.mako', request, {
       'coordinator_json': coordinator.to_json_for_html(),
-      'credentials_json': json.dumps(credentials.credentials.keys(), cls=JSONEncoderForHTML),
+      'credentials_json': json.dumps(list(credentials.credentials.keys()), cls=JSONEncoderForHTML),
       'workflows_json': json.dumps(workflows, cls=JSONEncoderForHTML),
       'doc_uuid': doc.uuid if doc else '',
       'is_embeddable': request.GET.get('is_embeddable', False),
@@ -618,7 +634,7 @@ def save_coordinator(request):
     scheduled_doc.can_read_or_exception(request.user)
     coordinator_doc.dependencies = [scheduled_doc]
 
-  coordinator_doc1 = coordinator_doc.doc.get()
+  coordinator_doc1 = coordinator_doc._get_doc1(doc2_type='coordinator2')
   coordinator_doc.update_data(coordinator_data)
   coordinator_doc.name = coordinator_doc1.name = coordinator_data['name']
   coordinator_doc.description = coordinator_doc1.description = coordinator_data['properties']['description']
@@ -657,7 +673,7 @@ def coordinator_parameters(request):
 
     response['status'] = 0
     response['parameters'] = coordinator.find_all_parameters(with_lib_path=False)
-  except Exception, e:
+  except Exception as e:
     response['message'] = str(e)
 
   return JsonResponse(response)
@@ -666,6 +682,7 @@ def coordinator_parameters(request):
 @check_editor_access_permission
 @check_document_access_permission()
 def submit_coordinator(request, doc_id):
+  # TODO: Replace URL by desktop/scheduler API
   if doc_id.isdigit():
     coordinator = Coordinator(document=Document2.objects.get(id=doc_id))
   else:
@@ -682,7 +699,7 @@ def submit_coordinator(request, doc_id):
       jsonify = request.POST.get('format') == 'json'
       try:
         job_id = _submit_coordinator(request, coordinator, mapping)
-      except Exception, e:
+      except Exception as e:
         message = force_unicode(str(e))
         return JsonResponse({'status': -1, 'message': message}, safe=False)
       if jsonify:
@@ -697,19 +714,70 @@ def submit_coordinator(request, doc_id):
     initial_params = ParameterForm.get_initial_params(dict([(param['name'], param['value']) for param in parameters]))
     params_form = ParametersFormSet(initial=initial_params)
 
-  popup = render('editor2/submit_job_popup.mako', request, {
+    return render('/scheduler/submit_job_popup.mako', request, {
                  'params_form': params_form,
                  'name': coordinator.name,
                  'action': reverse('oozie:editor_submit_coordinator',  kwargs={'doc_id': coordinator.id}),
                  'show_dryrun': True,
                  'return_json': request.GET.get('format') == 'json'
-                }, force_template=True).content
-  return JsonResponse(popup, safe=False)
+                }, force_template=True)
 
 
 def _submit_coordinator(request, coordinator, mapping):
   try:
     wf = coordinator.workflow
+    if IS_MULTICLUSTER_ONLY.get() and get_cluster_config(request.user)['has_computes']:
+      mapping['auto-cluster'] = {
+        u'additionalClusterResourceTags': [],
+        u'automaticTerminationCondition': u'EMPTY_JOB_QUEUE', #'u'NONE',
+        u'cdhVersion': u'CDH514',
+        u'clouderaManagerPassword': u'guest',
+        u'clouderaManagerUsername': u'guest',
+        u'clusterName': u'analytics4', # Add time variable
+        u'computeWorkersConfiguration': {
+          u'bidUSDPerHr': 0,
+          u'groupSize': 0,
+          u'useSpot': False
+        },
+        u'environmentName': u'crn:altus:environments:us-west-1:12a0079b-1591-4ca0-b721-a446bda74e67:environment:analytics/236ebdda-18bd-428a-9d2b-cd6973d42946',
+        u'instanceBootstrapScript': u'',
+        u'instanceType': u'm4.xlarge',
+        u'jobSubmissionGroupName': u'',
+        u'jobs': [{
+            u'failureAction': u'INTERRUPT_JOB_QUEUE',
+            u'name': u'a87e20d7-5c0d-49ee-ab37-625fa2803d51',
+            u'sparkJob': {
+              u'applicationArguments': ['5'],
+              u'jars': [u's3a://datawarehouse-customer360/ETL/spark-examples.jar'],
+              u'mainClass': u'org.apache.spark.examples.SparkPi'
+            }
+          },
+  #         {
+  #           u'failureAction': u'INTERRUPT_JOB_QUEUE',
+  #           u'name': u'a87e20d7-5c0d-49ee-ab37-625fa2803d51',
+  #           u'sparkJob': {
+  #             u'applicationArguments': ['10'],
+  #             u'jars': [u's3a://datawarehouse-customer360/ETL/spark-examples.jar'],
+  #             u'mainClass': u'org.apache.spark.examples.SparkPi'
+  #           }
+  #         },
+  #         {
+  #           u'failureAction': u'INTERRUPT_JOB_QUEUE',
+  #           u'name': u'a87e20d7-5c0d-49ee-ab37-625fa2803d51',
+  #           u'sparkJob': {
+  #             u'applicationArguments': [u'filesystems3.conf'],
+  #             u'jars': [u's3a://datawarehouse-customer360/ETL/envelope-0.6.0-SNAPSHOT-c6.jar'],
+  #             u'mainClass': u'com.cloudera.labs.envelope.EnvelopeMain',
+  #             u'sparkArguments': u'--archives=s3a://datawarehouse-customer360/ETL/filesystems3.conf'
+  #           }
+  #         }
+        ],
+        u'namespaceName': u'crn:altus:sdx:us-west-1:12a0079b-1591-4ca0-b721-a446bda74e67:namespace:analytics/7ea35fe5-dbc9-4b17-92b1-97a1ab32e410',
+        u'publicKey': DEFAULT_PUBLIC_KEY.get(),
+        u'serviceType': u'SPARK',
+        u'workersConfiguration': {},
+        u'workersGroupSize': u'3'
+      }
     wf_dir = Submission(request.user, wf, request.fs, request.jt, mapping, local_tz=coordinator.data['properties']['timezone']).deploy()
 
     properties = {'wf_application_path': request.fs.get_hdfs_path(wf_dir)}
@@ -719,7 +787,7 @@ def _submit_coordinator(request, coordinator, mapping):
     job_id = submission.run()
 
     return job_id
-  except RestException, ex:
+  except RestException as ex:
     LOG.exception('Error submitting coordinator')
     raise PopupException(_("Error submitting coordinator %s") % (coordinator,), detail=ex._headers.get('oozie-error-message', ex), error_code=200)
 
@@ -853,6 +921,7 @@ def copy_bundle(request):
 @check_document_access_permission()
 def submit_bundle(request, doc_id):
   bundle = Bundle(document=Document2.objects.get(id=doc_id))
+  bundle._data['properties']['kickoff'] = datetime.utcnow()
   ParametersFormSet = formset_factory(ParameterForm, extra=0)
 
   if request.method == 'POST':
@@ -875,14 +944,13 @@ def submit_bundle(request, doc_id):
     initial_params = ParameterForm.get_initial_params(dict([(param['name'], param['value']) for param in parameters]))
     params_form = ParametersFormSet(initial=initial_params)
 
-  popup = render('editor2/submit_job_popup.mako', request, {
+    return render('/scheduler/submit_job_popup.mako', request, {
                  'params_form': params_form,
                  'name': bundle.name,
                  'action': reverse('oozie:editor_submit_bundle',  kwargs={'doc_id': bundle.id}),
                  'return_json': request.GET.get('format') == 'json',
                  'show_dryrun': False
-                }, force_template=True).content
-  return JsonResponse(popup, safe=False)
+                }, force_template=True)
 
 
 def _submit_bundle(request, bundle, properties):
@@ -912,6 +980,6 @@ def _submit_bundle(request, bundle, properties):
     job_id = submission.run()
 
     return job_id
-  except RestException, ex:
+  except RestException as ex:
     LOG.exception('Error submitting bundle')
     raise PopupException(_("Error submitting bundle %s") % (bundle,), detail=ex._headers.get('oozie-error-message', ex), error_code=200)

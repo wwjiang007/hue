@@ -15,6 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from future import standard_library
+standard_library.install_aliases()
 try:
   import oauth2 as oauth
 except:
@@ -22,7 +24,7 @@ except:
 
 import cgi
 import logging
-import urllib
+import sys
 from datetime import datetime
 
 from axes.decorators import watch_login
@@ -30,24 +32,29 @@ import django.contrib.auth.views
 from django.core import urlresolvers
 from django.core.exceptions import SuspiciousOperation
 from django.contrib.auth import login, get_backends, authenticate
-from django.contrib.auth.models import User
 from django.contrib.sessions.models import Session
 from django.http import HttpResponseRedirect
 from django.utils.translation import ugettext as _
 
+from hadoop.fs.exceptions import WebHdfsException
+from notebook.connectors.base import get_api
+from useradmin.models import get_profile, UserProfile, User, Group
+from useradmin.views import ensure_home_directory, require_change_password
+
 from desktop.auth import forms as auth_forms
 from desktop.auth.backend import OIDCBackend
-from desktop.auth.forms import ImpersonationAuthenticationForm
-from desktop.lib.django_util import render
-from desktop.lib.django_util import login_notrequired
-from desktop.lib.django_util import JsonResponse
+from desktop.auth.forms import ImpersonationAuthenticationForm, OrganizationUserCreationForm, OrganizationAuthenticationForm
+from desktop.conf import OAUTH, ENABLE_ORGANIZATIONS
+from desktop.lib.django_util import render, login_notrequired, JsonResponse
 from desktop.log.access import access_log, access_warn, last_access_map
-from desktop.conf import OAUTH
 from desktop.settings import LOAD_BALANCER_COOKIE
 
-from hadoop.fs.exceptions import WebHdfsException
-from useradmin.models import get_profile
-from useradmin.views import ensure_home_directory, require_change_password
+if sys.version_info[0] > 2:
+  import urllib.request, urllib.error
+  from urllib.parse import urlencode as urllib_urlencode
+else:
+  from urllib import urlencode as urllib_urlencode
+
 
 LOG = logging.getLogger(__name__)
 
@@ -88,7 +95,10 @@ def dt_login_old(request, from_modal=False):
 @login_notrequired
 @watch_login
 def dt_login(request, from_modal=False):
-  redirect_to = request.GET.get('next', '/')
+  if request.method == 'GET':
+    redirect_to = request.GET.get('next', '/')
+  else:
+    redirect_to = request.POST.get('next', '/')
   is_first_login_ever = first_login_ever()
   backend_names = auth_forms.get_backend_names()
   is_active_directory = auth_forms.is_active_directory()
@@ -104,11 +114,14 @@ def dt_login(request, from_modal=False):
       AuthenticationForm = ImpersonationAuthenticationForm
     else:
       AuthenticationForm = auth_forms.AuthenticationForm
+    if ENABLE_ORGANIZATIONS.get():
+      UserCreationForm = OrganizationUserCreationForm
+      AuthenticationForm = OrganizationAuthenticationForm
 
   if request.method == 'POST':
     request.audit = {
       'operation': 'USER_LOGIN',
-      'username': request.POST.get('username')
+      'username': request.POST.get('username', request.POST.get('email'))
     }
 
     # For first login, need to validate user info!
@@ -130,7 +143,7 @@ def dt_login(request, from_modal=False):
 
         try:
           ensure_home_directory(request.fs, user)
-        except (IOError, WebHdfsException), e:
+        except (IOError, WebHdfsException) as e:
           LOG.error('Could not create home directory at login for %s.' % user, exc_info=e)
 
         if require_change_password(userprofile):
@@ -138,6 +151,9 @@ def dt_login(request, from_modal=False):
 
         userprofile.first_login = False
         userprofile.last_activity = datetime.now()
+        # This is to fix a bug in Hue 4.3
+        if userprofile.creation_method == UserProfile.CreationMethod.EXTERNAL:
+          userprofile.creation_method = UserProfile.CreationMethod.EXTERNAL.name
         userprofile.save()
 
         msg = 'Successful login for user: %s' % user.username
@@ -158,12 +174,19 @@ def dt_login(request, from_modal=False):
   else:
     first_user_form = None
     auth_form = AuthenticationForm()
-    # SAML user is already authenticated in djangosaml2.views.login
-    if 'SAML2Backend' in backend_names and request.user.is_authenticated():
+    # SAML/OIDC user is already authenticated in djangosaml2.views.login
+    if hasattr(request,'fs') and ('KnoxSpnegoDjangoBackend' in backend_names or 'SpnegoDjangoBackend' in backend_names or 'OIDCBackend' in backend_names or 'SAML2Backend' in backend_names) and request.user.is_authenticated():
       try:
         ensure_home_directory(request.fs, request.user)
-      except (IOError, WebHdfsException), e:
-        LOG.error('Could not create home directory for SAML user %s.' % request.user)
+      except (IOError, WebHdfsException) as e:
+        LOG.error('Could not create home directory for %s user %s.' % ('OIDC' if 'OIDCBackend' in backend_names else 'SAML', request.user))
+    if request.user.is_authenticated():
+      return HttpResponseRedirect(redirect_to)
+
+  if is_active_directory and not is_ldap_option_selected and \
+                  request.method == 'POST' and request.user.username != request.POST.get('username'):
+    # local user login failed, give the right auth_form with 'server' field
+    auth_form = auth_forms.LdapAuthenticationForm()
 
   if not from_modal:
     request.session.set_test_cookie()
@@ -179,7 +202,8 @@ def dt_login(request, from_modal=False):
     'first_login_ever': is_first_login_ever,
     'login_errors': request.method == 'POST',
     'backend_names': backend_names,
-    'active_directory': is_active_directory
+    'active_directory': is_active_directory,
+    'user': request.user
   })
 
   if not request.user.is_authenticated():
@@ -197,6 +221,15 @@ def dt_logout(request, next_page=None):
     'operationText': 'Logged out user: %s' % username
   }
 
+  # Close Impala session on logout
+  session_app = "impala"
+  if request.user.has_hue_permission(action='access', app=session_app):
+    session = {"type":session_app,"sourceMethod":"dt_logout"}
+    try:
+      get_api(request, session).close_session(session)
+    except Exception as e:
+      LOG.warn("Error closing Impala session: %s" % e)
+
   backends = get_backends()
   if backends:
     for backend in backends:
@@ -205,10 +238,10 @@ def dt_logout(request, next_page=None):
           response = backend.logout(request, next_page)
           if response:
             return response
-        except Exception, e:
+        except Exception as e:
           LOG.warn('Potential error on logout for user: %s with exception: %s' % (username, e))
 
-  if len(filter(lambda backend: hasattr(backend, 'logout'), backends)) == len(backends):
+  if len([backend for backend in backends if hasattr(backend, 'logout')]) == len(backends):
     LOG.warn("Failed to log out from all backends for user: %s" % (username))
 
   response = django.contrib.auth.views.logout(request, next_page)
@@ -239,7 +272,7 @@ def oauth_login(request):
 
   consumer = oauth.Consumer(OAUTH.CONSUMER_KEY.get(), OAUTH.CONSUMER_SECRET.get())
   client = oauth.Client(consumer)
-  resp, content = client.request(OAUTH.REQUEST_TOKEN_URL.get(), "POST", body=urllib.urlencode({
+  resp, content = client.request(OAUTH.REQUEST_TOKEN_URL.get(), "POST", body=urllib_urlencode({
                       'oauth_callback': 'http://' + request.get_host() + '/login/oauth_authenticated/'
                   }))
 
@@ -277,4 +310,3 @@ def oidc_failed(request):
     return HttpResponseRedirect('/')
   access_warn(request, "401 Unauthorized by oidc")
   return render("oidc_failed.mako", request, dict(uri=request.build_absolute_uri()), status=401)
-

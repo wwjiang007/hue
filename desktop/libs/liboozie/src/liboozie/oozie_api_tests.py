@@ -15,6 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import oct
+from builtins import object
 import atexit
 import getpass
 import logging
@@ -53,6 +55,7 @@ class OozieServerProvider(object):
   OOZIE_HOME = get_run_root('ext/oozie/oozie')
 
   requires_hadoop = True
+  integration = True
   is_oozie_running = False
 
   @classmethod
@@ -228,7 +231,7 @@ class OozieServerProvider(object):
               break
             time.sleep(sleep)
             sleep *= 2
-          except Exception, e:
+          except Exception as e:
             LOG.info('Oozie server status not NORMAL yet: %s - %s' % (status, e))
             time.sleep(sleep)
             sleep *= 2
@@ -258,8 +261,10 @@ class TestMiniOozie(OozieServerProvider):
     else:
       assert_true(self.cluster.fs.exists('/user/%(user)s/share/lib' % {'user': user}))
 
+
 class TestOozieWorkspace(object):
   requires_hadoop = True
+  integration = True
 
   def setUp(self):
     self.cluster = pseudo_hdfs4.shared_cluster()
@@ -274,7 +279,7 @@ class TestOozieWorkspace(object):
       assert_false('The permissions of workspace' in resp.content, resp)
 
       self.cluster.fs.mkdir(REMOTE_SAMPLE_DIR.get())
-      assert_equal(oct(040755), oct(self.cluster.fs.stats(REMOTE_SAMPLE_DIR.get())["mode"]))
+      assert_equal(oct(0o40755), oct(self.cluster.fs.stats(REMOTE_SAMPLE_DIR.get())["mode"]))
       resp = self.cli.get('/desktop/debug/check_config')
       assert_true('The permissions of workspace' in resp.content, resp)
 
@@ -289,7 +294,7 @@ class TestOozieWorkspace(object):
 
       # Add write permission to Others
       response = self.cli.post("/filebrowser/chmod", kwargs)
-      assert_equal(oct(040757), oct(self.cluster.fs.stats(REMOTE_SAMPLE_DIR.get())["mode"]))
+      assert_equal(oct(0o40757), oct(self.cluster.fs.stats(REMOTE_SAMPLE_DIR.get())["mode"]))
 
       resp = self.cli.get('/desktop/debug/check_config')
       assert_false('The permissions of workspace' in resp.content, resp)

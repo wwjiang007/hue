@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from past.builtins import basestring
 import json
 from lxml import objectify, etree
 
@@ -82,15 +83,16 @@ def reformat_json(json_obj):
 
 def reformat_xml(xml_obj):
     if isinstance(xml_obj, basestring):
+        if not isinstance(xml_obj, bytes):
+            xml_obj = xml_obj.encode()
         return etree.tostring(objectify.fromstring(xml_obj, etree.XMLParser(strip_cdata=False, remove_blank_text=True)))
     else:
         return etree.tostring(xml_obj)
 
 
 def clear_sys_caches():
-  return cluster.clear_caches(), fsmanager.clear_cache()
+  return [cluster.clear_caches()]
 
 
 def restore_sys_caches(old_caches):
   cluster.restore_caches(old_caches[0])
-  fsmanager.restore_cache(old_caches[1])

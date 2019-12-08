@@ -18,11 +18,10 @@
 
 import logging
 
-from optparse import make_option
-
-from django.contrib.auth.models import User
 from django.core.management.base import CommandError, BaseCommand
 from django.utils.translation import ugettext_lazy as _
+
+from useradmin.models import User
 
 from desktop.models import Document2
 
@@ -39,12 +38,9 @@ class Command(BaseCommand):
 
   If --username is specified, it will only perform the operation for the specific user.
   """
-
   help = _("Creates home and Trash directories for users as needed, or specific user if username is provided.")
-
-  option_list = BaseCommand.option_list + (
-    make_option('--username', help=_("Username of user to create directories for."), action='store', default=None),
-  )
+  def add_arguments(self, parser):
+    parser.add_argument('--username', help=_("Username of user to create directories for."), action='store', default=None)
 
   def handle(self, *args, **options):
     users = User.objects.all()
@@ -53,7 +49,7 @@ class Command(BaseCommand):
       try:
         user = User.objects.get(username=options['username'])
         users = [user]
-      except Exception, e:
+      except Exception as e:
         msg = 'Failed to get user with username %s: %s' % (options['username'], str(e))
         self.stdout.write(msg)
         LOG.exception(msg)
@@ -64,7 +60,7 @@ class Command(BaseCommand):
         self.stdout.write(msg)
         LOG.debug(msg)
         Document2.objects.create_user_directories(user)
-      except Exception, e:
+      except Exception as e:
         msg = 'Failed to create user directories for user %s: %s' % (user.username, str(e))
         self.stdout.write(msg)
         LOG.warn(msg)

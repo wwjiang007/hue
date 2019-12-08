@@ -16,6 +16,7 @@
 # limitations under the License.
 
 
+from builtins import map
 import json
 import logging
 
@@ -33,6 +34,8 @@ from zookeeper.forms import CreateZNodeForm, EditZNodeForm
 from zookeeper.rest import ZooKeeper
 from zookeeper.utils import get_cluster_or_404
 
+from desktop.auth.backend import is_admin
+
 
 def _get_global_overview():
   clusters = CLUSTERS.get()
@@ -43,7 +46,7 @@ def _get_overview(host_ports):
   zstats = {}
 
   for host_port in host_ports.split(','):
-    host, port = map(str.strip, host_port.split(':'))
+    host, port = list(map(str.strip, host_port.split(':')))
 
     zks = stats.ZooKeeperStats(host, port)
     zstats[host_port] = zks.get_stats() or {}
@@ -53,7 +56,7 @@ def _get_overview(host_ports):
 
 def _group_stats_by_role(stats):
   leader, followers = None, []
-  for host, stats in stats.items():
+  for host, stats in list(stats.items()):
     stats['host'] = host
 
     if stats.get('zk_server_state') == 'leader' or stats.get('zk_server_state') == 'standalone':
@@ -68,7 +71,7 @@ def _group_stats_by_role(stats):
 def index(request):
   try:
     overview = _get_global_overview()
-  except Exception, e:
+  except Exception as e:
     raise PopupException(_('Could not correctly connect to Zookeeper.'), detail=e)
 
   return render('index.mako', request, {
@@ -120,7 +123,7 @@ def tree(request, id, path):
 
 
 def delete(request, id, path):
-  if not request.user.is_superuser:
+  if not is_admin(request.user):
     raise PopupException(_('You are not a superuser'))
   cluster = get_cluster_or_404(id)
 
@@ -139,7 +142,7 @@ def delete(request, id, path):
 
 
 def create(request, id, path):
-  if not request.user.is_superuser:
+  if not is_admin(request.user):
     raise PopupException(_('You are not a superuser'))
   cluster = get_cluster_or_404(id)
 
@@ -164,7 +167,7 @@ def edit_as_base64(request, id, path):
   node = zk.get(path)
 
   if request.method == 'POST':
-    if not request.user.is_superuser:
+    if not is_admin(request.user):
       raise PopupException(_('You are not a superuser'))
     form = EditZNodeForm(request.POST)
     if form.is_valid():
@@ -187,7 +190,7 @@ def edit_as_text(request, id, path):
   node = zk.get(path)
 
   if request.method == 'POST':
-    if not request.user.is_superuser:
+    if not is_admin(request.user):
       raise PopupException(_('You are not a superuser'))
     form = EditZNodeForm(request.POST)
     if form.is_valid():

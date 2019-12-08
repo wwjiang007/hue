@@ -22,7 +22,6 @@ module.exports = function(grunt) {
   var config = {};
   grunt.loadNpmTasks('grunt-contrib-less');
   grunt.loadNpmTasks('grunt-contrib-watch');
-  grunt.loadNpmTasks('grunt-contrib-uglify');
 
   // Project configuration.
   grunt.initConfig({
@@ -32,11 +31,10 @@ module.exports = function(grunt) {
         options: {
           paths: ['desktop/core/src/desktop/static/desktop/less'],
           compress: true,
-          banner: '/*!\nLicensed to Cloudera, Inc. under one\nor more contributor license agreements.  See the NOTICE file\ndistributed with this work for additional information\nregarding copyright ownership.  Cloudera, Inc. licenses this file\nto you under the Apache License, Version 2.0 (the\n"License"); you may not use this file except in compliance\nwith the License.  You may obtain a copy of the License at\n\nhttp://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an "AS IS" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n */'
+          banner: '/*!\nLicensed to Cloudera, Inc. under one\nor more contributor license agreements.  See the NOTICE file\ndistributed with this work for additional information\nregarding copyright ownership.  Cloudera, Inc. licenses this file\nto you under the Apache License, Version 2.0 (the\n"License"); you may not use this file except in compliance\nwith the License.  You may obtain a copy of the License at\n\nhttp://www.apache.org/licenses/LICENSE-2.0\n\nUnless required by applicable law or agreed to in writing, software\ndistributed under the License is distributed on an "AS IS" BASIS,\nWITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\nSee the License for the specific language governing permissions and\nlimitations under the License.\n */',
+          javascriptEnabled: true
         },
         files: {
-          'desktop/core/src/desktop/static/desktop/css/hue-bootstrap-embedded.css': 'desktop/core/src/desktop/static/desktop/less/hue-bootstrap-embedded.less',
-          'desktop/core/src/desktop/static/desktop/css/hue-embedded.css': 'desktop/core/src/desktop/static/desktop/less/hue-embedded.less',
           'desktop/core/src/desktop/static/desktop/css/home.css': 'desktop/core/src/desktop/static/desktop/less/home.less',
           'desktop/core/src/desktop/static/desktop/css/hue.css': 'desktop/core/src/desktop/static/desktop/less/hue.less',
           'desktop/core/src/desktop/static/desktop/css/hue3-extra.css': 'desktop/core/src/desktop/static/desktop/less/hue3-extra.less',
@@ -45,6 +43,7 @@ module.exports = function(grunt) {
           'desktop/core/src/desktop/static/desktop/css/httperrors.css': 'desktop/core/src/desktop/static/desktop/less/httperrors.less',
           'apps/metastore/src/metastore/static/metastore/css/metastore.css': 'apps/metastore/src/metastore/static/metastore/less/metastore.less',
           'desktop/libs/notebook/src/notebook/static/notebook/css/notebook.css': 'desktop/libs/notebook/src/notebook/static/notebook/less/notebook.less',
+          'desktop/libs/notebook/src/notebook/static/notebook/css/notebook2.css': 'desktop/libs/notebook/src/notebook/static/notebook/less/notebook2.less',
           'desktop/libs/notebook/src/notebook/static/notebook/css/notebook-layout.css': 'desktop/libs/notebook/src/notebook/static/notebook/less/notebook-layout.less',
           'apps/oozie/src/oozie/static/oozie/css/workflow-editor.css': 'apps/oozie/src/oozie/static/oozie/less/workflow-editor.less',
           'apps/oozie/src/oozie/static/oozie/css/workflow.css': 'apps/oozie/src/oozie/static/oozie/less/workflow.less',
@@ -101,37 +100,5 @@ module.exports = function(grunt) {
         tasks: ['less']
       }
     },
-    uglify: {
-      sqlAutocompleteParser: {
-        files: {
-          'desktop/core/src/desktop/static/desktop/js/autocomplete/jison/sqlAutocompleteParser.js': ['desktop/core/src/desktop/static/desktop/js/autocomplete/jison/sqlAutocompleteParser.js']
-        }
-      },
-      sqlSyntaxParser: {
-        files: {
-          'desktop/core/src/desktop/static/desktop/js/autocomplete/jison/sqlSyntaxParser.js': ['desktop/core/src/desktop/static/desktop/js/autocomplete/jison/sqlSyntaxParser.js']
-        }
-      },
-      sqlStatementsParser: {
-        files: {
-          'desktop/core/src/desktop/static/desktop/js/autocomplete/jison/sqlStatementsParser.js': ['desktop/core/src/desktop/static/desktop/js/autocomplete/jison/sqlStatementsParser.js']
-        }
-      },
-      globalSearchParser: {
-        files: {
-          'desktop/core/src/desktop/static/desktop/js/autocomplete/jison/globalSearchParser.js': ['desktop/core/src/desktop/static/desktop/js/autocomplete/jison/globalSearchParser.js']
-        }
-      },
-      solrFormulaParser: {
-        files: {
-          'desktop/core/src/desktop/static/desktop/js/autocomplete/jison/solrFormulaParser.js': ['desktop/core/src/desktop/static/desktop/js/autocomplete/jison/solrFormulaParser.js']
-        }
-      },
-      solrQueryParser: {
-        files: {
-          'desktop/core/src/desktop/static/desktop/js/autocomplete/jison/solrQueryParser.js': ['desktop/core/src/desktop/static/desktop/js/autocomplete/jison/solrQueryParser.js']
-        }
-      }
-    }
   });
 };

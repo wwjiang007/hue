@@ -15,51 +15,59 @@
 # limitations under the License.
 from __future__ import absolute_import
 
+from builtins import object
 import logging
 
-from time import time
-from azure.conf import AZURE_ACCOUNTS, get_default_refresh_url
+from azure.conf import get_refresh_url
+from desktop.lib.python_util import current_ms_from_utc
 from desktop.lib.rest import http_client, resource
 
 LOG = logging.getLogger(__name__)
 
 class ActiveDirectory(object):
-  def __init__(self, url=None, aws_access_key_id=None, aws_secret_access_key=None):
+  def __init__(self, url=None, aws_access_key_id=None, aws_secret_access_key=None, version=None):
     self._access_key_id = aws_access_key_id
     self._secret_access_key = aws_secret_access_key
     self._url = url;
 
     self._client = http_client.HttpClient(url, logger=LOG)
     self._root = resource.Resource(self._client)
-    self._token = None
+    self._version = version
+
 
   def get_token(self):
-    is_token_expired = self._token is None or time() >= self._token["expires_on"]
-    if is_token_expired:
-      LOG.debug("Authenticating to Azure Active Directory: %s" % self._url)
-      data = {
-        "grant_type" : "client_credentials",
-        "resource" : "https://management.core.windows.net/",
-        "client_id" : self._access_key_id,
-        "client_secret" : self._secret_access_key
-      }
-      self._token = self._root.post("/", data=data, log_response=False);
-      self._token["expires_on"] = int(self._token["expires_on"])
+    if not self._version:
+      return self._get_token({"resource": "https://management.core.windows.net/"})
+    else:
+      return self._get_token({"scope": "https://storage.azure.com/.default"})
 
-    return self._token["token_type"] + " " + self._token["access_token"]
+
+  def _get_token(self, params=None):
+    LOG.debug("Authenticating to Azure Active Directory: %s" % self._url)
+    data = {
+      "grant_type" : "client_credentials",
+      "client_id" : self._access_key_id,
+      "client_secret" : self._secret_access_key
+    }
+    data.update(params)
+    token = self._root.post("/", data=data, log_response=False)
+    token["expires_on"] = int(token.get("expires_on", (current_ms_from_utc() + int(token.get("expires_in")) * 1000) / 1000))
+    return token
+
 
   @classmethod
-  def from_config(cls, conf):
-    access_key_id = AZURE_ACCOUNTS['default'].CLIENT_ID.get()
-    secret_access_key = AZURE_ACCOUNTS['default'].CLIENT_SECRET.get()
+  def from_config(cls, conf=None, version=None):
+    access_key_id = conf.CLIENT_ID.get()
+    secret_access_key = conf.CLIENT_SECRET.get()
 
     if None in (access_key_id, secret_access_key):
       raise ValueError('Can\'t create azure client, credential is not configured')
 
-    url = get_default_refresh_url()
+    url = get_refresh_url(conf, version)
 
     return cls(
       url,
       aws_access_key_id=access_key_id,
-      aws_secret_access_key=secret_access_key
+      aws_secret_access_key=secret_access_key,
+      version=version
     )

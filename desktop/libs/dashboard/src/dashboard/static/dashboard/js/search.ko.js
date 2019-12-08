@@ -121,7 +121,7 @@ var EmptyGridsterWidget = function (vm) {
 
   self.isAdding = ko.observable(true);
   self.fieldName = ko.observable();
-  self.fieldViz = ko.observable(ko.HUE_CHARTS.TYPES.BARCHART);
+  self.fieldViz = ko.observable(window.HUE_CHARTS.TYPES.BARCHART);
   self.fieldSort = ko.observable('desc');
   self.fieldOperation = ko.observable();
   self.fieldOperations = ko.pureComputed(function () {
@@ -138,7 +138,7 @@ var EmptyGridsterWidget = function (vm) {
 var Query = function (vm, query) {
   var self = this;
 
-  self.uuid = ko.observable(typeof query.uuid != "undefined" && query.uuid != null ? query.uuid : UUID());
+  self.uuid = ko.observable(typeof query.uuid != "undefined" && query.uuid != null ? query.uuid : hueUtils.UUID());
   self.qs = ko.mapping.fromJS(query.qs);
   self.qs.subscribe(function(){
     if (vm.selectedQDefinition() != null){
@@ -270,7 +270,7 @@ var Query = function (vm, query) {
     if (fq) {
       id = fq.id();
     } else {
-      id = UUID();
+      id = hueUtils.UUID();
     }
     self.toggleFacet({'widget_id': id, 'facet': {'cat': data.val.cat, 'value': data.val.value}, 'exclude': exclude});
     vm.search();
@@ -551,18 +551,27 @@ var Collection = function (vm, collection) {
   var self = this;
 
   self.id = ko.mapping.fromJS(collection.id);
-  self.uuid = ko.observable(typeof collection.uuid != "undefined" && collection.uuid != null ? collection.uuid : UUID());
+  self.uuid = ko.observable(typeof collection.uuid != "undefined" && collection.uuid != null ? collection.uuid : hueUtils.UUID());
   self.name = ko.mapping.fromJS(collection.name);
   self.label = ko.mapping.fromJS(collection.label);
   self.description = ko.observable(typeof collection.description != "undefined" && collection.description != null ? collection.description : "");
   self.suggest = ko.mapping.fromJS(collection.suggest);
+  self.activeNamespace = ko.observable();
+  self.activeCompute = ko.observable();
+
+  contextCatalog.getNamespaces({ sourceType: collection.engine || 'solr' }).done(function (context) {
+    // TODO: Namespace selection
+    self.activeNamespace(context.namespaces[0]);
+    self.activeCompute(context.namespaces[0].computes[0]);
+  });
+
   self.engine = ko.observable(typeof collection.engine != "undefined" && collection.engine != null ? collection.engine : "solr");
   self.engine.subscribe(function() {
     self.name(null);
   });
   self.source = ko.observable(typeof collection.source != "undefined" && collection.source != null ? collection.source : "data");
   self.async = ko.computed(function() {
-    return ['impala', 'hive', 'report'].indexOf(self.engine()) != -1;
+    return self.engine() != 'solr';
   });
   self.queryResult = ko.observable(new QueryResult(self, {
     type: self.engine(),
@@ -869,10 +878,11 @@ var Collection = function (vm, collection) {
 
       facet.template.fields = ko.computed(function () { // Dup of template.fields
         var _fields = [];
+        var fieldsSelected = facet.template.fieldsSelected();
         $.each(facet.template.fieldsAttributes(), function (index, field) {
           var position = facet.template.fieldsSelected.indexOf(field.name());
-          if (position != -1) {
-            _fields[position] = field;
+          if (!fieldsSelected.length || position != -1) {
+            _fields.push(field);
           }
         });
         return _fields;
@@ -914,16 +924,19 @@ var Collection = function (vm, collection) {
           vm.search();
         }
       });
-
-      facet.template.chartSettings.chartType.subscribe(function (newValue) {
-        facet.widgetType(
-          newValue == ko.HUE_CHARTS.TYPES.PIECHART ? 'pie2-widget' :
-            (newValue == ko.HUE_CHARTS.TYPES.TIMELINECHART ? 'timeline-widget' :
-              (newValue == ko.HUE_CHARTS.TYPES.GRADIENTMAP ? 'gradient-map-widget' :
-                (newValue == ko.HUE_CHARTS.TYPES.COUNTER ? 'hit-widget' :
-                  (newValue == ko.HUE_CHARTS.TYPES.TEXTSELECT ? 'text-facet-widget' : 'bucket-widget'))))
-        );
+      facet.template.chartSettings.hideStacked = ko.computed(function () {
+          return facet.template.chartSettings.chartYMulti().length <= 1;
       });
+
+      /*facet.template.chartSettings.chartType.subscribe(function (newValue) {
+      if (facet.widgetType() === 'document-widget') {
+        var _fields = [];
+        $.each(facet.fields(), function (index, field) {
+          _fields.push(field.name());
+        });
+        facet.template.fieldsSelected(_fields);
+      }
+      });*/
 
       // TODO Reload QueryResult
       facet.queryResult = ko.observable(new QueryResult(self, {
@@ -1016,9 +1029,11 @@ var Collection = function (vm, collection) {
     }
 
     if (nestedFacet.aggregate) {
-      nestedFacet.aggregate.function.subscribe(function () {
-        vm.search();
-      });
+      if (nestedFacet.aggregate.function) {
+        nestedFacet.aggregate.function.subscribe(function () {
+          vm.search();
+        });
+      }
 
       nestedFacet.aggregate.metrics = ko.computed(function () {
         var _field = self.getTemplateField(nestedFacet.field(), self.template.fieldsAttributes());
@@ -1083,7 +1098,7 @@ var Collection = function (vm, collection) {
     return self.fields();
   });
 
-  self.selectedDocument = ko.observable({});
+  self.selectedDocument = ko.observable({uuid: window.location.getParameter('uuid'), statement_id: parseInt(window.location.getParameter('statement')) || 0});
 
   self.newQDefinitionName = ko.observable("");
 
@@ -1091,7 +1106,7 @@ var Collection = function (vm, collection) {
     if ($.trim(self.newQDefinitionName()) != "") {
       var _def = ko.mapping.fromJS({
         'name': $.trim(self.newQDefinitionName()),
-        'id': UUID(),
+        'id': hueUtils.UUID(),
         'data': ko.mapping.toJSON(vm.query)
       });
       self.qdefinitions.push(_def);
@@ -1389,12 +1404,12 @@ var Collection = function (vm, collection) {
   self.template.hasDataForChart = ko.computed(function () {
     var hasData = false;
 
-    if ([ko.HUE_CHARTS.TYPES.BARCHART, ko.HUE_CHARTS.TYPES.LINECHART, ko.HUE_CHARTS.TYPES.TIMELINECHART].indexOf(self.template.chartSettings.chartType()) >= 0) {
+    if ([window.HUE_CHARTS.TYPES.BARCHART, window.HUE_CHARTS.TYPES.LINECHART, window.HUE_CHARTS.TYPES.TIMELINECHART].indexOf(self.template.chartSettings.chartType()) >= 0) {
       hasData = typeof self.template.chartSettings.chartX() != "undefined" && self.template.chartSettings.chartX() != null && self.template.chartSettings.chartYMulti().length > 0;
     }
     else {
       hasData = typeof self.template.chartSettings.chartX() != "undefined" && self.template.chartSettings.chartX() != null && typeof self.template.chartSettings.chartYSingle() != "undefined" && self.template.chartSettings.chartYSingle() != null
-        || self.template.chartSettings.chartType() == ko.HUE_CHARTS.TYPES.COUNTER;
+        || self.template.chartSettings.chartType() == window.HUE_CHARTS.TYPES.COUNTER;
     }
     if (!hasData && self.template.showChart()){
       self.template.showFieldList(true);
@@ -1569,6 +1584,10 @@ var Collection = function (vm, collection) {
 
     if (self.supportNesting()) {
       self.getNestedDocuments();
+    }
+
+    if (self.source() != 'solr') {
+      vm.search();
     }
   };
 
@@ -1832,6 +1851,7 @@ var Collection = function (vm, collection) {
 
   self.name.subscribe(function(newValue) { // New Dashboard
     if (newValue && (self.engine() == 'solr' || /^[^\.]+\.[^\.]+$/.test(newValue))) {
+      huePubSub.publish('dashboard.switch.collection');
       self.label(newValue);
       self.switchCollection();
       vm.search();
@@ -1854,6 +1874,8 @@ var Collection = function (vm, collection) {
       showInAssistEnabled: true,
       sourceType: self.engine(),
       orientation: 'right',
+      namespace: self.activeNamespace(),
+      compute: self.activeCompute(),
       defaultDatabase: 'default',
       pinEnabled: false,
       source: {
@@ -1939,7 +1961,7 @@ var NewTemplate = function (vm, initial) {
 var QueryResult = function (vm, initial) { // Similar to to Notebook Snippet
   var self = this; // TODO remove 'vm'
 
-  self.id = ko.observable(UUID());
+  self.id = ko.observable(hueUtils.UUID());
   self.type = ko.mapping.fromJS(initial.type);
   self.status = ko.observable(initial.status || 'running');
   self.progress = ko.mapping.fromJS(initial.progress || 0);
@@ -1975,6 +1997,38 @@ var GEO_TYPES = ['SpatialRecursivePrefixTreeFieldType'];
 
 var RANGE_SELECTABLE_WIDGETS = ['histogram-widget', 'bar-widget', 'line-widget'];
 
+var TempDocument = function () {
+  var self = this;
+
+  self.name = ko.observable('');
+  self.uuid = ko.observable();
+  self.uuid.subscribe(function (val) {
+    if (val) {
+      window.apiHelper.fetchDocument({ uuid: val, silenceErrors: false, fetchContents: true }).done(function (data) {
+        if (data && data.data && data.data.snippets.length > 0) {
+          self.name(data.document.name);
+          var snippet = data.data.snippets[0];
+          self.parsedStatements(sqlStatementsParser.parse(snippet.statement));
+          self.selectedStatement(self.parsedStatements()[0].statement);
+          self.selectedStatementId(0);
+        }
+      });
+    }
+  });
+
+  self.parsedStatements = ko.observableArray([]);
+  self.selectedStatement = ko.observable();
+  self.selectedStatementId = ko.observable();
+
+  self.reset = function () {
+    self.name('');
+    self.uuid('');
+    self.parsedStatements([]);
+    self.selectedStatement('');
+    self.selectedStatementId('');
+  }
+}
+
 
 var SearchViewModel = function (collection_json, query_json, initial_json, has_gridster_enabled, has_new_add_method) {
 
@@ -2000,9 +2054,11 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
   });
   self.showPlusButtonHintShownOnce = ko.observable(false);
 
+  self.tempDocument = new TempDocument();
+
 
   self.build = function () {
-    self.intervalOptions = ko.observableArray(ko.bindingHandlers.daterangepicker.INTERVAL_OPTIONS);
+    self.intervalOptions = ko.observableArray(ko.bindingHandlers.dateRangePicker.INTERVAL_OPTIONS);
     self.isNested = ko.observable(false);
 
     // Models
@@ -2104,7 +2160,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
       var w = new Widget({
         size: 12,
         gridsterHeight: gridsterHeight,
-        id: UUID(),
+        id: hueUtils.UUID(),
         name: name,
         widgetType: type,
         isEditing: false
@@ -2211,7 +2267,8 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
       self.collection.syncFields();
       if (self.collection.engine() === 'solr') {
         self.search(callback);
-      } else if (self.collection.engine() === 'report') {
+      }
+      else {
         callback();
       }
     }
@@ -2896,7 +2953,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
           self.collection.id(data.id);
           $(document).trigger("info", data.message);
           if (oldId !== data.id) {
-            hueUtils.changeURL((IS_HUE_4 ? '/hue' : '') + '/dashboard/?collection=' + data.id);
+            hueUtils.changeURL('/hue/dashboard/?collection=' + data.id);
           }
         }
         else {
@@ -2909,7 +2966,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
 
     self.saveAs = function() {
       self.collection.id(null);
-      self.collection.uuid(UUID());
+      self.collection.uuid(hueUtils.UUID());
       self.save();
     };
 
@@ -2928,7 +2985,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
   };
 
   self.reset = function() {
-    self.intervalOptions(ko.bindingHandlers.daterangepicker.INTERVAL_OPTIONS);
+    self.intervalOptions(ko.bindingHandlers.dateRangePicker.INTERVAL_OPTIONS);
     self.isNested(false);
 
     // Models
@@ -2939,7 +2996,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
 
     var c = self.collectionJson.collection;
     ko.mapping.fromJS(c.id, self.collection.id);
-    self.collection.uuid(typeof c.uuid != "undefined" && c.uuid != null ? c.uuid : UUID());
+    self.collection.uuid(typeof c.uuid != "undefined" && c.uuid != null ? c.uuid : hueUtils.UUID());
     ko.mapping.fromJS(c.name, self.collection.name);
     ko.mapping.fromJS(c.label, self.collection.label);
     self.collection.description(typeof c.description != "undefined" && c.description != null ? c.description : '');
@@ -3036,7 +3093,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
     self.collection.template.filteredAttributeFieldsAll(true);
 
     var q = self.queryJson;
-    self.query.uuid(typeof q.uuid != "undefined" && q.uuid != null ? q.uuid : UUID());
+    self.query.uuid(typeof q.uuid != "undefined" && q.uuid != null ? q.uuid : hueUtils.UUID());
     ko.mapping.fromJS(q.qs, self.query.qs);
     ko.mapping.fromJS(q.fqs, self.query.fqs);
     ko.mapping.fromJS(q.start, self.query.start);
@@ -3066,7 +3123,7 @@ var SearchViewModel = function (collection_json, query_json, initial_json, has_g
     // loadDashboardLayout(self, self.collectionJson.gridItems); // TODO
 
     if (window.location.search.indexOf("collection") > -1) {
-      hueUtils.changeURL((IS_HUE_4 ? '/hue' : '') + '/dashboard/new_search');
+      hueUtils.changeURL('/hue/dashboard/new_search');
     }
   };
 

@@ -18,15 +18,12 @@
 
   from desktop.views import commonheader, commonfooter, _ko
   from desktop import conf
+  from desktop.auth.backend import is_admin
 %>
 
 <%namespace name="docBrowser" file="/document_browser.mako" />
 
 <%def name="homeJSModels(is_embeddable=False)">
-  <script src="${ static('desktop/ext/js/jquery/plugins/jquery-ui-1.10.4.custom.min.js') }"></script>
-  <script src="${ static('desktop/ext/js/selectize.min.js') }"></script>
-  <script src="${ static('desktop/ext/js/knockout-sortable.min.js') }"></script>
-  <script src="${ static('desktop/js/ko.editable.js') }"></script>
   <script src="${ static('desktop/ext/js/jquery/plugins/jquery.mousewheel.min.js') }"></script>
   <script src="${ static('desktop/js/home2.vm.js') }"></script>
 
@@ -71,7 +68,7 @@
     $(document).ready(function () {
       var options = {
         user: '${ user.username }',
-        superuser: '${ user.is_superuser }' === 'True',
+        superuser: '${ is_admin(user) }' === 'True',
         i18n: {
           errorFetchingTableDetails: '${_('An error occurred fetching the table details. Please try again.')}',
           errorFetchingTableFields: '${_('An error occurred fetching the table fields. Please try again.')}',

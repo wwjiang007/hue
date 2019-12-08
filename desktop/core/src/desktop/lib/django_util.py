@@ -17,6 +17,7 @@
 #
 # Utilities for django operations.
 
+from builtins import object
 import logging
 import re
 import json
@@ -25,6 +26,7 @@ import datetime
 
 from django.conf import settings
 from django.core import urlresolvers, serializers
+from django.template import context as django_template_context
 from django.template.context_processors import csrf
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import models
@@ -40,6 +42,8 @@ import desktop.conf
 import desktop.lib.thrift_util
 from desktop.lib import django_mako
 from desktop.lib.json_utils import JSONEncoderForHTML
+from desktop.monkey_patches import monkey_patch_request_context_init
+
 
 LOG = logging.getLogger(__name__)
 
@@ -51,9 +55,11 @@ MAKO = 'mako'
 USERNAME_RE_RULE = "[^-:\s][^:\s]*"
 GROUPNAME_RE_RULE = ".{,80}"
 
+django_template_context.RequestContext.__init__ = monkey_patch_request_context_init
+
 
 # For backward compatibility for upgrades to Hue 2.2
-class PopupException: pass
+class PopupException(object): pass
 
 
 class Encoder(json.JSONEncoder):
@@ -113,7 +119,7 @@ def copy_query_dict(query_dict, attr_list):
   """
   res = QueryDict('', mutable=True)
   for attr in attr_list:
-    if query_dict.has_key(attr):
+    if attr in query_dict:
       res[attr] = query_dict.get(attr)
   return res
 
@@ -216,18 +222,24 @@ def render(template, request, data, json=None, template_lib=None, force_template
   # request.ajax is defined in the AjaxMiddleware. But we might hit
   # errors before getting to that point.
   is_ajax = getattr(request, "ajax", False)
+  if data is None:
+    data = {}
+
   if not force_template and not is_jframe_request(request) and (is_ajax or template is None):
     if json is not None:
       return render_json(json, request.GET.get("callback"), status=status)
     else:
       return render_json(data, request.GET.get("callback"), status=status)
   else:
-    return _render_to_response(template,
-                               request,
-                               RequestContext(request, data),
-                               template_lib=template_lib,
-                               status=status,
-                               **kwargs)
+    data.update({'user': request.user})
+    return _render_to_response(
+        template,
+        request,
+        RequestContext(request, data),
+        template_lib=template_lib,
+        status=status,
+        **kwargs
+    )
 
 
 def render_injected(http_resp, extra_html):
@@ -285,21 +297,23 @@ class IllegalJsonpCallbackNameException(Exception):
 
 def render_json(data, jsonp_callback=None, js_safe=False, status=200):
   """
-  Renders data as json.  If jsonp is specified, wraps
-  the result in a function.
+  Renders data as json.  If jsonp is specified, wraps the result in a function.
   """
   if settings.DEBUG:
     indent = 2
   else:
     indent = 0
+
   if js_safe:
     json = encode_json_for_js(data, indent)
   else:
     json = encode_json(data, indent)
+
   if jsonp_callback is not None:
     if not VALID_JSON_IDENTIFIER.match(jsonp_callback):
       raise IllegalJsonpCallbackNameException("Invalid jsonp callback name: %s" % jsonp_callback)
     json = "%s(%s);" % (jsonp_callback, json)
+
   return HttpResponse(json, content_type='text/javascript', status=status)
 
 def update_if_dirty(model_instance, **kwargs):
@@ -308,7 +322,7 @@ def update_if_dirty(model_instance, **kwargs):
   saves only if there's been a change.
   """
   dirty = False
-  for key, value in kwargs.items():
+  for key, value in list(kwargs.items()):
     if getattr(model_instance, key) != value:
       setattr(model_instance, key, value)
       dirty = True
@@ -340,7 +354,7 @@ class TruncatingModel(models.Model):
   Abstract class which truncates Text and Char fields to their configured
   maximum lengths, to avoid database field overflow errors.
   """
-  class Meta:
+  class Meta(object):
     abstract = True
 
   def __setattr__(self, name, value):

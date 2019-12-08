@@ -23,7 +23,7 @@ LOG = logging.getLogger(__name__)
 
 try:
   from spark.job_server_api import get_api as get_spark_api
-except ImportError, e:
+except ImportError as e:
   LOG.exception('Spark is not enabled')
 
 from notebook.connectors.base import Api
@@ -42,7 +42,7 @@ class SparkBatchApi(Api):
     elif snippet['type'] == 'py':
         properties = {
             'file': snippet['properties'].get('py_file'),
-            'args': snippet['properties'].get('argument'),
+            'args': snippet['properties'].get('argument', []),
         }
     else:
         properties = {
@@ -78,7 +78,7 @@ class SparkBatchApi(Api):
 
     return api.get_batch_log(snippet['result']['handle']['id'], startFrom=startFrom, size=size)
 
-  def close_statement(self, snippet):
+  def close_statement(self, notebook, snippet):
     api = get_spark_api(self.user)
 
     session_id = snippet['result']['handle']['id']
@@ -94,6 +94,3 @@ class SparkBatchApi(Api):
   def cancel(self, notebook, snippet):
     # Batch jobs do not support interruption, so close statement instead.
     return self.close_statement(snippet)
-
-  def progress(self, snippet, logs):
-    return 50

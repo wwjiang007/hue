@@ -15,12 +15,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
 import errno
 import logging
 import os.path
 
-import conf
-import confparse
+from . import conf
+from . import confparse
+from hadoop.conf import DEFAULT_NN_HTTP_PORT
 
 
 LOG = logging.getLogger(__name__)
@@ -31,7 +33,8 @@ _CNF_NN_PERMISSIONS_UMASK_MODE = 'fs.permissions.umask-mode'
 _CNF_NN_SENTRY_PREFIXES = 'sentry.authorization-provider.hdfs-path-prefixes' # Deprecated
 _CNF_NN_SENTRY_PATH_PREFIXES = 'sentry.hdfs.integration.path.prefixes'
 _CNF_NN_PERMISSIONS_SUPERGROUP = 'dfs.permissions.superusergroup'
-
+_CNF_HTTP_POLICY = 'dfs.http.policy'
+_CNF_WEBHDFS_HTTPS_PORT = 'dfs.https.port'
 
 def reset():
   global _HDFS_SITE_DICT
@@ -51,6 +54,12 @@ def get_umask_mode():
 
   return int(umask, 8)
 
+def get_webhdfs_ssl():
+  settings = {"protocol": "http", "port": DEFAULT_NN_HTTP_PORT}
+  if get_conf().get(_CNF_HTTP_POLICY, 'http') == "HTTPS_ONLY":
+    settings["protocol"] = 'https'
+    settings["port"] = get_conf().get(_CNF_WEBHDFS_HTTPS_PORT, DEFAULT_NN_HTTP_PORT)
+  return settings
 
 def get_nn_sentry_prefixes():
   prefixes = set()
@@ -74,10 +83,10 @@ def _parse_hdfs_site():
 
   try:
     hdfs_site_path = os.path.join(conf.HDFS_CLUSTERS['default'].HADOOP_CONF_DIR.get(), 'hdfs-site.xml')
-    data = file(hdfs_site_path, 'r').read()
+    data = open(hdfs_site_path, 'r').read()
   except KeyError:
     data = ""
-  except IOError, err:
+  except IOError as err:
     if err.errno != errno.ENOENT:
       LOG.error('Cannot read from "%s": %s' % (hdfs_site_path, err))
       return

@@ -23,9 +23,12 @@ import re
 import json
 
 import django.test.client
-from django.contrib.auth.models import User, Group
-
 import nose.tools
+
+from useradmin.models import User, Group, default_organization
+
+from desktop.conf import ENABLE_ORGANIZATIONS
+
 
 class Client(django.test.client.Client):
   """
@@ -66,7 +69,11 @@ def make_logged_in_client(username="test", password="test", is_superuser=True, r
       user.save()
 
   if groupname is not None:
-    group, created = Group.objects.get_or_create(name=groupname)
+    group_attrs = {'name': groupname}
+    if ENABLE_ORGANIZATIONS.get():
+      group_attrs['organization'] = default_organization()
+
+    group, created = Group.objects.get_or_create(**group_attrs)
     if not user.groups.filter(name=group.name).exists():
       user.groups.add(group)
       user.save()
@@ -85,12 +92,12 @@ def compact_whitespace(s):
   Also removes leading and trailing whitespce.
   """
   return _MULTI_WHITESPACE.sub(" ", s).strip()
-  
+
 def assert_equal_mod_whitespace(first, second, msg=None):
   """
   Asserts that two strings are equal, ignoring whitespace.
   """
-  nose.tools.assert_equal(compact_whitespace(first), 
+  nose.tools.assert_equal(compact_whitespace(first),
     compact_whitespace(second), msg)
 
 def assert_similar_pages(first, second, ratio=0.9, msg=None):

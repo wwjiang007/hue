@@ -18,20 +18,23 @@ from django.utils.translation import ugettext as _
 
 from desktop import conf
 from desktop.conf import USE_NEW_EDITOR
+from desktop.models import hue_version
 from desktop.lib.i18n import smart_unicode
 
 from metadata.conf import has_optimizer, OPTIMIZER
+
+from desktop.auth.backend import is_admin
+
+from webpack_loader.templatetags.webpack_loader import render_bundle
 
 home_url = url('desktop_views_home')
 if USE_NEW_EDITOR.get():
   home_url = url('desktop_views_home2')
 %>
 
-<%namespace name="charting" file="/charting.mako" />
 <%namespace name="commonHeaderFooterComponents" file="/common_header_footer_components.mako" />
 <%namespace name="hueAceAutocompleter" file="/hue_ace_autocompleter.mako" />
 <%namespace name="hueIcons" file="/hue_icons.mako" />
-<%namespace name="koComponents" file="/ko_components.mako" />
 
 <!DOCTYPE html>
 <%def name="is_selected(selected)">
@@ -39,25 +42,39 @@ if USE_NEW_EDITOR.get():
     class="active"
   %endif
 </%def>
+
 <%def name="get_nice_name(app, section)">
   % if app and section == app.display_name:
     - ${app.nice_name}
   % endif
 </%def>
+
 <%def name="get_title(title)">
   % if title:
     - ${smart_unicode(title)}
   % endif
 </%def>
+
 <html lang="en">
 <head>
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
   <meta charset="utf-8">
-  <title>Hue ${get_nice_name(current_app, section)} ${get_title(title)}</title>
+  <title>Hue ${ get_nice_name(current_app, section) } ${ get_title(title) }</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link rel="icon" type="image/x-icon" href="${ static('desktop/art/favicon.ico') }" />
-  <meta name="description" content="">
-  <meta name="author" content="">
+  % if conf.CUSTOM.LOGO_SVG.get():
+  <link rel="icon" type="image/x-icon" href="${ static('desktop/art/custom-branding/favicon.ico') }"/>
+  % else:
+  <link rel="icon" type="image/x-icon" href="${ static('desktop/art/favicon.ico') }"/>
+  % endif
+
+  <meta name="twitter:image" content="${ static('desktop/art/hue-login-logo-ellie.png') }">
+  <meta name="twitter:card" content="summary">
+  <meta property="og:site_name" content="${ _('Hue - SQL Editor') }" />
+  <meta property="og:title" content="${ _('Hue - SQL Editor') }" />
+  <meta property="og:description" content="${ _('Let anybody query, write SQL, explore data and share results.') }">
+  <meta property="og:image" content="${ static('desktop/art/hue-login-logo-ellie.png') }" />
+  <meta name="description" content="${ _('Let anybody query, write SQL, explore data and share results.') }">
+  <meta name="keywords" content="${ _('query, sql, data warehouse, database, sharing, catalog, scheduler, optimize, dashboard') }" />
 
   <link href="${ static('desktop/css/roboto.css') }" rel="stylesheet">
   <link href="${ static('desktop/ext/css/cui/cui.css') }" rel="stylesheet">
@@ -117,90 +134,51 @@ if USE_NEW_EDITOR.get():
     % endif
   </style>
 
-  <script type="text/javascript">
-    var IS_HUE_4 = false;
-  </script>
-
   ${ commonHeaderFooterComponents.header_i18n_redirection() }
 
   % if user.is_authenticated():
-  <script src="/desktop/globalJsConstants.js"></script>
+  <%
+    global_constants_url = '/desktop/globalJsConstants.js?v=' + hue_version()
+  %>
+  <script src="${global_constants_url}"></script>
   % endif
 
   % if not conf.DEV.get():
   <script src="${ static('desktop/js/hue.errorcatcher.js') }"></script>
   % endif
 
-  <script src="${ static('desktop/js/hue.utils.js') }"></script>
-  <script src="${ static('desktop/ext/js/jquery/jquery-2.2.4.min.js') }"></script>
-  <script src="${ static('desktop/js/jquery.migration.js') }"></script>
-  <script src="${ static('desktop/js/jquery.hiveautocomplete.js') }"></script>
-  <script src="${ static('desktop/js/jquery.hdfsautocomplete.js') }"></script>
-  <script src="${ static('desktop/js/jquery.filechooser.js') }"></script>
-  <script src="${ static('desktop/js/jquery.selector.js') }"></script>
-  <script src="${ static('desktop/js/jquery.delayedinput.js') }"></script>
-  <script src="${ static('desktop/js/jquery.rowselector.js') }"></script>
-  <script src="${ static('desktop/js/jquery.notify.js') }"></script>
-  <script src="${ static('desktop/js/jquery.titleupdater.js') }"></script>
-  <script src="${ static('desktop/js/jquery.horizontalscrollbar.js') }"></script>
-  <script src="${ static('desktop/js/jquery.tablescroller.js') }"></script>
-  <script src="${ static('desktop/js/jquery.tableextender.js') }"></script>
-  <script src="${ static('desktop/js/jquery.tableextender2.js') }"></script>
-  <script src="${ static('desktop/js/jquery.scrollleft.js') }"></script>
-  <script src="${ static('desktop/js/jquery.scrollup.js') }"></script>
-  <script src="${ static('desktop/ext/js/jquery/plugins/jquery.cookie.js') }"></script>
-  <script src="${ static('desktop/ext/js/jquery/plugins/jquery.total-storage.min.js') }"></script>
-  <script src="${ static('desktop/ext/js/jquery/plugins/jquery.dataTables.1.8.2.min.js') }"></script>
-  <script src="${ static('desktop/ext/js/jquery/plugins/jquery.form.js') }"></script>
-  <script src="${ static('desktop/js/jquery.huedatatable.js') }"></script>
-  <script src="${ static('desktop/js/jquery.datatables.sorting.js') }"></script>
-  <script src="${ static('desktop/ext/js/d3.v3.js') }"></script>
-  <script src="${ static('desktop/ext/js/d3.v4.js') }"></script>
-  <script src="${ static('desktop/ext/js/bootstrap.min.js') }"></script>
+  % if section == "login":
+    ${ render_bundle('login', config='LOGIN') | n,unicode }
+  %else:
+    ${ render_bundle('vendors~hue~notebook~tableBrowser') | n,unicode }
+    ${ render_bundle('vendors~hue~tableBrowser') | n,unicode }
+    ${ render_bundle('vendors~hue') | n,unicode }
+    ${ render_bundle('hue~notebook') | n,unicode }
+    ${ render_bundle('hue~notebook~tableBrowser') | n,unicode }
+    ${ render_bundle('hue~tableBrowser') | n,unicode }
+    ${ render_bundle('hue') | n,unicode }
+  % endif
+
   <script src="${ static('desktop/js/bootstrap-tooltip.js') }"></script>
   <script src="${ static('desktop/js/bootstrap-typeahead-touchscreen.js') }"></script>
   <script src="${ static('desktop/ext/js/bootstrap-better-typeahead.min.js') }"></script>
-  <script src="${ static('desktop/js/hue.colors.js') }"></script>
-  <script src="${ static('desktop/ext/js/fileuploader.js') }"></script>
-  <script src="${ static('desktop/ext/js/filesize.min.js') }"></script>
   <script src="${ static('desktop/js/popover-extra-placements.js') }"></script>
   <script src="${ static('desktop/ext/js/moment-with-locales.min.js') }"></script>
   <script src="${ static('desktop/ext/js/moment-timezone-with-data.min.js') }" type="text/javascript" charset="utf-8"></script>
   <script src="${ static('desktop/ext/js/tzdetect.js') }" type="text/javascript" charset="utf-8"></script>
-  <script src="${ static('desktop/ext/js/knockout.min.js') }"></script>
-  <script src="${ static('desktop/ext/js/knockout-mapping.min.js') }"></script>
-  <script src="${ static('desktop/ext/js/knockout.validation.min.js') }"></script>
-  <script src="${ static('desktop/js/ko.switch-case.js') }"></script>
-  <script src="${ static('desktop/js/ko.hue-bindings.js') }"></script>
-  <script src="${ static('desktop/ext/js/dropzone.min.js') }"></script>
 
 % if user.is_authenticated():
 
-  <script src="${ static('desktop/js/sqlUtils.js') }"></script>
   <script src="${ static('desktop/js/ace/ace.js') }"></script>
   <script src="${ static('desktop/js/ace/mode-impala.js') }"></script>
   <script src="${ static('desktop/js/ace/mode-hive.js') }"></script>
   <script src="${ static('desktop/js/ace/ext-language_tools.js') }"></script>
   <script src="${ static('desktop/js/ace.extended.js') }"></script>
-  <script src="${ static('desktop/js/autocomplete/sqlParseSupport.js') }"></script>
-  <script src="${ static('desktop/js/autocomplete/sqlStatementsParser.js') }"></script>
-  <script src="${ static('desktop/js/autocomplete/sqlAutocompleteParser.js') }"></script>
-  <script src="${ static('desktop/js/autocomplete/solrQueryParser.js') }"></script>
-  <script src="${ static('desktop/js/autocomplete/solrFormulaParser.js') }"></script>
-  <script src="${ static('desktop/js/autocomplete/globalSearchParser.js') }"></script>
-  <script src="${ static('desktop/js/sqlAutocompleter2.js') }"></script>
-  <script src="${ static('desktop/js/sqlAutocompleter3.js') }"></script>
-  <script src="${ static('desktop/js/hdfsAutocompleter.js') }"></script>
-  <script src="${ static('desktop/js/autocompleter.js') }"></script>
 
   <script>
-    ace.config.set("basePath", "/static/desktop/js/ace");
+    ace.config.set("basePath", "${ static('desktop/js/ace') }");
   </script>
 
-  <script src="${ static('metastore/js/metastore.model.js') }"></script>
-
-  ${ charting.import_charts() }
-  ${ koComponents.all() }
   ${ hueAceAutocompleter.hueAceAutocompleter() }
 %endif
 
@@ -208,8 +186,6 @@ if USE_NEW_EDITOR.get():
 
 % if user.is_authenticated():
   <script src="${ static('desktop/ext/js/localforage.min.js') }"></script>
-  <script src="${ static('desktop/js/dataCatalog.js') }"></script>
-  <script src="${ static('desktop/js/apiHelper.js') }"></script>
   <script src="${ static('desktop/js/clusterConfig.js') }"></script>
 
   <script type="text/javascript">
@@ -235,13 +211,13 @@ if USE_NEW_EDITOR.get():
     });
   </script>
 %endif
-
 </head>
-<body>
 
+<body>
 ${ hueIcons.symbols() }
 
-% if conf.DISABLE_HUE_3.get() and conf.IS_HUE_4.get() and request.environ.get("PATH_INFO").find("/hue/") < 0:
+
+% if hasattr(request, 'environ') and request.environ.get("PATH_INFO").find("/hue/") < 0:
   <script>
     window.location.replace("/");
   </script>
@@ -259,10 +235,11 @@ ${ hueIcons.symbols() }
     found_app = ""
     for app in app_list:
       if app in apps:
-       found_app = app
-       count += 1
+        found_app = app
+        count += 1
     return found_app, count
 %>
+
 % if not skip_topbar:
 <div class="navigator">
   <div class="pull-right">
@@ -332,9 +309,9 @@ ${ hueIcons.symbols() }
       % endif
     % endif
     <%
-      view_profile = user.has_hue_permission(action="access_view:useradmin:edit_user", app="useradmin") or user.is_superuser
+      view_profile = user.has_hue_permission(action="access_view:useradmin:edit_user", app="useradmin") or is_admin(user)
     %>
-    % if view_profile or conf.IS_HUE_4.get():
+    % if view_profile:
     <li class="dropdown">
       <a title="${'Administration' if view_profile else ''}" href="#" data-rel="navigator-tooltip" data-toggle="dropdown" class="dropdown-toggle">
         <i class="fa fa-cogs"></i>&nbsp;${user.username}&nbsp;
@@ -351,12 +328,9 @@ ${ hueIcons.symbols() }
           % endif
         </a>
       </li>
-        % if user.is_superuser:
+        % if is_admin(user):
           <li><a href="${ url('useradmin.views.list_users') }"><i class="fa fa-fw fa-group"></i> ${_('Manage Users')}</a></li>
         % endif
-      % endif
-      % if conf.IS_HUE_4.get():
-      <li><a href="javascript:void(0)" onclick="huePubSub.publish('set.hue.version', 4)"><i class="fa fa-fw fa-exchange"></i> ${_('Switch to Hue 4')}</a></li>
       % endif
       </ul>
     </li>
@@ -364,21 +338,21 @@ ${ hueIcons.symbols() }
       <li><a title="" data-rel="navigator-tooltip" href="#"><i class="fa fa-fw fa-user"></i>&nbsp;${user.username}</a></li>
     % endif
     % if 'help' in apps:
-    <li><a title="${_('Documentation')}" data-rel="navigator-tooltip" href="/help"><i class="fa fa-question-circle"></i></a></li>
+    <li><a title="${_('Documentation')}" data-rel="navigator-tooltip" data-bind="hueLink: '/help'" href="javascript: void(0);"><i class="fa fa-question-circle"></i></a></li>
     % endif
-    <li><a title="${_('Sign out')}" data-rel="navigator-tooltip" href="/accounts/logout/"><i class="fa fa-sign-out"></i></a></li>
+    <li><a title="${_('Sign out')}" data-rel="navigator-tooltip" data-bind="hueLink: '/accounts/logout/'" href="javascript: void(0);" ><i class="fa fa-sign-out"></i></a></li>
   </ul>
   % endif
 
   </div>
-    <a class="brand nav-tooltip pull-left" title="${_('About Hue')}" data-rel="navigator-tooltip" href="/about">
+    <a class="brand nav-tooltip pull-left" title="${_('About Hue')}" data-rel="navigator-tooltip" data-bind="hueLink: '/about'" href="javascript: void(0);">
       <svg style="margin-top: 2px; margin-left:8px;width: 60px;height: 16px;display: inline-block;">
         <use xlink:href="#hi-logo"></use>
       </svg>
     </a>
     % if user.is_authenticated() and section != 'login':
      <ul class="nav nav-pills pull-left">
-       <li><a title="${_('My documents')}" data-rel="navigator-tooltip" href="${ home_url }" style="padding-bottom:2px!important"><i class="fa fa-home" style="font-size: 19px"></i></a></li>
+       <li><a title="${_('My documents')}" data-rel="navigator-tooltip" data-bind="hueLink: '${ home_url }'" style="padding-bottom:2px!important"><i class="fa fa-home" style="font-size: 19px"></i></a></li>
        <%
          query_apps = count_apps(apps, ['beeswax', 'impala', 'rdbms', 'pig', 'jobsub', 'spark']);
        %>
@@ -504,7 +478,7 @@ ${ hueIcons.symbols() }
                <li><a href="${url('oozie:list_oozie_bundles')}"><img src="${ static('oozie/art/icon_oozie_bundle_48.png') }" class="app-icon" alt="${ _('Oozie bundles icon') }" /> ${_('Bundles')}</a></li>
              </ul>
            </li>
-           % if not user.has_hue_permission(action="disable_editor_access", app="oozie") or user.is_superuser:
+           % if not user.has_hue_permission(action="disable_editor_access", app="oozie") or is_admin(user):
            <% from oozie.conf import ENABLE_V2 %>
            % if not ENABLE_V2.get():
            <li class="dropdown-submenu">

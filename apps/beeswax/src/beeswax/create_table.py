@@ -16,10 +16,15 @@
 # limitations under the License.
 
 
+from __future__ import division
+from builtins import str
+from builtins import range
+from builtins import object
 import csv
 import gzip
 import json
 import logging
+import math
 import re
 
 from django.urls import reverse
@@ -32,6 +37,7 @@ from desktop.lib import django_mako, i18n
 from desktop.lib.django_util import render
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.django_forms import MultiForm
+from desktop.models import _get_apps
 from hadoop.fs import hadoopfs
 
 from beeswax.common import TERMINATORS
@@ -83,7 +89,9 @@ def create_table(request, database='default'):
   else:
     form.bind()
 
+  apps_list = _get_apps(request.user, '')
   return render("create_table_manually.mako", request, {
+    'apps': apps_list,
     'action': "#",
     'databases': databases,
     'table_form': form.table,
@@ -151,7 +159,7 @@ def import_wizard(request, database='default'):
       cancel_s3_column_def = request.POST.get('cancel_create')  # Step 3 -> 2
 
       # Exactly one of these should be True
-      if len(filter(None, (do_s2_auto_delim, do_s2_user_delim, do_s3_column_def, do_hive_create, cancel_s2_user_delim, cancel_s3_column_def))) != 1:
+      if len([_f for _f in (do_s2_auto_delim, do_s2_user_delim, do_s3_column_def, do_hive_create, cancel_s2_user_delim, cancel_s3_column_def) if _f]) != 1:
         raise PopupException(_('Invalid form submission'))
 
       if not do_s2_auto_delim:
@@ -181,7 +189,7 @@ def import_wizard(request, database='default'):
           elif load_data == 'EXTERNAL':
             if not request.fs.isdir(path):
               raise PopupException(_('Path location must refer to a directory if "Create External Table" is selected.'))
-        except (IOError, S3FileSystemException), e:
+        except (IOError, S3FileSystemException) as e:
           raise PopupException(_('Path location "%s" is invalid: %s') % (path, e))
 
         delim_is_auto = True
@@ -193,7 +201,9 @@ def import_wizard(request, database='default'):
                                                             (s2_delim_form.cleaned_data['delimiter'],))
 
       if do_s2_auto_delim or do_s2_user_delim or cancel_s3_column_def:
+        apps_list = _get_apps(request.user, '')
         return render('import_wizard_choose_delimiter.mako', request, {
+          'apps': apps_list,
           'action': reverse(app_name + ':import_wizard', kwargs={'database': database}),
           'delim_readable': DELIMITER_READABLE.get(s2_delim_form['delimiter'].data[0], s2_delim_form['delimiter'].data[1]),
           'initial': delim_is_auto,
@@ -221,9 +231,10 @@ def import_wizard(request, database='default'):
         try:
           fields_list_for_json = list(fields_list)
           if fields_list_for_json:
-            fields_list_for_json[0] = map(lambda a: re.sub('[^\w]', '', a), fields_list_for_json[0]) # Cleaning headers
-
+            fields_list_for_json[0] = [re.sub('[^\w]', '', a) for a in fields_list_for_json[0]] # Cleaning headers
+          apps_list = _get_apps(request.user, '')
           return render('import_wizard_define_columns.mako', request, {
+            'apps': apps_list,
             'action': reverse(app_name + ':import_wizard', kwargs={'database': database}),
             'file_form': s1_file_form,
             'delim_form': s2_delim_form,
@@ -234,7 +245,7 @@ def import_wizard(request, database='default'):
             'database': database,
             'databases': databases
           })
-        except Exception, e:
+        except Exception as e:
           raise PopupException(_("The selected delimiter is creating an un-even number of columns. Please make sure you don't have empty columns."), detail=e)
 
       #
@@ -263,7 +274,7 @@ def import_wizard(request, database='default'):
         )
         try:
           return _submit_create_and_load(request, proposed_query, table_name, path, load_data, database=database)
-        except QueryServerException, e:
+        except QueryServerException as e:
           raise PopupException(_('The table could not be created.'), detail=e.message)
   else:
     s1_file_form = CreateByImportFileForm()
@@ -316,7 +327,7 @@ def _delim_preview(fs, file_form, encoding, file_types, delimiters):
     file_obj = fs.open(path)
     delim, file_type, fields_list = _parse_fields(path, file_obj, encoding, file_types, delimiters)
     file_obj.close()
-  except IOError, ex:
+  except IOError as ex:
     msg = "Failed to open file '%s': %s" % (path, ex)
     LOG.exception(msg)
     raise PopupException(msg)
@@ -326,7 +337,7 @@ def _delim_preview(fs, file_form, encoding, file_types, delimiters):
   delimiter_0 = delim
   delimiter_1 = ''
   # If custom delimiter
-  if not filter(lambda val: val[0] == delim, TERMINATOR_CHOICES):
+  if not [val for val in TERMINATOR_CHOICES if val[0] == delim]:
     delimiter_0 = '__other__'
     delimiter_1 = delim
 
@@ -390,11 +401,11 @@ def _readfields(lines, delimiters):
     if min(len_list) == 1:
       return 0
 
-    avg_n_fields = sum(len_list) / n_lines
+    avg_n_fields = math.floor(sum(len_list) / n_lines)
     sq_of_exp = avg_n_fields * avg_n_fields
 
     len_list_sq = [l * l for l in len_list]
-    exp_of_sq = sum(len_list_sq) / n_lines
+    exp_of_sq = math.floor(sum(len_list_sq) / n_lines)
     var = exp_of_sq - sq_of_exp
     # Favour more fields
     return (1000.0 / (var + 1)) + avg_n_fields
@@ -433,7 +444,7 @@ def _peek_file(fs, file_form):
     file_head = file_obj.read(IMPORT_PEEK_SIZE)
     file_obj.close()
     return (path, file_head)
-  except IOError, ex:
+  except IOError as ex:
     msg = _("Failed to open file '%(path)s': %(error)s.") % {'path': path, 'error': ex}
     LOG.exception(msg)
     raise PopupException(msg)
@@ -452,7 +463,7 @@ class GzipFileReader(object):
     except IOError:
       return None
     try:
-      return unicode(data, encoding, errors='replace').splitlines()[:IMPORT_PEEK_NLINES]
+      return str(data, encoding, errors='replace').splitlines()[:IMPORT_PEEK_NLINES]
     except UnicodeError:
       return None
 
@@ -468,7 +479,7 @@ class TextFileReader(object):
     """readlines(fileobj, encoding) -> list of lines"""
     try:
       data = fileobj.read(IMPORT_PEEK_SIZE)
-      return unicode(data, encoding, errors='replace').splitlines()[:IMPORT_PEEK_NLINES]
+      return str(data, encoding, errors='replace').splitlines()[:IMPORT_PEEK_NLINES]
     except UnicodeError:
       return None
 
@@ -498,7 +509,7 @@ def load_after_create(request, database):
 
   try:
     return execute_directly(request, query, on_success_url=on_success_url)
-  except Exception, e:
+  except Exception as e:
     message = 'The table data could not be loaded'
     LOG.exception(message)
     detail = e.message if hasattr(e, 'message') and e.message else None

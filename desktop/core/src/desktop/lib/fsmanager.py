@@ -17,74 +17,133 @@
 
 from __future__ import absolute_import
 
-import sys
+from functools import partial
 import logging
 
-import aws
+import aws.client
 import azure.client
-from azure.conf import is_adls_enabled
-from aws.conf import is_enabled as is_s3_enabled
+import desktop.lib.fs.gc.client
 
-from desktop.lib.fs import ProxyFS
-from hadoop import cluster
+from aws.conf import is_enabled as is_s3_enabled, has_s3_access
+from azure.conf import is_adls_enabled, is_abfs_enabled, has_adls_access, has_abfs_access
 
-FS_CACHE = {}
 
-DEFAULT_SCHEMA = 'hdfs'
+from desktop.conf import is_gs_enabled, has_gs_access, DEFAULT_USER
 
-FS_GETTERS = {
-  'hdfs': cluster.get_hdfs,
-}
-if is_s3_enabled():
-  FS_GETTERS['s3a'] = aws.get_s3fs
-if is_adls_enabled():
-  FS_GETTERS['adl'] = azure.client.get_client
+from desktop.lib.fs.proxyfs import ProxyFS
+from desktop.lib.python_util import current_ms_from_utc
+from desktop.lib.idbroker import conf as conf_idbroker
+
+from hadoop.cluster import get_hdfs, _make_filesystem
+from hadoop.conf import has_hdfs_enabled
+
+
+SUPPORTED_FS = ['hdfs', 's3a', 'adl', 'abfs', 'gs']
+CLIENT_CACHE = None
+_DEFAULT_USER = DEFAULT_USER.get()
+
+# FIXME: Should we check hue principal for the default user?
+def _get_cache_key(fs, identifier, user=_DEFAULT_USER): # FIXME: Caching via username has issues when users get deleted. Need to switch to userid, but bigger change
+  return fs + ':' + identifier + ':' + user
+
+def clear_cache():
+  global CLIENT_CACHE
+  CLIENT_CACHE = None
+
+def has_access(fs=None, user=None):
+  if fs == 'hdfs':
+    return True
+  elif fs == 'adl':
+    return has_adls_access(user)
+  elif fs == 's3a':
+    return has_s3_access(user)
+  elif fs == 'abfs':
+    return has_abfs_access(user)
+  elif fs == 'gs':
+    return has_gs_access(user)
+
+
+def is_enabled(fs):
+  if fs == 'hdfs':
+    return has_hdfs_enabled()
+  elif fs == 'adl':
+    return is_adls_enabled()
+  elif fs == 's3a':
+    return is_s3_enabled()
+  elif fs == 'abfs':
+    return is_abfs_enabled()
+  elif fs == 'gs':
+    return is_gs_enabled()
+
+
+def is_enabled_and_has_access(fs=None, user=None):
+  return is_enabled(fs) and has_access(fs, user)
+
+
+def _make_client(fs, name, user):
+  if fs == 'hdfs':
+    return _make_filesystem(name)
+  elif fs == 's3a':
+    return aws.client._make_client(name, user)
+  elif fs == 'adl':
+    return azure.client._make_adls_client(name, user)
+  elif fs == 'abfs':
+    return azure.client._make_abfs_client(name, user)
+  elif fs == 'gs':
+    return desktop.lib.fs.gc.client._make_client(name, user)
+  return None
+
+
+def _get_client(fs=None):
+  if fs == 'hdfs':
+    return get_hdfs
+  elif fs in ['s3a', 'adl', 'abfs', 'gs']:
+    return partial(_get_client_cached, fs)
+  return None
+
+
+def _get_client_cached(fs, name, user):
+  global CLIENT_CACHE
+  if CLIENT_CACHE is None:
+    CLIENT_CACHE = {}
+  cache_key = _get_cache_key(fs, name, user) if conf_idbroker.is_idbroker_enabled(fs) else _get_cache_key(fs, name) # We don't want to cache by username when IDBroker not enabled
+  client = CLIENT_CACHE.get(cache_key)
+
+  if client and (client.expiration is None or client.expiration > int(current_ms_from_utc())): # expiration from IDBroker returns java timestamp in MS
+    return client
+  else:
+    client = _make_client(fs, name, user)
+    CLIENT_CACHE[cache_key] = client
+    return client
+
+
+def get_client(name='default', fs=None, user=_DEFAULT_USER):
+  fs_getter = _get_client(fs)
+  if fs_getter:
+    return fs_getter(name, user)
+  else:
+    logging.warn('Can not get filesystem called "%s" for "%s" schema' % (name, fs))
+    return None
+
+
+def get_default_schema():
+  fs = [fs for fs in SUPPORTED_FS if is_enabled(fs)]
+  return fs[0] if fs else None
+
 
 def get_filesystem(name='default'):
   """
   Return the filesystem with the given name.
   If the filesystem is not defined, raises KeyError
   """
-  if name not in FS_CACHE:
-    FS_CACHE[name] = _make_fs(name)
-  return FS_CACHE[name]
+  # Instead of taking a list of cached client, ProxyFS will now resolve the client based on scheme
+  # The method to resolve clients returns a cached results if possible.
+  pdict = {}
+  for fs in SUPPORTED_FS:
+    if is_enabled(fs):
+      pdict[fs] = _get_client(fs)
+  return ProxyFS(pdict, get_default_schema(), name)
 
 
-def _make_fs(name):
-  fs_dict = {}
-  for schema, getter in FS_GETTERS.iteritems():
-    try:
-      if getter is not None:
-        fs = getter(name)
-        fs_dict[schema] = fs
-      else:
-        raise Exception('Filesystem not configured for %s' % schema)
-    except KeyError:
-      if DEFAULT_SCHEMA == schema:
-        logging.error('Can not get filesystem called "%s" for default schema "%s"' % (name, schema))
-        exc_class, exc, tb = sys.exc_info()
-        raise exc_class, exc, tb
-      else:
-        logging.warn('Can not get filesystem called "%s" for "%s" schema' % (name, schema))
-    except Exception, e:
-      logging.error('Failed to get filesystem called "%s" for "%s" schema: %s' % (name, schema, e))
-  return ProxyFS(fs_dict, DEFAULT_SCHEMA)
-
-
-def clear_cache():
-  """
-  Clears internal cache.  Returns
-  something that can be given back to restore_cache.
-  """
-  global FS_CACHE
-  old = FS_CACHE
-  FS_CACHE = {}
-  return old
-
-
-def restore_cache(old_cache):
-  """
-  Restores cache from the result of a previous clear_cache call.
-  """
-  global FS_CACHE
-  FS_CACHE = old_cache
+def get_filesystems(user):
+  return [fs for fs in SUPPORTED_FS if is_enabled(fs) and has_access(fs, user)]

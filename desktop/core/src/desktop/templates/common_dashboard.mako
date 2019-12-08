@@ -32,8 +32,6 @@
 <%def name="import_layout(with_deferred=False)">
   <link rel="stylesheet" href="${ static('dashboard/css/common_dashboard.css') }">
   <script src="${ static('desktop/js/ko.common-dashboard.js') }" type="text/javascript" charset="utf-8"></script>
-  <script src="${ static('desktop/ext/js/jquery/plugins/jquery-ui-1.10.4.custom.min.js') }" type="text/javascript" charset="utf-8"></script>
-  <script src="${ static('desktop/ext/js/knockout-sortable.min.js') }" type="text/javascript" charset="utf-8"></script>
   <script src="${ static('desktop/js/ko.droppable.fix.js') }" type="text/javascript" charset="utf-8"></script>
   <script src="${ static('desktop/ext/js/clipboard.min.js') }"></script>
 
@@ -81,7 +79,7 @@
 
   % if not USE_NEW_ADD_METHOD.get():
   <!-- ko if: columns().length > 0 && isToolbarVisible -->
-  <div data-bind="dockable: { scrollable: '.page-content', jumpCorrection: 50, topSnap: '${ conf.CUSTOM.BANNER_TOP_HTML.get() and "128px" or "100px" }', triggerAdjust: 50 }">
+  <div>
     %if hasattr(caller, "results"):
     <div style="float: left; margin-left: 20px">
       <div class="toolbar-label">${_('DISPLAY')}</div>
@@ -108,15 +106,7 @@
 </%def>
 
 <%def name="layout_skeleton(suffix='')">
-  <div class="initial-hint empty-dashboard" data-bind="fadeVisible: !isEditing() && columns().length == 0">
-    <div class="initial-hint-text">${ _('Click on the pencil to get started with your dashboard!') }</div>
-    <img src="${ static('desktop/art/hint_arrow.svg') }" alt="${ _('Hint arrow') }" />
-  </div>
-
-  <div class="initial-hint empty-dashboard-editing" data-bind="fadeVisible: isEditing() && columns().length == 0 && previewColumns() == ''">
-    <div class="initial-hint-text">${ _('Pick an index and Click on a layout to start your dashboard!') }</div>
-    <img src="${ static('desktop/art/hint_arrow.svg') }" alt="${ _('Hint arrow') }" class="flip-horizontal" />
-  </div>
+  <!-- ko hueSpinner: { spin: isEditing() && columns().length == 0 && previewColumns() == '', center: true, size: 'xlarge' } --><!-- /ko -->
 
   % if USE_NEW_ADD_METHOD.get():
   <!-- ko if: $root.isGridster -->
@@ -180,7 +170,7 @@
     </div>
   </div>
 
-<div data-bind="css: {'dashboard': true, 'with-top-margin': isEditing()}">
+<div class="dashboard dashboard-flex" data-bind="css: {'with-top-margin': isEditing()}">
   <div class="container-fluid">
   <!-- ko if: $root.isGridster -->
     <div class="gridster" data-bind="click: function(){ showPlusButtonHint(false); }">
@@ -232,7 +222,7 @@
                 <select data-bind="selectize: fieldOperations, optionsText: 'label', optionsValue: 'value', value: fieldOperation" class="input-small"></select>
                 <select data-bind="selectize: $root.collection.template.filteredModalFields().sort(function (l, r) { return l.name() > r.name() ? 1 : -1 }), value: fieldName, optionsValue: 'name', optionsText: 'name', optionsCaption: '${ _ko('Field...') }'" class="hit-options input-small" style="margin-bottom: 0"></select>
                 <!-- ko if: fieldName -->
-                <a class="inactive-action context-popover-icon" href="javascript:void(0);" data-bind="sqlContextPopover: { sourceType: 'solr', path: 'default.' + $root.collection.name() + '.' + fieldName()  }">
+                <a class="inactive-action context-popover-icon" href="javascript:void(0);" data-bind="sqlContextPopover: { sourceType: 'solr', namespace: $root.collection.activeNamespace(), compute: $root.collection.activeCompute(), path: 'default.' + $root.collection.name() + '.' + fieldName()  }">
                   <i class="fa fa-fw fa-info" title="${_('Show Details')}"/>
                 </a>
                 <!-- /ko -->
@@ -249,55 +239,55 @@
                   <div class="dropdown inline-block">
                     <a class="dropdown-toggle" href="javascript: void(0)" data-toggle="dropdown" title="${ _('Change widget visualization') }">
                       <!-- ko switch: fieldViz -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.COUNTER --><i class="fa fa-superscript fa-fw"></i> ${_('Counter')}<!-- /ko -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.TEXTSELECT --><i class="fa fa-sort-amount-asc fa-fw"></i> ${_('Text select')}<!-- /ko -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.BARCHART --><i class="hcha hcha-bar-chart fa-fw"></i> ${_('Bars')}<!-- /ko -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.PIECHART --><i class="hcha hcha-pie-chart fa-fw"></i> ${_('Pie')}<!-- /ko -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.TIMELINECHART --><i class="fa fa-fw fa-line-chart"></i> ${_('Timeline')}<!-- /ko -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.GRADIENTMAP --><i class="hcha fa-fw hcha-map-chart chart-icon"></i> ${_('Gradient Map')}<!-- /ko -->
-                        <!-- ko case: ko.HUE_CHARTS.TYPES.MAP --><i class="fa fa-fw fa-map-marker chart-icon"></i> ${_('Marker Map')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.COUNTER --><i class="fa fa-superscript fa-fw"></i> ${_('Counter')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.TEXTSELECT --><i class="fa fa-sort-amount-asc fa-fw"></i> ${_('Text select')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.BARCHART --><i class="hcha hcha-bar-chart fa-fw"></i> ${_('Bars')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.PIECHART --><i class="hcha hcha-pie-chart fa-fw"></i> ${_('Pie')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.TIMELINECHART --><i class="fa fa-fw fa-line-chart"></i> ${_('Timeline')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.GRADIENTMAP --><i class="hcha fa-fw hcha-map-chart chart-icon"></i> ${_('Gradient Map')}<!-- /ko -->
+                        <!-- ko case: window.HUE_CHARTS.TYPES.MAP --><i class="fa fa-fw fa-map-marker chart-icon"></i> ${_('Marker Map')}<!-- /ko -->
                       <!-- /ko -->
                     </a>
                     <ul class="dropdown-menu">
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.COUNTER); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.COUNTER); }">
                           <i class="fa fa-superscript fa-fw"></i> ${_('Counter')}
                         </a>
                       </li>
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.TEXTSELECT); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.TEXTSELECT); }">
                           <i class="fa fa-sort-amount-asc fa-fw"></i> ${_('Text select')}
                         </a>
                       </li>
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.BARCHART); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.BARCHART); }">
                           <i class="hcha hcha-bar-chart fa-fw"></i> ${_('Bars')}
                         </a>
                       </li>
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.PIECHART); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.PIECHART); }">
                           <i class="hcha hcha-pie-chart fa-fw"></i> ${_('Pie')}
                         </a>
                       </li>
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.TIMELINECHART); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.TIMELINECHART); }">
                           <i class="fa fa-fw fa-line-chart"></i> ${_('Timeline')}
                         </a>
                       </li>
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.GRADIENTMAP); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.GRADIENTMAP); }">
                           <i class="hcha fa-fw hcha-map-chart chart-icon"></i> ${_('Gradient Map')}
                         </a>
                       </li>
                       <li>
                         <a href="javascript:void(0)"
-                           data-bind="click: function(){ fieldViz(ko.HUE_CHARTS.TYPES.MAP); }">
+                           data-bind="click: function(){ fieldViz(window.HUE_CHARTS.TYPES.MAP); }">
                           <i class="fa fa-fw fa-map-marker chart-icon"></i> ${_('Marker Map')}
                         </a>
                       </li>
@@ -396,7 +386,23 @@
 </script>
 
 <script type="text/html" id="widget-template${ suffix }">
-  <div data-bind="attr: {'id': 'wdg_'+ id(),}, css: klass, draggable: { data: $data, isEnabled: $root.isGridster(), options: getDraggableOptions({ data: $data, parent: $parent }) }, droppable: { data: function() { $root.collection.dropOnWidget(id()) }, options:{ greedy:true, drop: function(event, ui) { huePubSub.publish('dashboard.drop.on.page', { event: event, ui: ui } } }}">
+  <div data-bind="attr: { 'id': 'wdg_'+ id() }, css: klass,
+      draggable: {
+         data: $data,
+         isEnabled: $root.isGridster(),
+         options: getDraggableOptions({ data: $data, parent: $parent })
+      },
+      droppable: {
+        data: function() {
+          $root.collection.dropOnWidget(id())
+        },
+        options: {
+          greedy:true,
+          drop: function(event, ui) {
+            huePubSub.publish('dashboard.drop.on.page', { event: event, ui: ui })
+          }
+        }
+      }">
     <h2 class="card-heading simple" data-bind="attr: { title: $root.isGridster() ? '${ _ko('Drag to move') }' : '' }">
       <!-- ko ifnot: $root.isGridster -->
       <span data-bind="visible: $root.isEditing">
@@ -418,7 +424,7 @@
         <a href="javascript:void(0)" class="remove-widget" data-bind="click: $root.removeWidget"><i class="fa fa-times"></i></a>
       </div>
     </h2>
-    <div class="card-body" style="padding: 5px;" data-bind="delayedOverflow">
+    <div class="card-body" style="padding: 5px;">
       <div data-bind="template: { name: function() { return widgetType(); }}" class="widget-main-section"></div>
       <div class="clearfix"></div>
     </div>

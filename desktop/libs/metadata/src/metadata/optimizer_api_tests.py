@@ -15,15 +15,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import zip
+from builtins import object
 import logging
 
 from nose.tools import assert_equal, assert_true, assert_false
 
-from django.contrib.auth.models import User
-
 from desktop.auth.backend import rewrite_user
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.test_utils import add_to_group, grant_access
+from useradmin.models import User
 
 from metadata.optimizer_api import _convert_queries
 
@@ -32,6 +33,7 @@ LOG = logging.getLogger(__name__)
 
 
 class TestOptimizerApi(object):
+  integration = True
 
   @classmethod
   def setup_class(cls):
@@ -66,7 +68,7 @@ class TestOptimizerApi(object):
       ), (
       '15512649139552885687:2109508391260502438',
       0,
-      'SELECT   c.id,   c.name,   c.email_preferences.categories.surveys FROM customers c',
+      '''SELECT   c.id,   c.name,   c.email_preferences.categories.surveys FROM customers c;    SELECT   customers.id,   customers.name FROM customers WHERE customers.addresses['shipping'].zip_code = '76710';    SELECT   c.id AS customer_id,   c.name AS customer_name,   ords.order_id AS order_id,   SUM(order_items.price * order_items.qty) AS total_amount FROM   customers c LATERAL VIEW EXPLODE(c.orders) o AS ords LATERAL VIEW EXPLODE(ords.items) i AS order_items GROUP BY c.id, c.name, ords.order_id;''',
       'default'
       )
     ]

@@ -25,7 +25,6 @@ from liboozie.oozie_api import get_oozie
 from jobbrowser.apis.base_api import Api, MockDjangoRequest
 from jobbrowser.apis.workflow_api import _manage_oozie_job, _filter_oozie_jobs
 from jobbrowser.apis.schedule_api import MockGet
-from oozie.views.dashboard import list_oozie_bundle
 
 
 LOG = logging.getLogger(__name__)
@@ -33,8 +32,8 @@ LOG = logging.getLogger(__name__)
 
 try:
   from oozie.conf import OOZIE_JOBS_COUNT
-  from oozie.views.dashboard import get_oozie_job_log, massaged_oozie_jobs_for_json
-except Exception, e:
+  from oozie.views.dashboard import get_oozie_job_log, massaged_oozie_jobs_for_json, list_oozie_bundle
+except Exception as e:
   LOG.exception('Some application are not enabled: %s' % e)
 
 
@@ -128,4 +127,3 @@ class BundleApi(Api):
       return 'SUCCEEDED'
     else:
       return 'FAILED' # DONEWITHERROR, KILLED, FAILED
-

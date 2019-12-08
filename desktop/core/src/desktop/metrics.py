@@ -16,12 +16,15 @@
 
 from __future__ import absolute_import
 
+from future import standard_library
+standard_library.install_aliases()
+from builtins import range
 import gc
 import logging
 import multiprocessing
 import threading
 
-from django.contrib.auth.models import User
+from useradmin.models import User
 
 from desktop.lib.metrics import global_registry
 
@@ -65,7 +68,7 @@ global_registry().gauge_callback(
 
 # ------------------------------------------------------------------------------
 
-for i in xrange(3):
+for i in range(3):
   global_registry().gauge_callback(
       name='python.gc.generation.%s' % i,
       callback=lambda: gc.get_count()[i],

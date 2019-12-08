@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import logging
 import posixpath
 import re
@@ -28,27 +29,41 @@ from desktop.lib.exceptions_renderable import PopupException
 LOG = logging.getLogger(__name__)
 
 
-def get_api(user, interface):
+def get_api(user, interface, cluster=None):
   from jobbrowser.apis.bundle_api import BundleApi
   from jobbrowser.apis.data_eng_api import DataEngClusterApi, DataEngJobApi
+  from jobbrowser.apis.clusters import ClusterApi
+  from jobbrowser.apis.data_warehouse import DataWarehouseClusterApi
   from jobbrowser.apis.livy_api import LivySessionsApi, LivyJobApi
   from jobbrowser.apis.job_api import JobApi
   from jobbrowser.apis.query_api import QueryApi
+  from jobbrowser.apis.beeswax_query_api import BeeswaxQueryApi
   from jobbrowser.apis.schedule_api import ScheduleApi
   from jobbrowser.apis.workflow_api import WorkflowApi
 
   if interface == 'jobs':
     return JobApi(user)
-  elif interface == 'queries':
-    return QueryApi(user)
+  elif interface == 'queries-impala':
+    return QueryApi(user, cluster=cluster)
+  elif interface == 'queries-hive':
+    return BeeswaxQueryApi(user, cluster=cluster)
   elif interface == 'workflows':
     return WorkflowApi(user)
   elif interface == 'schedules':
     return ScheduleApi(user)
   elif interface == 'bundles':
     return BundleApi(user)
+  elif interface == 'celery-beat':
+    from jobbrowser.apis.beat_api import BeatApi
+    return BeatApi(user)
+  elif interface == 'engines':
+    return ClusterApi(user)
   elif interface == 'dataeng-clusters':
     return DataEngClusterApi(user)
+  elif interface == 'dataware-clusters':
+    return DataWarehouseClusterApi(user)
+  elif interface == 'dataware2-clusters':
+    return DataWarehouseClusterApi(user, version=2)
   elif interface == 'dataeng-jobs':
     return DataEngJobApi(user)
   elif interface == 'livy-sessions':
@@ -69,7 +84,7 @@ class Api(object):
 
   def apps(self, filters): return {'apps': [], 'total': 0}
 
-  def app(self, appid): return {} # Also contains progress (0-100) and status [RUNNING, FINISHED, PAUSED]
+  def app(self, appid): return {} # Also contains progress (0-100) and status [RUNNING, SUCCEEDED, PAUSED, FAILED]
 
   def action(self, app_ids, operation): return {}
 
@@ -81,7 +96,7 @@ class Api(object):
     self.request = request
 
 
-class MockDjangoRequest():
+class MockDjangoRequest(object):
 
   def __init__(self, user, get=None, post=None, method='POST'):
     self.user = user
@@ -95,7 +110,7 @@ class MockDjangoRequest():
 def _extract_query_params(filters):
   filter_params = {}
 
-  for name, value in filters.iteritems():
+  for name, value in filters.items():
     if name == 'text':
       filter_params['text'] = value
       user_filter = re.search('((user):([^ ]+))', value)

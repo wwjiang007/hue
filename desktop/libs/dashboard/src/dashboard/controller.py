@@ -16,11 +16,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import str
+from builtins import object
 import logging
 
 from django.db.models import Q
 
-from desktop.conf import USE_NEW_EDITOR
+from desktop.auth.backend import is_admin
+from desktop.conf import USE_NEW_EDITOR, ENABLE_ORGANIZATIONS
 from desktop.models import Document2, Document, SAMPLE_USER_OWNERS
 
 from dashboard.models import Collection2
@@ -43,20 +46,21 @@ class DashboardController(object):
   def get_shared_search_collections(self):
     # Those are the ones appearing in the menu
     if USE_NEW_EDITOR.get():
-      return Document2.objects.filter(Q(owner=self.user) | Q(owner__username__in=SAMPLE_USER_OWNERS), type='search-dashboard').order_by('-id')
+      qattr = {'owner__email__in' if ENABLE_ORGANIZATIONS.get() else 'owner__username__in': SAMPLE_USER_OWNERS}
+      return Document2.objects.filter(Q(owner=self.user) | Q(**qattr), type='search-dashboard').order_by('-id')
     else:
       docs = Document.objects.filter(Q(owner=self.user) | Q(owner__username__in=SAMPLE_USER_OWNERS), extra='search-dashboard')
       return [d.content_object for d in docs.order_by('-id')]
 
   def get_owner_search_collections(self):
     if USE_NEW_EDITOR.get():
-      if self.user.is_superuser:
+      if is_admin(self.user):
         docs = Document2.objects.filter(type='search-dashboard')
       else:
         docs = Document2.objects.filter(type='search-dashboard', owner=self.user)
       return docs
     else:
-      if self.user.is_superuser:
+      if is_admin(self.user):
         docs = Document.objects.filter(extra='search-dashboard')
       else:
         docs = Document.objects.filter(extra='search-dashboard', owner=self.user)
@@ -81,9 +85,9 @@ class DashboardController(object):
           doc.delete()
           doc2.delete()
       result['status'] = 0
-    except Exception, e:
+    except Exception as e:
       LOG.warn('Error deleting collection: %s' % e)
-      result['message'] = unicode(str(e), "utf8")
+      result['message'] = str(e)
 
     return result
 
@@ -106,9 +110,9 @@ class DashboardController(object):
           doc2.update_data({'collection': collection.data['collection']})
           doc2.save()
       result['status'] = 0
-    except Exception, e:
+    except Exception as e:
       LOG.exception('Error copying collection')
-      result['message'] = unicode(str(e), "utf8")
+      result['message'] = str(e)
 
     return result
 

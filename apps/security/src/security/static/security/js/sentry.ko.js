@@ -874,7 +874,7 @@ var SentryViewModel = (function () {
       self.availableActions = function (authorizables) {
         var actions = ['SELECT', 'INSERT', 'ALL'];
         var databaseActions = ['CREATE'];
-        var tableActions = ['REFRESH', 'ALTER', 'DROP'];
+        var tableActions = ['REFRESH']; // 'ALTER', 'DROP'
         if (authorizables.length < 2) { // server and database
           actions = actions.concat(databaseActions).concat(tableActions);
         }
@@ -1143,7 +1143,7 @@ var SentryViewModel = (function () {
         'timestamp': privilege.timestamp,
         'grantorPrincipal': privilege.grantorPrincipal,
         'grantOption': privilege.grantOption,
-        'id': UUID()
+        'id': hueUtils.UUID()
       });
       return _privilege;
     }
@@ -1357,6 +1357,7 @@ var SentryViewModel = (function () {
 
     self.fetchUsers = function () {
       var data = {
+        'count': 2000,
         'include_myself': true,
         'extend_user': true
       };

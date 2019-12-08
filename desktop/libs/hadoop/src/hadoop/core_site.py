@@ -15,12 +15,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
 import errno
 import logging
-import os.path
+import sys
 
-import conf
-import confparse
+from hadoop import conf
+from hadoop import confparse
+
+from desktop.lib.paths import get_config_root_hadoop
+
+if sys.version_info[0] > 2:
+  open_file = open
+else:
+  open_file = file
 
 __all = ['get_conf', 'get_trash_interval', 'get_s3a_access_key', 'get_s3a_secret_key']
 
@@ -32,12 +40,18 @@ _CORE_SITE_DICT = None                  # A dictionary of name/value config opti
 _CNF_TRASH_INTERVAL = 'fs.trash.interval'
 _CNF_S3A_ACCESS_KEY = 'fs.s3a.access.key'
 _CNF_S3A_SECRET_KEY = 'fs.s3a.secret.key'
+_CNF_S3A_SESSION_TOKEN = 'fs.s3a.session.token'
 
 _CNF_ADLS_CLIENT_ID = 'dfs.adls.oauth2.client.id'
 _CNF_ADLS_AUTHENTICATION_CODE = 'dfs.adls.oauth2.credential'
-_CNF_ADLS_SECRET_KEY = 'dfs.adls.oauth2.credential'
 _CNF_ADLS_REFRESH_URL = 'dfs.adls.oauth2.refresh.url'
 _CNF_ADLS_GRANT_TYPE = 'dfs.adls.oauth2.access.token.provider.type'
+
+_CNF_AZURE_CLIENT_ID = 'fs.azure.account.oauth2.client.id'
+_CNF_AZURE_CLIENT_SECRET = 'fs.azure.account.oauth2.client.secret'
+_CNF_AZURE_CLIENT_ENDPOINT = 'fs.azure.account.oauth2.client.endpoint'
+
+_CNF_SECURITY = 'hadoop.security.authentication'
 
 def reset():
   """Reset the cached conf"""
@@ -59,19 +73,15 @@ def _parse_core_site():
   global _CORE_SITE_DICT
   global _CORE_SITE_PATH
 
-  for indentifier in conf.HDFS_CLUSTERS.get():
-    try:
-      _CORE_SITE_PATH = os.path.join(conf.HDFS_CLUSTERS[indentifier].HADOOP_CONF_DIR.get(), 'core-site.xml') # Will KeyError and be empty as HADOOP_CONF_DIR does not exist anymore
-      data = file(_CORE_SITE_PATH, 'r').read()
-      break
-    except KeyError:
-      data = ""
-    except IOError, err:
-      if err.errno != errno.ENOENT:
-        LOG.error('Cannot read from "%s": %s' % (_CORE_SITE_PATH, err))
-        return
-      # Keep going and make an empty ConfParse
-      data = ""
+  try:
+    _CORE_SITE_PATH = get_config_root_hadoop('core-site.xml')
+    data = open_file(_CORE_SITE_PATH, 'r').read()
+  except IOError as err:
+    if err.errno != errno.ENOENT:
+      LOG.error('Cannot read from "%s": %s' % (_CORE_SITE_PATH, err))
+      return
+    # Keep going and make an empty ConfParse
+    data = ""
 
   _CORE_SITE_DICT = confparse.ConfParse(data)
 
@@ -82,7 +92,7 @@ def get_trash_interval():
 
   Also indicates whether trash is enabled or not.
   """
-  return get_conf().get(_CNF_TRASH_INTERVAL)
+  return get_conf().get(_CNF_TRASH_INTERVAL, 0)
 
 def get_s3a_access_key():
   """
@@ -97,6 +107,9 @@ def get_s3a_secret_key():
   https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html
   """
   return get_conf().get(_CNF_S3A_SECRET_KEY)
+
+def get_s3a_session_token():
+  return get_conf().get(_CNF_S3A_SESSION_TOKEN)
 
 def get_adls_client_id():
   """
@@ -125,3 +138,15 @@ def get_adls_grant_type():
   https://hadoop.apache.org/docs/stable/hadoop-aws/tools/hadoop-aws/index.html
   """
   return get_conf().get(_CNF_ADLS_GRANT_TYPE)
+
+def is_kerberos_enabled():
+  return get_conf().get(_CNF_SECURITY) == 'kerberos'
+
+def get_azure_client_id():
+  return get_conf().get(_CNF_AZURE_CLIENT_ID)
+
+def get_azure_client_secret():
+  return get_conf().get(_CNF_AZURE_CLIENT_SECRET)
+
+def get_azure_client_endpoint():
+  return get_conf().get(_CNF_AZURE_CLIENT_ENDPOINT)

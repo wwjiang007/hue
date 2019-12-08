@@ -15,6 +15,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import range
+from builtins import object
 import json
 import logging
 import re
@@ -27,7 +29,7 @@ from desktop.lib import thrift_util
 from desktop.lib.exceptions_renderable import PopupException
 
 from hbase import conf
-from hbase.hbase_site import get_server_principal, get_server_authentication, is_using_thrift_ssl, is_using_thrift_http
+from hbase.hbase_site import get_server_principal, get_server_authentication, is_using_thrift_ssl, is_using_thrift_http, get_thrift_transport
 from hbase.server.hbase_lib import get_thrift_type, get_client_type
 
 
@@ -46,7 +48,7 @@ class HbaseApi(object):
         return getattr(self, action)(*args)
       cluster = args[0]
       return self.queryCluster(action, cluster, *args[1:])
-    except Exception, e:
+    except Exception as e:
       if 'Could not connect to' in e.message:
         raise PopupException(_("HBase Thrift 1 server cannot be contacted: %s") % e.message)
       else:
@@ -99,7 +101,7 @@ class HbaseApi(object):
         kerberos_principal=_security['kerberos_principal_short_name'],
         use_sasl=_security['use_sasl'],
         timeout_seconds=30,
-        transport=conf.THRIFT_TRANSPORT.get(),
+        transport=get_thrift_transport(),
         transport_mode='http' if is_using_thrift_http() else 'socket',
         http_url=('https://' if is_using_thrift_ssl() else 'http://') + target['host'] + ':' + str(target['port']),
         validate=conf.SSL_CERT_CA_VERIFY.get()
@@ -158,7 +160,7 @@ class HbaseApi(object):
       scan = get_thrift_type('TScan')(startRow=query, stopRow=None, timestamp=None, columns=[], caching=None, filterString="PrefixFilter('" + query + "') AND ColumnPaginationFilter(1,0)", batchSize=None)
       scanner = client.scannerOpenWithScan(tableName, scan, None, doas=self.user.username)
       return [result.row for result in client.scannerGetList(scanner, numRows, doas=self.user.username)]
-    except Exception, e:
+    except Exception as e:
       LOG.error('Autocomplete error: %s' % smart_str(e))
       return []
 
@@ -201,7 +203,7 @@ class HbaseApi(object):
     client = self.connectCluster(cluster)
     mutations = []
     Mutation = get_thrift_type('Mutation')
-    for column in data.keys():
+    for column in list(data.keys()):
       value = smart_str(data[column]) if data[column] is not None else None
       mutations.append(Mutation(column=smart_str(column), value=value)) # must use str for API, does thrift coerce by itself?
     return client.mutateRow(tableName, smart_str(row), mutations, None, doas=self.user.username)
@@ -218,6 +220,8 @@ class HbaseApi(object):
     client = self.connectCluster(cluster)
     aggregate_data = []
     limit = conf.TRUNCATE_LIMIT.get()
+    if not isinstance(queries, list):
+      queries=json.loads(queries)
     queries = sorted(queries, key=lambda query: query['scan_length']) #sort by scan length
     for query in queries:
       scan_length = int(query['scan_length'])
@@ -241,7 +245,7 @@ class HbaseApi(object):
     data = data.read()
     dialect = csv.Sniffer().sniff(data)
     reader = csv.reader(data.splitlines(), delimiter=dialect.delimiter)
-    columns = reader.next()
+    columns = next(reader)
     batches = []
     for row in reader:
       row_key = row[0]

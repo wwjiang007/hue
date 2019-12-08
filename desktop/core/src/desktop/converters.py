@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import json
 import logging
 import time
@@ -22,7 +23,6 @@ import time
 from django.db import transaction
 from django.utils.translation import ugettext as _
 
-from desktop.conf import IS_HUE_4
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.models import Document, DocumentPermission, DocumentTag, Document2, Directory, Document2Permission
 from notebook.api import _historify
@@ -75,7 +75,7 @@ class DocumentConverter(object):
 
           # save() updates the last_modified to current time. Resetting it using update()
           Document2.objects.filter(id=doc.id).update(last_modified=doc_last_modified)
-      except Exception, e:
+      except Exception as e:
         LOG.exception("Failed to set is_trashed field with exception: %s" % e)
 
 
@@ -100,7 +100,7 @@ class DocumentConverter(object):
             )
 
             self.imported_doc_count += 1
-        except Exception, e:
+        except Exception as e:
           self.failed_doc_ids.append(doc.id)
           LOG.exception('Failed to import SavedQuery document id: %d' % doc.id)
     except ImportError:
@@ -136,10 +136,10 @@ class DocumentConverter(object):
 
               doc.add_tag(self.imported_tag)
               doc.save()
-        except Exception, e:
+        except Exception as e:
           self.failed_doc_ids.append(doc.id)
           LOG.exception('Failed to import history document id: %d' % doc.id)
-    except ImportError, e:
+    except ImportError as e:
       LOG.warn('Cannot convert history documents: beeswax app is not installed')
 
 
@@ -155,13 +155,12 @@ class DocumentConverter(object):
             node = doc.content_object.start.get_child('to')
             notebook = None
 
-            if IS_HUE_4.get():
-              if node.node_type == 'mapreduce':
-                notebook = import_saved_mapreduce_job(doc.content_object)
-              elif node.node_type == 'shell':
-                notebook = import_saved_shell_job(doc.content_object)
-              elif node.node_type == 'java':
-                notebook = import_saved_java_job(doc.content_object)
+            if node.node_type == 'mapreduce':
+              notebook = import_saved_mapreduce_job(doc.content_object)
+            elif node.node_type == 'shell':
+              notebook = import_saved_shell_job(doc.content_object)
+            elif node.node_type == 'java':
+              notebook = import_saved_java_job(doc.content_object)
 
             if notebook:
               data = notebook.get_data()
@@ -183,10 +182,10 @@ class DocumentConverter(object):
                 data=json.dumps(data)
               )
             self.imported_doc_count += 1
-        except Exception, e:
+        except Exception as e:
           self.failed_doc_ids.append(doc.id)
           LOG.exception('Failed to import Job Designer document id: %d' % doc.id)
-    except ImportError, e:
+    except ImportError as e:
       LOG.warn('Cannot convert Job Designer documents: oozie app is not installed')
 
 
@@ -200,33 +199,22 @@ class DocumentConverter(object):
       for doc in docs:
         try:
           if doc.content_object:
-            if IS_HUE_4.get():
-              notebook = import_saved_pig_script(doc.content_object)
-              data = notebook.get_data()
+            notebook = import_saved_pig_script(doc.content_object)
+            data = notebook.get_data()
 
-              doc2 = self._create_doc2(
-                document=doc,
-                doctype=data['type'],
-                name=data['name'],
-                description=data['description'],
-                data=notebook.get_json()
-              )
-            else:
-              data = doc.content_object.dict
-              data.update({'content_type': doc.content_type.model, 'object_id': doc.object_id})
-              doc2 = self._create_doc2(
-                document=doc,
-                doctype='link-pigscript',
-                name=data['name'],
-                description=doc.description,
-                data=json.dumps(data)
-              )
+            doc2 = self._create_doc2(
+              document=doc,
+              doctype=data['type'],
+              name=data['name'],
+              description=data['description'],
+              data=notebook.get_json()
+            )
 
             self.imported_doc_count += 1
-        except Exception, e:
+        except Exception as e:
           self.failed_doc_ids.append(doc.id)
           LOG.exception('Failed to import Pig document id: %d' % doc.id)
-    except ImportError, e:
+    except ImportError as e:
       LOG.warn('Cannot convert Pig documents: pig app is not installed')
 
 
@@ -309,7 +297,7 @@ class DocumentConverter(object):
         document.add_tag(self.imported_tag)
         document.save()
         return document2
-    except Exception, e:
+    except Exception as e:
       # Just to be sure we delete Doc2 object incase of exception.
       # Possible when there are mixed InnoDB and MyISAM tables
       if document2 and Document2.objects.filter(id=document2.id).exists():

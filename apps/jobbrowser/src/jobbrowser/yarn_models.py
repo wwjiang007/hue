@@ -15,11 +15,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import division
+from future import standard_library
+standard_library.install_aliases()
+from builtins import str
+from builtins import object
 import logging
+import math
 import os
 import re
 import time
-import urlparse
+import urllib.parse
 
 from lxml import html
 
@@ -33,7 +39,7 @@ from desktop.lib.view_util import big_filesizeformat, format_duration_in_millis
 from hadoop import cluster
 from hadoop.yarn.clients import get_log_client
 
-from itertools import izip
+
 
 from jobbrowser.models import format_unixtime_ms
 
@@ -45,7 +51,7 @@ class Application(object):
 
   def __init__(self, attrs, rm_api=None):
     self.api = rm_api
-    for attr in attrs.keys():
+    for attr in list(attrs.keys()):
       setattr(self, attr, attrs[attr])
 
     self._fixup()
@@ -145,7 +151,7 @@ class SparkJob(Application):
         actual_url = actual_url.strip('/').replace('jobs', '')
       self.trackingUrl = actual_url
       LOG.debug("SparkJob tracking URL: %s" % self.trackingUrl)
-    except Exception, e:
+    except Exception as e:
       LOG.warn("Failed to resolve Spark Job's actual tracking URL: %s" % e)
     finally:
       if resp is not None:
@@ -155,7 +161,7 @@ class SparkJob(Application):
     response = None
     try:
       response = function(*args, **kwargs)
-    except Exception, e:
+    except Exception as e:
       LOG.warn('Spark resolve tracking URL returned a failed response: %s' % e)
     return response
 
@@ -195,7 +201,7 @@ class SparkJob(Application):
             big_filesizeformat(e.get('totalShuffleWrite', 0)),
             e.get('executorLogs', '')
           ])
-    except Exception, e:
+    except Exception as e:
       LOG.error('Failed to get Spark Job executors: %s' % e)
       # Prevent a nosedive. Don't create metrics if api changes or url is unreachable.
 
@@ -206,7 +212,7 @@ class SparkJob(Application):
       headers = ['executor_id', 'address', 'rdd_blocks', 'storage_memory', 'disk_used', 'active_tasks', 'failed_tasks',
                  'complete_tasks', 'task_time', 'input', 'shuffle_read', 'shuffle_write', 'logs']
       for executor in executors:
-        executor_data = dict(izip(headers, executor))
+        executor_data = dict(zip(headers, executor))
         executor_data.update({'id': executor_data['executor_id'] + '_executor_' + self.jobId, 'type': 'SPARK_EXECUTOR'})
         executor_list.append(executor_data)
     return executor_list
@@ -217,7 +223,7 @@ class Job(object):
   def __init__(self, api, attrs):
     self.api = api
     self.is_mr2 = True
-    for attr in attrs.keys():
+    for attr in list(attrs.keys()):
       if attr == 'acls':
         # 'acls' are actually not available in the API
         LOG.warn('Not using attribute: %s' % attrs[attr])
@@ -246,7 +252,7 @@ class Job(object):
 
       if self.desiredReduces > 0:
         if self.progress is not None:
-          self.progress = int((self.progress + self.reduces_percent_complete) / 2)
+          self.progress = int(math.floor((self.progress + self.reduces_percent_complete) / 2))
         else:
           self.progress = self.reduces_percent_complete
 
@@ -295,7 +301,7 @@ class Job(object):
   @property
   def acls(self):
     if not hasattr(self, '_acls'):
-      self._acls = dict([(name, self.conf_keys[name]) for name in self.conf_keys if 'acl' in name])
+      self._acls = dict([(name, self.conf_keys[name]) for name in self.conf_keys if name is not None and 'acl' in name])
     return self._acls
 
   @property
@@ -304,7 +310,7 @@ class Job(object):
       try:
         conf = self.api.conf(self.id)
         self._full_job_conf = conf['conf']
-      except TypeError, e:
+      except TypeError as e:
         LOG.exception('YARN API call failed to return all the data: %s' % conf)
     return self._full_job_conf
 
@@ -312,7 +318,7 @@ class Job(object):
   def conf_keys(self):
     try:
       return dict([(line['name'], line['value']) for line in self.full_job_conf['property']])
-    except Exception, e:
+    except Exception as e:
       LOG.error('Failed to parse conf_keys from YARN job configuration.')
       return None
 
@@ -336,10 +342,10 @@ class Job(object):
       self._job_attempts = self.api.job_attempts(self.id)['jobAttempts']
     return self._job_attempts
 
-class OozieYarnJob(Job):
+class YarnV2Job(Job):
   def __init__(self, api, attrs):
     self.api = api
-    for attr in attrs.keys():
+    for attr in list(attrs.keys()):
       if attr == 'acls':
         # 'acls' are actually not available in the API
         LOG.warn('Not using attribute: %s' % attrs[attr])
@@ -351,7 +357,12 @@ class OozieYarnJob(Job):
   def _fixup(self):
     jobid = self.id
 
-    setattr(self, 'status', self.state)
+    if self.state in ('FINISHED', 'FAILED', 'KILLED'):
+      setattr(self, 'status', self.finalStatus)
+    else:
+      setattr(self, 'status', self.state)
+    setattr(self, 'type', self.applicationType)
+    setattr(self, 'applicationType', 'YarnV2')
     setattr(self, 'jobName', self.name)
     setattr(self, 'jobId', jobid)
     setattr(self, 'jobId_short', self.jobId.replace('job_', ''))
@@ -383,14 +394,14 @@ class OozieYarnJob(Job):
     setattr(self, 'finishTime', finishTime)
 
     try:
-      setattr(self, 'assignedContainerId', urlparse.urlsplit(self.amContainerLogs).path.split('/node/containerlogs/')[1].split('/')[0])
+      setattr(self, 'assignedContainerId', urllib.parse.urlsplit(self.amContainerLogs).path.split('/node/containerlogs/')[1].split('/')[0])
     except Exception:
       setattr(self, 'assignedContainerId', '')
 
   def get_task(self, task_id):
     task = YarnTask(self)
     task.taskId = None
-    task.taskAttemptIds = [appAttempt['appAttemptId'] for appAttempt in self.job_attempts['jobAttempt']]
+    task.taskAttemptIds = [appAttempt['id'] for appAttempt in self.job_attempts['jobAttempt']]
     return task
 
   def filter_tasks(self, task_types=None, task_states=None, task_text=None):
@@ -400,8 +411,6 @@ class OozieYarnJob(Job):
   def job_attempts(self):
     if not hasattr(self, '_job_attempts'):
       attempts = self.api.appattempts(self.id)['appAttempts']['appAttempt']
-      for attempt in attempts:
-        attempt['id'] = attempt['appAttemptId']
       self._job_attempts = {
         'jobAttempt': attempts
       }
@@ -409,13 +418,13 @@ class OozieYarnJob(Job):
     return self._job_attempts
 
 # There's are tasks for Oozie workflow so we create a dummy one.
-class YarnTask:
+class YarnTask(object):
   def __init__(self, job):
     self.job = job
 
   def get_attempt(self, attempt_id):
     json = self.job.api.appattempts_attempt(self.job.id, attempt_id)
-    return YarnOozieAttempt(self, json)
+    return YarnV2Attempt(self, json)
 
 class KilledJob(Job):
 
@@ -455,12 +464,12 @@ class KilledJob(Job):
     return {'jobAttempt': []}
 
 
-class Task:
+class Task(object):
 
   def __init__(self, job, attrs):
     self.job = job
     if attrs:
-      for key, value in attrs.iteritems():
+      for key, value in attrs.items():
         setattr(self, key, value)
     self.is_mr2 = True
 
@@ -506,12 +515,12 @@ class Task:
     return Attempt(self, json)
 
 
-class Attempt:
+class Attempt(object):
 
   def __init__(self, task, attrs):
     self.task = task
     if attrs:
-      for key, value in attrs.iteritems():
+      for key, value in attrs.items():
         setattr(self, key, value)
     self.is_mr2 = True
     self._fixup()
@@ -538,13 +547,14 @@ class Attempt:
       self._counters = self.task.job.api.task_attempt_counters(self.task.jobId, self.task.id, self.id)['jobTaskAttemptCounters']
     return self._counters
 
-  def get_task_log(self, offset=0):
-    logs = []
+  def get_log_link(self):
     attempt = self.task.job.job_attempts['jobAttempt'][-1]
     log_link = attempt['logsLink']
+    if not log_link:
+      return log_link, None
 
     # Generate actual task log link from logsLink url
-    if self.task.job.status in ('NEW', 'SUBMITTED', 'RUNNING') or self.type == 'Oozie Launcher':
+    if self.task.job.status in ('NEW', 'SUBMITTED', 'RUNNING'):
       logs_path = '/node/containerlogs/'
       node_url, tracking_path = log_link.split(logs_path)
       container_id, user = tracking_path.strip('/').split('/')
@@ -561,24 +571,60 @@ class Attempt:
         'user': user
       }
     else:  # Completed jobs
-      logs_path = '/jobhistory/logs/'
-      root_url, tracking_path = log_link.split(logs_path)
-      node_url, container_id, attempt_id, user = tracking_path.strip('/').split('/')
+      if '/node/containerlogs/' in log_link:
+        # Applications that use NodeManager API instead of JobHistory API, like new "Oozie Launcher",
+        # have `logsLink` URL pointed to NodeManager even for completed jobs
+        logs_path = '/node/containerlogs/'
 
-      # Replace log path tokens with actual attempt properties if available
-      if hasattr(self, 'nodeHttpAddress') and 'nodeId' in attempt:
-        node_url = '%s:%s' % (self.nodeHttpAddress.split(':')[0], attempt['nodeId'].split(':')[1])
-      container_id = self.assignedContainerId if hasattr(self, 'assignedContainerId') else container_id
-      attempt_id = self.attemptId if hasattr(self, 'attemptId') else attempt_id
+        yarn_cluster = cluster.get_cluster_conf_for_job_submission()
+        root_url = yarn_cluster.HISTORY_SERVER_API_URL.get()
 
-      log_link = '%(root_url)s/%(logs_path)s/%(node)s/%(container)s/%(attempt)s/%(user)s' % {
+        tracking_path = log_link.split(logs_path)[1]
+        container_id, user = tracking_path.strip('/').split('/')
+
+        node_url = self.nodeId
+        attempt_id = self.id
+      else:
+        logs_path = '/jobhistory/logs/'
+        root_url, tracking_path = log_link.split(logs_path)
+        node_url, container_id, attempt_id, user = tracking_path.strip('/').split('/')
+
+        # Replace log path tokens with actual attempt properties if available
+        if hasattr(self, 'nodeHttpAddress') and 'nodeId' in attempt:
+          node_url = '%s:%s' % (self.nodeHttpAddress.split(':')[0], attempt['nodeId'].split(':')[1])
+        container_id = self.assignedContainerId if hasattr(self, 'assignedContainerId') else container_id
+        attempt_id = self.attemptId if hasattr(self, 'attemptId') else attempt_id
+
+      log_link = '%(root_url)s/jobhistory/logs/%(node)s/%(container)s/%(attempt)s/%(user)s' % {
         'root_url': root_url,
-        'logs_path': logs_path.strip('/'),
         'node': node_url,
         'container': container_id,
         'attempt': attempt_id,
         'user': user
       }
+
+    return log_link, user
+
+  def get_log_list(self):
+    log_link, user = self.get_log_link()
+    if not log_link:
+      return []
+    params = {
+      'doAs': user
+    }
+    log_link = re.sub('job_[^/]+', str(self.id), log_link)
+    root = Resource(get_log_client(log_link), urllib.parse.urlsplit(log_link)[2], urlencode=False)
+    response = root.get('/', params=params)
+    links = html.fromstring(response, parser=html.HTMLParser()).xpath('/html/body/table/tbody/tr/td[2]//a/@href')
+    parsed_links = [urllib.parse.urlsplit(x) for x in links]
+    return [x and len(x) >= 2 and x[2].split('/')[-2] or '' for x in parsed_links]
+
+  def get_task_log(self, offset=0):
+    logs = []
+
+    log_link, user = self.get_log_link()
+    if not log_link:
+      return ['', '', '']
 
     for name in ('stdout', 'stderr', 'syslog'):
       link = '/%s/' % name
@@ -596,11 +642,11 @@ class Attempt:
 
       response = None
       try:
-        log_link = re.sub('job_[^/]+', self.id, log_link)
-        root = Resource(get_log_client(log_link), urlparse.urlsplit(log_link)[2], urlencode=False)
+        log_link = re.sub('job_[^/]+', str(self.id), log_link)
+        root = Resource(get_log_client(log_link), urllib.parse.urlsplit(log_link)[2], urlencode=False)
         response = root.get(link, params=params)
         log = html.fromstring(response, parser=html.HTMLParser()).xpath('/html/body/table/tbody/tr/td[2]')[0].text_content()
-      except Exception, e:
+      except Exception as e:
         log = _('Failed to retrieve log: %s' % e)
         try:
           debug_info = '\nLog Link: %s' % log_link
@@ -614,25 +660,41 @@ class Attempt:
 
     return logs + [''] * (3 - len(logs))
 
-class YarnOozieAttempt(Attempt):
+class YarnV2Attempt(Attempt):
   def __init__(self, task, attrs):
     self.task = task
     if attrs:
-      for key, value in attrs.iteritems():
+      for key, value in attrs.items():
         setattr(self, key, value)
     self.is_mr2 = True
     self._fixup()
 
   def _fixup(self):
-    setattr(self, 'diagnostics', self.diagnosticsInfo)
-    setattr(self, 'type', 'Oozie Launcher')
-    setattr(self, 'id', self.appAttemptId)
+    if not hasattr(self, 'diagnostics'):
+      self.diagnostics = ''
+    setattr(self, 'type', 'YarnV2')
+    if self.finishedTime == 0:
+      finishTime = int(time.time() * 1000)
+    else:
+      finishTime = self.finishedTime
+    if self.startTime == 0:
+      durationInMillis = None
+    else:
+      durationInMillis = finishTime - self.startTime
 
-class Container:
+    setattr(self, 'duration', durationInMillis)
+    setattr(self, 'durationInMillis', durationInMillis)
+    setattr(self, 'durationFormatted', self.duration and format_duration_in_millis(self.duration))
+    setattr(self, 'finishTimeFormatted', format_unixtime_ms(finishTime))
+    setattr(self, 'startTimeFormatted', format_unixtime_ms(self.startTime))
+    setattr(self, 'status', 'RUNNING' if self.finishedTime == 0 else 'SUCCEEDED')
+    setattr(self, 'properties', {})
+
+class Container(object):
 
   def __init__(self, attrs):
     if attrs:
-      for key, value in attrs['container'].iteritems():
+      for key, value in attrs['container'].items():
         setattr(self, key, value)
     self.is_mr2 = True
 

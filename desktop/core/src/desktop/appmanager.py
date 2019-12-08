@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import os
 import logging
 import re
@@ -52,7 +53,7 @@ def _import_module_or_none(module):
   try:
     __import__(module)
     return sys.modules[module]
-  except ImportError, ie:
+  except ImportError as ie:
     # If the exception came from us importing, we want to just
     # return None. We need to inspect the stack, though, so we properly
     # reraise in the case that the module we're importing triggered
@@ -97,8 +98,8 @@ class DesktopModuleInfo(object):
     # The display name is used by dump_config, and will either be the
     # app name or the config key, if the config key has been defined in the
     # app's settings.  Mostly, it's around for consistency's sake.
-    # The nice name is just a more formal name, i.e. useradmin might 
-    # have a nice name of User Administration Tool, or something 
+    # The nice name is just a more formal name, i.e. useradmin might
+    # have a nice name of User Administration Tool, or something
     # similarly flowery.
     self.module = module
     self.name = module.__name__
@@ -110,7 +111,7 @@ class DesktopModuleInfo(object):
 
     # Load application settings
     self._load_settings_module(module.__name__ + ".settings")
-    
+
     if hasattr(self.settings, "NICE_NAME"):
       self.nice_name = self.settings.NICE_NAME
     else:
@@ -159,7 +160,7 @@ class DesktopModuleInfo(object):
       self.config_key = getattr(s, 'CONFIG_KEY', None)
     else:
       self.django_apps = []
-      self.config_key = None 
+      self.config_key = None
 
   def _resolve_appdir_path(self, path):
     """ Takes a path relative to the application dir and returns an absolute path. """
@@ -204,7 +205,7 @@ class DesktopModuleInfo(object):
     return "DesktopModule(%s: %s)" % (self.nice_name, self.module.__name__)
 
 def get_apps(user):
-  return filter(lambda app: user.has_hue_permission(action="access", app=app.display_name), DESKTOP_APPS)
+  return [app for app in DESKTOP_APPS if user.has_hue_permission(action="access", app=app.display_name)]
 
 def get_apps_dict(user=None):
   if user is not None:

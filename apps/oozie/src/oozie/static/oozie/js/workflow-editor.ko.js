@@ -77,7 +77,7 @@ var Node = function (node, vm) {
 
   var type = typeof node.widgetType != "undefined" ? node.widgetType : node.type;
 
-  self.id = ko.observable(typeof node.id != "undefined" && node.id != null ? node.id : UUID());
+  self.id = ko.observable(typeof node.id != "undefined" && node.id != null ? node.id : hueUtils.UUID());
   self.name = ko.observable(typeof node.name != "undefined" && node.name != null ? node.name : "");
   self.type = ko.observable(typeof type != "undefined" && type != null ? type : "");
 
@@ -184,11 +184,10 @@ var Node = function (node, vm) {
 
 
 var Workflow = function (vm, workflow) {
-
   var self = this;
 
   self.id = ko.observable(typeof workflow.id != "undefined" && workflow.id != null ? workflow.id : null);
-  self.uuid = ko.observable(typeof workflow.uuid != "undefined" && workflow.uuid != null ? workflow.uuid : UUID());
+  self.uuid = ko.observable(typeof workflow.uuid != "undefined" && workflow.uuid != null ? workflow.uuid : hueUtils.UUID());
   self.name = ko.observable(typeof workflow.name != "undefined" && workflow.name != null ? workflow.name : "");
 
   self.tracker = new ChangeTracker(self, ko, {
@@ -276,13 +275,13 @@ var Workflow = function (vm, workflow) {
       },
       success: function (data) {
         if (data.status == 0) {
-          viewModel.addActionProperties.removeAll();
+          window.workflowEditorViewModel.addActionProperties.removeAll();
           $.each(data.properties, function (i, prop) {
-            viewModel.addActionProperties.push(ko.mapping.fromJS(prop));
+            window.workflowEditorViewModel.addActionProperties.push(ko.mapping.fromJS(prop));
           });
 
           if (data.workflows.length > 0) {
-            viewModel.subworkflows(getOtherSubworkflows(viewModel, data.workflows));
+            window.workflowEditorViewModel.subworkflows(getOtherSubworkflows(window.workflowEditorViewModel, data.workflows));
           }
 
           if (callback) {
@@ -297,7 +296,7 @@ var Workflow = function (vm, workflow) {
   self.addNode = function (widget, copiedNode) {
     $.post("/oozie/editor/workflow/add_node/", {
       "node": ko.mapping.toJSON(widget),
-      "properties": ko.mapping.toJSON(viewModel.addActionProperties()),
+      "properties": ko.mapping.toJSON(window.workflowEditorViewModel.addActionProperties()),
       "copiedProperties": copiedNode ? ko.mapping.toJSON(copiedNode.properties) : "{}"
     }, function (data) {
       if (data.status == 0) {
@@ -526,6 +525,15 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
   self.oozieColumns = ko.observableArray([]);
   self.availableActions = ko.observableArray([]);
 
+  self.availableNamespaces = ko.observableArray();
+  self.namespace = ko.observable();
+  self.availableComputes = ko.observableArray();
+  self.compute = ko.observable();
+
+  contextCatalog.getNamespaces({ sourceType: 'oozie' }).done(function (context) { self.availableNamespaces(context.namespaces) });
+  contextCatalog.getComputes({ sourceType: 'oozie' }).done(self.availableComputes);
+
+
   self.previewColumns = ko.observable("");
   self.workflow = new Workflow(self, workflow_json);
   self.credentials = ko.mapping.fromJS(credentials_json);
@@ -684,7 +692,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
 
       var _w = new ExtendedWidget({
         size: self.currentlyDraggedWidget().size(),
-        id: UUID(),
+        id: hueUtils.UUID(),
         name: self.currentlyDraggedWidget().name(),
         widgetType: self.currentlyDraggedWidget().widgetType(),
         properties: self.currentlyDraggedWidget().properties(),
@@ -718,7 +726,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
 
       if (_addForkAndJoin) {
         var _forkRow = _parentCol.addEmptyRow(false, _rowIdx);
-        var _id = UUID();
+        var _id = hueUtils.UUID();
         var _fork = new ExtendedWidget({
           size: 12,
           id: _id,
@@ -735,7 +743,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
 
       var _w = new ExtendedWidget({
         size: self.currentlyDraggedWidget().size(),
-        id: UUID(),
+        id: hueUtils.UUID(),
         name: self.currentlyDraggedWidget().name(),
         widgetType: self.currentlyDraggedWidget().widgetType(),
         properties: self.currentlyDraggedWidget().properties(),
@@ -774,7 +782,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
 
       if (_addForkAndJoin) {
         var _joinRow = _parentCol.addEmptyRow(false, _rowIdx + 2);
-        var _id = UUID();
+        var _id = hueUtils.UUID();
         var _join = new ExtendedWidget({
           size: 12,
           id: _id,
@@ -1195,13 +1203,8 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
           $(document).trigger("info", data.message);
           self.workflow.tracker().markCurrentStateAsClean();
           huePubSub.publish('assist.document.refresh');
-          if (window.location.search.indexOf("workflow") == -1 && !IS_HUE_4) {
-            window.location.hash = '#workflow=' + data.id;
-          } else if (IS_HUE_4) {
-            hueUtils.changeURL('/hue/oozie/editor/workflow/edit/?workflow=' + data.id);
-          }
-        }
-        else {
+          hueUtils.changeURL('/hue/oozie/editor/workflow/edit/?workflow=' + data.id);
+        } else {
           $(document).trigger("error", data.message);
         }
       }).fail(function (xhr, textStatus, errorThrown) {
@@ -1232,7 +1235,8 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
   self.showSubmitPopup = function () {
     $(".jHueNotify").remove();
     $.get("/oozie/editor/workflow/submit/" + self.workflow.id(), {
-      format: IS_HUE_4 ? 'json' : 'html'
+      format: 'json',
+      cluster: self.compute() ? ko.mapping.toJSON(self.compute()) : '{}'
     }, function (data) {
       $(document).trigger("showSubmitPopup", data);
     }).fail(function (xhr, textStatus, errorThrown) {
@@ -1243,7 +1247,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
   self.showSubmitActionPopup = function (w) {
     $(".jHueNotify").remove();
     $.get("/oozie/editor/workflow/submit_single_action/" + self.workflow.id() + "/" + self.workflow.getNodeById(w.id()).id(), {
-      format: IS_HUE_4 ? 'json' : 'html'
+      format: 'json'
     }, function (data) {
       $(document).trigger("showSubmitPopup", data);
     }).fail(function (xhr, textStatus, errorThrown) {
@@ -1253,12 +1257,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
 
   self.schedule = function () {
     hueAnalytics.log('oozie/editor/workflow', 'schedule');
-    if (IS_HUE_4) {
-      huePubSub.publish('open.link', '/oozie/editor/coordinator/new/?workflow=' + self.workflow.uuid());
-    }
-    else {
-      window.location.replace('/oozie/editor/coordinator/new/?workflow=' + self.workflow.uuid());
-    }
+    huePubSub.publish('open.link', '/oozie/editor/coordinator/new/?workflow=' + self.workflow.uuid());
   };
 
 
@@ -1341,6 +1340,7 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
   self.draggableHiveAction = ko.observable(bareWidgetBuilder("Hive Script", "hive-widget"));
   self.draggableHive2Action = ko.observable(bareWidgetBuilder("HiveServer2 Script", "hive2-widget"));
   self.draggableImpalaAction = ko.observable(bareWidgetBuilder("Impala Script", "impala-widget"));
+  self.draggableAltusAction = ko.observable(bareWidgetBuilder("Altus Command", "altus-widget"));
   self.draggablePigAction = ko.observable(bareWidgetBuilder("Pig Script", "pig-widget"));
   self.draggableJavaAction = ko.observable(bareWidgetBuilder("Java program", "java-widget"));
   self.draggableMapReduceAction = ko.observable(bareWidgetBuilder("MapReduce job", "mapreduce-widget"));

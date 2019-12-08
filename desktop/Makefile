@@ -44,9 +44,9 @@ APPS := core \
 	libs/azure \
 	libs/hadoop \
 	libs/indexer \
+	libs/libanalyze \
 	libs/liboauth \
 	libs/liboozie \
-	libs/libopenid \
 	libs/librdbms \
 	libs/libsaml \
 	libs/libsentry \
@@ -101,6 +101,7 @@ $(DESKTOP_DB): $(BLD_DIR_BIN)/hue
 
 # Targets that simply recurse into all of the applications
 ENV_INSTALL_TARGETS := $(APPS:%=.recursive-env-install/%)
+$(info "----------------> ENV_INSTALL_TARGETS: $(ENV_INSTALL_TARGETS)")
 .recursive-env-install/%: %
 	$(MAKE) -C $< env-install
 
@@ -184,4 +185,3 @@ compile-locales: $(COMPILE_LOCALE_TARGETS)
 .recursive-compile-locales/%:
 	@$(MAKE) -C $* compile-locale
 # END DEV ONLY >>>>
-	

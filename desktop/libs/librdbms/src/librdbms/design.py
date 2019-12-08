@@ -18,15 +18,16 @@
 """
 The HQLdesign class can (de)serialize a design to/from a QueryDict.
 """
+
+from builtins import object
 import json
 import logging
 
 import django.http
 from django.utils.translation import ugettext as _
 
-from beeswax.design import normalize_form_dict, denormalize_form_dict, strip_trailing_semicolon,\
-                           split_statements
-
+from beeswax.design import normalize_form_dict, denormalize_form_dict, split_statements
+from notebook.sql_utils import strip_trailing_semicolon
 
 LOG = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class SQLdesign(object):
   def loads(data):
     """Returns SQLdesign from the serialized form"""
     dic = json.loads(data)
-    dic = dict(map(lambda k: (str(k), dic.get(k)), dic.keys()))
+    dic = dict([(str(k), dic.get(k)) for k in list(dic.keys())])
     if dic['VERSION'] != SERIALIZATION_VERSION:
       LOG.error('Design version mismatch. Found %s; expect %s' % (dic['VERSION'], SERIALIZATION_VERSION))
 

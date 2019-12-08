@@ -16,36 +16,41 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import absolute_import
+from future import standard_library
+standard_library.install_aliases()
+from builtins import range
+from builtins import object
 import json
 import logging
 import os
-import StringIO
 import subprocess
 import sys
 import time
+import uuid
 
 import proxy.conf
 import tempfile
 
-from nose.plugins.attrib import attr
-from nose.plugins.skip import SkipTest
-from nose.tools import assert_true, assert_false, assert_equal, assert_not_equal, assert_raises, nottest
+from configobj import ConfigObj
+from django.db.models import query, CharField, SmallIntegerField
 from django.core.management import call_command
 from django.core.paginator import Paginator
 from django.conf.urls import url
-from django.contrib.auth.models import User
 from django.db import connection
 from django.urls import reverse
+from django.test.client import Client
+from django.views.static import serve
 from django.http import HttpResponse
-from django.db.models import query, CharField, SmallIntegerField
+from nose.plugins.attrib import attr
+from nose.plugins.skip import SkipTest
+from nose.tools import assert_true, assert_false, assert_equal, assert_not_equal, assert_raises, nottest
 
-from configobj import ConfigObj
-
-from settings import DATABASES
-
+from dashboard.conf import HAS_SQL_ENABLED
+from desktop.settings import DATABASES
 from beeswax.conf import HIVE_SERVER_HOST
 from pig.models import PigScript
-from useradmin.models import GroupPermission
+from useradmin.models import GroupPermission, User
 
 import desktop
 import desktop.conf
@@ -53,6 +58,7 @@ import desktop.urls
 import desktop.redaction as redaction
 import desktop.views as views
 
+from desktop.auth.backend import rewrite_user
 from desktop.appmanager import DESKTOP_APPS
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.conf import validate_path
@@ -62,12 +68,21 @@ from desktop.lib.conf import _configs_from_dir
 from desktop.lib.paths import get_desktop_root
 from desktop.lib.python_util import force_dict_to_strings
 from desktop.lib.test_utils import grant_access
+from desktop.middleware import DJANGO_VIEW_AUTH_WHITELIST
 from desktop.models import Directory, Document, Document2, get_data_link, _version_from_properties, ClusterConfig, HUE_VERSION
 from desktop.redaction import logfilter
 from desktop.redaction.engine import RedactionPolicy, RedactionRule
 from desktop.views import check_config, home, generate_configspec, load_confs, collect_validation_messages
-from desktop.auth.backend import rewrite_user
-from dashboard.conf import HAS_SQL_ENABLED
+
+if sys.version_info[0] > 2:
+  from io import StringIO as string_io
+  from unittest.mock import patch, Mock
+else:
+  from cStringIO import StringIO as string_io
+  from mock import patch, Mock, MagicMock
+
+
+LOG = logging.getLogger(__name__)
 
 
 def test_home():
@@ -75,7 +90,7 @@ def test_home():
   user = User.objects.get(username="test_home")
 
   response = c.get(reverse(home))
-  assert_equal(["notmine", "trash", "mine", "history"], json.loads(response.context[0]['json_tags']).keys())
+  assert_equal(["notmine", "trash", "mine", "history"], list(json.loads(response.context[0]['json_tags']).keys()))
   assert_equal(200, response.status_code)
 
   script, created = PigScript.objects.get_or_create(owner=user)
@@ -142,6 +157,17 @@ def test_skip_wizard():
   response = c.get('/', follow=True)
   assert_true(['home.mako' in _template.filename for _template in response.templates], [_template.filename for _template in response.templates])
 
+def test_public_views():
+  c = Client()
+
+  for view in DJANGO_VIEW_AUTH_WHITELIST:
+    if view is serve:
+      url = reverse(view, kwargs={'path': 'desktop/art/favicon.ico'})
+    else:
+      url = reverse(view)
+    response = c.get(url)
+    assert_equal(200, response.status_code)
+
 def test_log_view():
   c = make_logged_in_client()
 
@@ -189,12 +215,11 @@ def test_dump_config():
     response1 = c.get(reverse('desktop.views.dump_config'))
     assert_true(CANARY in response1.content, response1.content)
 
-    response2 = c.get(reverse('desktop.views.dump_config'), dict(private="true"))
+    response2 = c.get(reverse('desktop.views.dump_config'), {'private': 'true'})
     assert_true(CANARY in response2.content)
 
     # There are more private variables...
     assert_true(len(response1.content) < len(response2.content))
-
   finally:
     clear()
 
@@ -236,28 +261,43 @@ def test_dump_config():
   response = client_not_me.get(reverse('desktop.views.dump_config'))
   assert_true("You must be a superuser" in response.content, response.content)
 
+  prev_env_conf = os.environ.get("HUE_CONF_DIR")
   try:
     os.environ["HUE_CONF_DIR"] = "/tmp/test_hue_conf_dir"
     resp = c.get(reverse('desktop.views.dump_config'))
     assert_true('/tmp/test_hue_conf_dir' in resp.content, resp)
   finally:
-    del os.environ["HUE_CONF_DIR"]
+    if prev_env_conf is None:
+      os.environ.pop("HUE_CONF_DIR", None)
+    else:
+      os.environ["HUE_CONF_DIR"] = prev_env_conf
+
+
+  finish = desktop.conf.ENABLE_CONNECTORS.set_for_testing(True)
+  try:
+    with patch('desktop.lib.fsmanager.has_hdfs_enabled') as has_hdfs_enabled:
+      has_hdfs_enabled.return_value = True
+      response = c.get(reverse('desktop.views.dump_config'))
+      assert_equal(1, len(response.context[0]['apps']), response.context[0])
+  finally:
+    finish()
+
 
 def hue_version():
   global HUE_VERSION
   HUE_VERSION_BAK = HUE_VERSION
 
   try:
-    assert_equal('cdh6.x-SNAPSHOT', _version_from_properties(StringIO.StringIO("""# Autogenerated build properties
+    assert_equal('cdh6.x-SNAPSHOT', _version_from_properties(string_io("""# Autogenerated build properties
 version=3.9.0-cdh5.9.0-SNAPSHOT
 git.hash=f5fbe90b6a1d0c186b0ddc6e65ce5fc8d24725c8
 cloudera.cdh.release=cdh6.x-SNAPSHOT
 cloudera.hash=f5fbe90b6a1d0c186b0ddc6e65ce5fc8d24725c8aaaaa""")))
 
-    assert_false(_version_from_properties(StringIO.StringIO("""# Autogenerated build properties
+    assert_false(_version_from_properties(string_io("""# Autogenerated build properties
 version=3.9.0-cdh5.9.0-SNAPSHOT git.hash=f5fbe90b6a1d0c186b0ddc6e65ce5fc8d24725c8 cloudera.hash=f5fbe90b6a1d0c186b0ddc6e65ce5fc8d24725c8aaaaa""")))
 
-    assert_false(_version_from_properties(StringIO.StringIO('')))
+    assert_false(_version_from_properties(string_io('')))
   finally:
     HUE_VERSION = HUE_VERSION_BAK
 
@@ -283,8 +323,8 @@ def test_prefs():
   # Check multiple values
   c.post('/desktop/api2/user_preferences/elephant', {'set': 'room'})
   response = c.get('/desktop/api2/user_preferences/')
-  assert_true("baz" in json.loads(response.content)['data'].values(), response.content)
-  assert_true("room" in json.loads(response.content)['data'].values(), response.content)
+  assert_true("baz" in list(json.loads(response.content)['data'].values()), response.content)
+  assert_true("room" in list(json.loads(response.content)['data'].values()), response.content)
 
   # Delete everything
   c.post('/desktop/api2/user_preferences/elephant', {'delete': ''})
@@ -329,26 +369,26 @@ def test_paginator():
     assert_equal(page.end_index(), end)
 
   # First page 1-20
-  obj = range(20)
+  obj = list(range(20))
   pgn = Paginator(obj, per_page=20)
   assert_page(pgn.page(1), obj, 1, 20)
 
   # Handle extra data on first page (22 items on a 20-page)
-  obj = range(22)
+  obj = list(range(22))
   pgn = Paginator(obj, per_page=20)
-  assert_page(pgn.page(1), range(20), 1, 20)
+  assert_page(pgn.page(1), list(range(20)), 1, 20)
 
   # Handle total < len(obj). Only works for QuerySet.
   obj = query.QuerySet()
-  obj._result_cache = range(10)
+  obj._result_cache = list(range(10))
   pgn = Paginator(obj, per_page=10)
-  assert_page(pgn.page(1), range(10), 1, 10)
+  assert_page(pgn.page(1), list(range(10)), 1, 10)
 
   # Still works with a normal complete list
-  obj = range(25)
+  obj = list(range(25))
   pgn = Paginator(obj, per_page=20)
-  assert_page(pgn.page(1), range(20), 1, 20)
-  assert_page(pgn.page(2), range(20, 25), 21, 25)
+  assert_page(pgn.page(1), list(range(20)), 1, 20)
+  assert_page(pgn.page(2), list(range(20, 25)), 21, 25)
 
 def test_thread_dump():
   c = make_logged_in_client()
@@ -457,6 +497,7 @@ def test_app_permissions():
 
     # Access to nothing
     check_app(401, 'beeswax')
+    check_app(401, 'hive')
     check_app(401, 'impala')
     check_app(401, 'hbase')
     check_app(401, 'pig')
@@ -476,9 +517,13 @@ def test_app_permissions():
     assert_false('scheduler' in apps, apps)
     assert_false('sdkapps' in apps, apps)
 
-    # Add access to beeswax
+    # Should always be enabled as it is a lib
     grant_access(USERNAME, GROUPNAME, "beeswax")
+
+    # Add access to hive
+    grant_access(USERNAME, GROUPNAME, "hive")
     check_app(200, 'beeswax')
+    check_app(200, 'hive')
     check_app(401, 'impala')
     check_app(401, 'hbase')
     check_app(401, 'pig')
@@ -501,6 +546,7 @@ def test_app_permissions():
     # Add access to hbase
     grant_access(USERNAME, GROUPNAME, "hbase")
     check_app(200, 'beeswax')
+    check_app(200, 'hive')
     check_app(401, 'impala')
     check_app(200, 'hbase')
     check_app(401, 'pig')
@@ -568,7 +614,7 @@ def test_app_permissions():
 
     # Oozie Editor and Browser
     grant_access(USERNAME, GROUPNAME, "oozie")
-    check_app(401, 'beeswax')
+    check_app(401, 'hive')
     check_app(200, 'impala')
     check_app(401, 'hbase')
     check_app(401, 'pig')
@@ -583,7 +629,7 @@ def test_app_permissions():
     assert_false('spark' in apps.get('editor', {}).get('interpreter_names', []), apps)
 
     grant_access(USERNAME, GROUPNAME, "pig")
-    check_app(401, 'beeswax')
+    check_app(401, 'hive')
     check_app(200, 'impala')
     check_app(401, 'hbase')
     check_app(200, 'pig')
@@ -600,7 +646,7 @@ def test_app_permissions():
 
     if 'search' not in desktop.conf.APP_BLACKLIST.get():
       grant_access(USERNAME, GROUPNAME, "search")
-      check_app(401, 'beeswax')
+      check_app(401, 'hive')
       check_app(200, 'impala')
       check_app(401, 'hbase')
       check_app(200, 'pig')
@@ -617,7 +663,7 @@ def test_app_permissions():
 
     if 'spark' not in desktop.conf.APP_BLACKLIST.get():
       grant_access(USERNAME, GROUPNAME, "spark")
-      check_app(401, 'beeswax')
+      check_app(401, 'hive')
       check_app(200, 'impala')
       check_app(401, 'hbase')
       check_app(200, 'pig')
@@ -727,11 +773,13 @@ def test_validate_path():
     reset = desktop.conf.SSL_PRIVATE_KEY.set_for_testing('/tmm/does_not_exist')
     assert_not_equal([], validate_path(desktop.conf.SSL_PRIVATE_KEY, is_dir=True))
     assert_true(False)
-  except Exception, ex:
+  except Exception as ex:
     assert_true('does not exist' in str(ex), ex)
   finally:
     reset()
 
+
+@attr('integration')
 @attr('requires_hadoop')
 def test_config_check():
   with tempfile.NamedTemporaryFile() as cert_file:
@@ -754,6 +802,7 @@ def test_config_check():
         for old_conf in reset:
           old_conf()
 
+      prev_env_conf = os.environ.get("HUE_CONF_DIR")
       try:
         # Set HUE_CONF_DIR and make sure check_config returns appropriate conf
         os.environ["HUE_CONF_DIR"] = "/tmp/test_hue_conf_dir"
@@ -768,7 +817,10 @@ def test_config_check():
         resp = cli.get('/desktop/debug/check_config')
         assert_true('/tmp/test_hue_conf_dir' in resp.content, resp)
       finally:
-        del os.environ["HUE_CONF_DIR"]
+        if prev_env_conf is None:
+          os.environ.pop("HUE_CONF_DIR", None)
+        else:
+          os.environ["HUE_CONF_DIR"] = prev_env_conf
         desktop.views.validate_by_spec = desktop.views.real_validate_by_spec
 
 def test_last_access_time():
@@ -805,6 +857,7 @@ def test_ui_customizations():
 
   try:
     c = make_logged_in_client()
+    c.logout()
     resp = c.get('/hue/accounts/login/', follow=False)
     assert_true(custom_message in resp.content, resp)
     resp = c.get('/hue/about', follow=True)
@@ -814,6 +867,7 @@ def test_ui_customizations():
       old_conf()
 
 
+@attr('integration')
 @attr('requires_hadoop')
 def test_check_config_ajax():
   c = make_logged_in_client()
@@ -831,14 +885,14 @@ def test_cx_Oracle():
   try:
     import cx_Oracle
     return
-  except ImportError, ex:
+  except ImportError as ex:
     if "No module named" in ex.message:
       assert_true(False, "cx_Oracle skipped its build. This happens if "
           "env var ORACLE_HOME or ORACLE_INSTANTCLIENT_HOME is not defined. "
           "So ignore this test failure if your build does not need to work "
           "with an oracle backend.")
 
-class TestStrictRedirection():
+class TestStrictRedirection(object):
 
   def setUp(self):
     self.client = make_logged_in_client()
@@ -867,7 +921,9 @@ class TestStrictRedirection():
 
   def _test_redirection(self, redirection_url, expected_status_code, **kwargs):
     self.client.get('/accounts/logout', **kwargs)
-    response = self.client.post('/hue/accounts/login/?next=' + redirection_url, self.user, **kwargs)
+    data = self.user.copy()
+    data['next'] = redirection_url
+    response = self.client.post('/hue/accounts/login/', data, **kwargs )
     assert_equal(expected_status_code, response.status_code)
     if expected_status_code == 403:
         error_msg = 'Redirect to ' + redirection_url + ' is not allowed.'
@@ -876,7 +932,7 @@ class TestStrictRedirection():
 
 class BaseTestPasswordConfig(object):
 
-  SCRIPT = '%s -c "print \'\\n password from script \\n\'"' % sys.executable
+  SCRIPT = '%s -c "print(\'\\n password from script \\n\')"' % sys.executable
 
   def get_config_password(self):
     raise NotImplementedError
@@ -1021,16 +1077,20 @@ class TestDocument(object):
     make_logged_in_client(username="copy_owner", groupname="test_doc", recreate=True, is_superuser=False)
     self.copy_user = User.objects.get(username="copy_owner")
 
-    self.document2 = Document2.objects.create(name='Test Document2',
-                                              type='search-dashboard',
-                                              owner=self.user,
-                                              description='Test Document2')
+    self.document2 = Document2.objects.create(
+        name='Test Document2',
+        type='search-dashboard',
+        owner=self.user,
+        description='Test Document2'
+    )
 
-    self.document = Document.objects.link(content_object=self.document2,
-                                          owner=self.user,
-                                          name='Test Document',
-                                          description='Test Document',
-                                          extra='test')
+    self.document = Document.objects.link(
+        content_object=self.document2,
+        owner=self.user,
+        name='Test Document',
+        description='Test Document',
+        extra='test'
+    )
 
     self.document.save()
     self.document2.doc.add(self.document)
@@ -1109,42 +1169,48 @@ class TestDocument(object):
 
   def test_multiple_home_directories(self):
     home_dir = Directory.objects.get_home_directory(self.user)
-    test_doc1 = Document2.objects.create(name='test-doc1',
-                                         type='query-hive',
-                                         owner=self.user,
-                                         description='',
-                                         parent_directory=home_dir)
+    test_doc1 = Document2.objects.create(
+        name='test-doc1',
+        type='query-hive',
+        owner=self.user,
+        description='',
+        parent_directory=home_dir
+    )
 
-    assert_equal(home_dir.children.exclude(name='.Trash').count(), 2)
+    assert_equal(home_dir.children.exclude(name__in=['.Trash', 'Gist']).count(), 2)
 
     # Cannot create second home directory directly as it will fail in Document2.validate()
     second_home_dir = Document2.objects.create(owner=self.user, parent_directory=None, name='second_home_dir', type='directory')
     Document2.objects.filter(name='second_home_dir').update(name=Document2.HOME_DIR, parent_directory=None)
     assert_equal(Document2.objects.filter(owner=self.user, name=Document2.HOME_DIR).count(), 2)
 
-    test_doc2 = Document2.objects.create(name='test-doc2',
-                                              type='query-hive',
-                                              owner=self.user,
-                                              description='',
-                                              parent_directory=second_home_dir)
+    test_doc2 = Document2.objects.create(
+        name='test-doc2',
+        type='query-hive',
+        owner=self.user,
+        description='',
+        parent_directory=second_home_dir
+    )
     assert_equal(second_home_dir.children.count(), 1)
 
     merged_home_dir = Directory.objects.get_home_directory(self.user)
     children = merged_home_dir.children.all()
-    assert_equal(children.exclude(name='.Trash').count(), 3)
+    assert_equal(children.exclude(name__in=['.Trash', 'Gist']).count(), 3)
     children_names = [child.name for child in children]
     assert_true(test_doc2.name in children_names)
     assert_true(test_doc1.name in children_names)
 
   def test_multiple_trash_directories(self):
     home_dir = Directory.objects.get_home_directory(self.user)
-    test_doc1 = Document2.objects.create(name='test-doc1',
-                                         type='query-hive',
-                                         owner=self.user,
-                                         description='',
-                                         parent_directory=home_dir)
+    test_doc1 = Document2.objects.create(
+        name='test-doc1',
+        type='query-hive',
+        owner=self.user,
+        description='',
+        parent_directory=home_dir
+    )
 
-    assert_equal(home_dir.children.count(), 3)
+    assert_equal(home_dir.children.count(), 4)
 
     # Cannot create second trash directory directly as it will fail in Document2.validate()
     Document2.objects.create(owner=self.user, parent_directory=home_dir, name='second_trash_dir', type='directory')
@@ -1152,16 +1218,18 @@ class TestDocument(object):
     assert_equal(Directory.objects.filter(owner=self.user, name=Document2.TRASH_DIR).count(), 2)
 
 
-    test_doc2 = Document2.objects.create(name='test-doc2',
-                                              type='query-hive',
-                                              owner=self.user,
-                                              description='',
-                                              parent_directory=home_dir)
-    assert_equal(home_dir.children.count(), 5) # Including the second trash
+    test_doc2 = Document2.objects.create(
+        name='test-doc2',
+        type='query-hive',
+        owner=self.user,
+        description='',
+        parent_directory=home_dir
+    )
+    assert_equal(home_dir.children.count(), 6) # Including the second trash
     assert_raises(Document2.MultipleObjectsReturned, Directory.objects.get, name=Document2.TRASH_DIR)
 
     test_doc1.trash()
-    assert_equal(home_dir.children.count(), 3) # As trash documents are merged count is back to 3
+    assert_equal(home_dir.children.count(), 4) # As trash documents are merged count is back to 3
     merged_trash_dir = Directory.objects.get(name=Document2.TRASH_DIR, owner=self.user)
 
     test_doc2.trash()
@@ -1422,8 +1490,9 @@ def test_collect_validation_messages_extras():
 def test_db_migrations_sqlite():
   versions = ['5.' + str(i) for i in range(7, 16)]
   for version in versions:
-    name = 'hue_' + version
-    path = get_desktop_root('./core/src/desktop/test_data/' + name + '.db')
+    name = 'hue_' + version + '_' + uuid.uuid4().hex
+    file_name = 'hue_' + version + '.db'
+    path = get_desktop_root('./core/src/desktop/test_data/' + file_name)
     DATABASES[name] = {
       'ENGINE' : 'django.db.backends.sqlite3',
       'NAME' : path,
@@ -1436,15 +1505,25 @@ def test_db_migrations_sqlite():
       'ATOMIC_REQUESTS' : True,
       'CONN_MAX_AGE' : 0,
     }
-    call_command('migrate', '--fake-initial', '--database=' + name)
+    try:
+      call_command('migrate', '--fake-initial', '--database=' + name)
+    finally:
+      del DATABASES[name]
 
 def test_db_migrations_mysql():
   if desktop.conf.DATABASE.ENGINE.get().find('mysql') < 0:
     raise SkipTest
   versions = ['5_' + str(i) for i in range(7, 16)]
+  os.putenv('PATH', '$PATH:/usr/local/bin')
+  try:
+    subprocess.check_output('type mysql', shell=True)
+  except subprocess.CalledProcessError as e:
+    LOG.warn('mysql not found')
+    raise SkipTest
   for version in versions:
-    name = 'hue_' + version
-    path = get_desktop_root('./core/src/desktop/test_data/' + name + '_mysql.sql')
+    file_name = 'hue_' + version + '_mysql.sql'
+    name = 'hue_' + version + '_' + uuid.uuid4().hex
+    path = get_desktop_root('./core/src/desktop/test_data/' + file_name)
     DATABASES[name] = {
       'ENGINE': desktop.conf.DATABASE.ENGINE.get(),
       'NAME': name,
@@ -1458,8 +1537,12 @@ def test_db_migrations_mysql():
       'PATH': path,
       'CONN_MAX_AGE': desktop.conf.DATABASE.CONN_MAX_AGE.get(),
     }
-    os.system('mysql -u%(USER)s -p%(PASSWORD)s -e "DROP DATABASE %(SCHEMA)s"' % DATABASES[name])
-    os.system('mysql -u%(USER)s -p%(PASSWORD)s -e "CREATE DATABASE %(SCHEMA)s"' % DATABASES[name]) # No way to run this command with django
-    os.system('mysql -u%(USER)s -p%(PASSWORD)s %(SCHEMA)s < %(PATH)s' % DATABASES[name])
-    call_command('migrate', '--fake-initial', '--database=%(SCHEMA)s' % DATABASES[name])
-    os.system('mysql -u%(USER)s -p%(PASSWORD)s -e "DROP DATABASE %(SCHEMA)s"' % DATABASES[name])
+    try:
+      subprocess.check_output('mysql -u%(USER)s -p%(PASSWORD)s -e "CREATE DATABASE %(SCHEMA)s"' % DATABASES[name], stderr=subprocess.STDOUT, shell=True) # No way to run this command with django
+      subprocess.check_output('mysql -u%(USER)s -p%(PASSWORD)s %(SCHEMA)s < %(PATH)s' % DATABASES[name], stderr=subprocess.STDOUT, shell=True)
+      call_command('migrate', '--fake-initial', '--database=%(SCHEMA)s' % DATABASES[name])
+    except subprocess.CalledProcessError as e:
+      LOG.warn('stderr: {}'.format(e.output))
+      raise e
+    finally:
+      del DATABASES[name]

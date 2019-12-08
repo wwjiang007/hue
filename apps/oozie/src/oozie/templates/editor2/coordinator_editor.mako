@@ -110,16 +110,11 @@ ${ scheduler.import_modals() }
 </div>
 
 <link rel="stylesheet" href="${ static('desktop/ext/css/hue-filetypes.css') }">
-<link rel="stylesheet" href="${ static('desktop/ext/css/hue-charts.css') }">
-<link rel="stylesheet" href="${ static('desktop/ext/chosen/chosen.min.css') }">
 <link rel="stylesheet" href="${ static('oozie/css/common-editor.css') }">
 <link rel="stylesheet" href="${ static('oozie/css/coordinator-editor.css') }">
 
 <link href="${ static('desktop/css/jqCron.css') }" rel="stylesheet" type="text/css" />
 <script src="${ static('desktop/js/jqCron.js') }" type="text/javascript"></script>
-
-<link rel="stylesheet" href="${ static('desktop/ext/select2/select2.css') }">
-<script src="${ static('desktop/ext/select2/select2.min.js') }" type="text/javascript" charset="utf-8"></script>
 
 ${ dashboard.import_layout() }
 
@@ -127,10 +122,6 @@ ${ dashboard.import_layout() }
 ${ commonshare() | n,unicode }
 %endif
 
-<script src="${ static('desktop/ext/js/bootstrap-editable.min.js') }" type="text/javascript" charset="utf-8"></script>
-<script src="${ static('desktop/js/hue.utils.js') }"></script>
-<script src="${ static('desktop/js/ko.editable.js') }" type="text/javascript" charset="utf-8"></script>
-<script src="${ static('desktop/ext/chosen/chosen.jquery.min.js') }" type="text/javascript" charset="utf-8"></script>
 % if not is_embeddable:
 <script src="${ static('desktop/js/share2.vm.js') }"></script>
 %endif
@@ -162,11 +153,15 @@ ${ scheduler.import_sla_cron(coordinator_json) }
   shareViewModel.setDocUuid('${ doc_uuid }');
 
   function showChooseWorkflow() {
+    $("#chooseWorkflowDemiModal").removeAttr("disabled");
+    $("#chooseWorkflowDemiModal")[0].style.display = "block";
     $("#chooseWorkflowDemiModal").modal("show");
   }
 
   function selectWorkflow(wf) {
     viewModel.coordinator.properties.workflow(wf.uuid());
+    $("#chooseWorkflowDemiModal").attr('disabled','disabled');
+    $("#chooseWorkflowDemiModal")[0].style.display = "none";
     $("#chooseWorkflowDemiModal").modal("hide");
   }
 
@@ -183,6 +178,8 @@ ${ scheduler.import_sla_cron(coordinator_json) }
     $("#chooseWorkflowDemiModal").modal({
       show: false
     });
+    $("#chooseWorkflowDemiModal").attr('disabled','disabled');
+    $("#chooseWorkflowDemiModal")[0].style.display = "none";
 
     $(window).bind("keydown", "esc", function () {
       if ($(".demi-modal.fade.in").length > 0) {

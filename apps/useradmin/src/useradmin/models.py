@@ -17,12 +17,9 @@
 """
 The core of this module adds permissions functionality to Hue applications.
 
-A "Hue Permission" (colloquially, appname.action, but stored in the
-HuePermission model) is a way to specify some action whose
-control may be restricted.  Every Hue application, by default,
-has an "access" action.  To specify extra actions, applications
-can specify them in appname.settings.PERMISSION_ACTIONS, as
-pairs of (action_name, description).
+A "Hue Permission" (colloquially, appname.action, but stored in the HuePermission model) is a way to specify some action whose
+control may be restricted.  Every Hue application, by default, has an "access" action. To specify extra actions, applications
+can specify them in appname.settings.PERMISSION_ACTIONS, as pairs of (action_name, description).
 
 Several mechanisms enforce permission.  First of all, the "access" permission
 is controlled by LoginAndPermissionMiddleware.  For eligible views
@@ -35,19 +32,12 @@ Thirdly, you may wish to do so manually, by using something akin to:
   dp = HuePermission.objects.get(app=pp, action=action)
   request.user.has_hue_permission(dp)
 
-[Design note: it is questionable that a Hue permission is
-a model, instead of just being a string.  Could go either way.]
-
-Permissions may be granted to groups, but not, currently, to users.
-A user's abilities is the union of all permissions the group
+Permissions may be granted to groups, but not, currently, to users. A user's abilities is the union of all permissions the group
 has access to.
 
-Note that Django itself has a notion of users, groups, and permissions.
-We re-use Django's notion of users and groups, but ignore its notion of
-permissions.  The permissions notion in Django is strongly tied to
-what models you may or may not edit, and there are elaborations (especially
-in Django 1.2) to manipulate this row by row.  This does not map nicely
-onto actions which may not relate to database models.
+Note that Django itself has a notion of users, groups, and permissions. We re-use Django's notion of users and groups, but ignore its notion of
+permissions.  The permissions notion in Django is strongly tied to what models you may or may not edit, and there are elaborations (especially
+in Django 1.2) to manipulate this row by row. This does not map nicely onto actions which may not relate to database models.
 """
 import logging
 from datetime import datetime
@@ -55,18 +45,33 @@ from enum import Enum
 
 from django.db import connection, models, transaction
 from django.contrib.auth import models as auth_models
+from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.core.cache import cache
 from django.utils.translation import ugettext_lazy as _t
 import django.utils.timezone as dtz
 
 from desktop import appmanager
+from desktop.conf import ENABLE_ORGANIZATIONS
 from desktop.lib.exceptions_renderable import PopupException
-from desktop.models import SAMPLE_USER_ID, SAMPLE_USER_INSTALL, HueUser
+from desktop.lib.idbroker.conf import is_idbroker_enabled
 from hadoop import cluster
 
 import useradmin.conf
 
+if ENABLE_ORGANIZATIONS.get():
+  from useradmin.models2 import OrganizationUser as User, OrganizationGroup as Group, Organization, default_organization
+else:
+  from django.contrib.auth.models import User, Group
+  class Organization(): pass
+  def default_organization(): pass
+  def get_organization(): pass
+
+from desktop.monkey_patches import monkey_patch_username_validator
+monkey_patch_username_validator()
+
+
 LOG = logging.getLogger(__name__)
+
 
 class UserProfile(models.Model):
   """
@@ -92,7 +97,7 @@ class UserProfile(models.Model):
     HUE = 1
     EXTERNAL = 2
 
-  user = models.OneToOneField(auth_models.User, unique=True)
+  user = models.OneToOneField(User, unique=True)
   home_directory = models.CharField(editable=True, max_length=1024, null=True)
   creation_method = models.CharField(editable=True, null=False, max_length=64, default=CreationMethod.HUE.name)
   first_login = models.BooleanField(default=True, verbose_name=_t('First Login'),
@@ -120,10 +125,8 @@ class UserProfile(models.Model):
     if self.user.is_superuser:
       return True
 
-    for group in self.user.groups.all():
-      if group_has_permission(group, perm):
-        return True
-    return False
+    group_ids = self.user.groups.values_list('id', flat=True)
+    return GroupPermission.objects.filter(group__id__in=group_ids, hue_permission=perm).exists()
 
   def check_hue_permission(self, perm=None, app=None, action=None):
     """
@@ -136,7 +139,8 @@ class UserProfile(models.Model):
     if self.has_hue_permission(perm):
       return
     else:
-      raise PopupException(_t("You do not have permissions to %(description)s.") % dict(description=perm.description))
+      raise PopupException(_t("You do not have permissions to %(description)s.") % {'description': perm.description})
+
 
 def get_profile(user):
   """
@@ -148,7 +152,7 @@ def get_profile(user):
     # Lazily create profile.
     try:
       profile = UserProfile.objects.get(user=user)
-    except UserProfile.DoesNotExist, e:
+    except UserProfile.DoesNotExist as e:
       profile = create_profile_for_user(user)
     user._cached_userman_profile = profile
     return profile
@@ -172,33 +176,35 @@ def create_profile_for_user(user):
     LOG.exception("Failed to automatically create user profile.")
     return None
 
+
 class LdapGroup(models.Model):
   """
   Groups that come from LDAP originally will have an LdapGroup
   record generated at creation time.
   """
-  group = models.ForeignKey(auth_models.Group, related_name="group")
+  group = models.ForeignKey(Group, related_name="group")
+
 
 class GroupPermission(models.Model):
   """
   Represents the permissions a group has.
   """
-  group = models.ForeignKey(auth_models.Group)
+  group = models.ForeignKey(Group)
   hue_permission = models.ForeignKey("HuePermission")
 
 
-# Permission Management
 class HuePermission(models.Model):
   """
   Set of non-object specific permissions that an app supports.
 
-  For now, we only assign permissions to groups, though that may change.
+  Currently only assign permissions to groups (not users or roles).
+  Could be move to support Apache Ranger permissions, AWS IAM... for Hue and connector access.
   """
   app = models.CharField(max_length=30)
   action = models.CharField(max_length=100)
   description = models.CharField(max_length=255)
 
-  groups = models.ManyToManyField(auth_models.Group, through=GroupPermission)
+  groups = models.ManyToManyField(Group, through=GroupPermission)
 
   def __str__(self):
     return "%s.%s:%s(%d)" % (self.app, self.action, self.description, self.pk)
@@ -207,12 +213,17 @@ class HuePermission(models.Model):
   def get_app_permission(cls, hue_app, action):
     return HuePermission.objects.get(app=hue_app, action=action)
 
+
 def get_default_user_group(**kwargs):
   default_user_group = useradmin.conf.DEFAULT_USER_GROUP.get()
   if default_user_group is None:
     return None
 
-  group, created = auth_models.Group.objects.get_or_create(name=default_user_group)
+  if ENABLE_ORGANIZATIONS.get():
+    group, created = Group.objects.get_or_create(name=default_user_group, organization=default_organization())
+  else:
+    group, created = Group.objects.get_or_create(name=default_user_group)
+
   if created:
     group.save()
 
@@ -237,7 +248,8 @@ def update_app_permissions(**kwargs):
   # is to check if Useradmin has been installed.
   # It is okay to follow appmanager.DESKTOP_APPS before they've been sync'd
   # because apps are referenced by app name in Hue permission and not by model ID.
-  if u'useradmin_huepermission' in connection.introspection.table_names():
+  created_tables = connection.introspection.table_names()
+  if u'useradmin_huepermission' in created_tables:
     current = {}
 
     try:
@@ -249,7 +261,7 @@ def update_app_permissions(**kwargs):
 
     updated = 0
     uptodate = 0
-    added = [ ]
+    added = []
 
     for app_obj in appmanager.DESKTOP_APPS:
       app = app_obj.name
@@ -278,41 +290,47 @@ def update_app_permissions(**kwargs):
     if default_group:
       for new_dp in added:
         if not (new_dp.app == 'useradmin' and new_dp.action == 'access') and \
+           not (new_dp.app == 'useradmin' and new_dp.action == 'superuser') and \
            not (new_dp.app == 'metastore' and new_dp.action == 'write') and \
            not (new_dp.app == 'hbase' and new_dp.action == 'write') and \
            not (new_dp.app == 'security' and new_dp.action == 'impersonate') and \
-           not (new_dp.app == 'filebrowser' and new_dp.action == 's3_access') and \
+           not (new_dp.app == 'filebrowser' and new_dp.action == 's3_access' and not is_idbroker_enabled('s3a')) and \
+           not (new_dp.app == 'filebrowser' and new_dp.action == 'gs_access' and not is_idbroker_enabled('gs')) and \
            not (new_dp.app == 'filebrowser' and new_dp.action == 'adls_access') and \
+           not (new_dp.app == 'filebrowser' and new_dp.action == 'abfs_access') and \
            not (new_dp.app == 'oozie' and new_dp.action == 'disable_editor_access'):
           GroupPermission.objects.create(group=default_group, hue_permission=new_dp)
 
     available = HuePermission.objects.count()
+    stale = available - len(added) - updated - uptodate
 
-    LOG.info("HuePermissions: %d added, %d updated, %d up to date, %d stale" %
-           (len(added),
-            updated,
-            uptodate,
-            available - len(added) - updated - uptodate))
+    if len(added) or updated or stale:
+      LOG.info("HuePermissions: %d added, %d updated, %d up to date, %d stale" % (
+          len(added), updated, uptodate, stale
+        )
+      )
 
 models.signals.post_migrate.connect(update_app_permissions)
-models.signals.post_migrate.connect(get_default_user_group)
+# models.signals.post_migrate.connect(get_default_user_group)
 
 
 def install_sample_user():
   """
   Setup the de-activated sample user with a certain id. Do not create a user profile.
   """
+  #Moved to avoid circular import with is_admin
+  from desktop.models import SAMPLE_USER_ID, SAMPLE_USER_INSTALL
   user = None
 
   try:
-    if auth_models.User.objects.filter(id=SAMPLE_USER_ID).exists():
-      user = auth_models.User.objects.get(id=SAMPLE_USER_ID)
+    if User.objects.filter(id=SAMPLE_USER_ID).exists():
+      user = User.objects.get(id=SAMPLE_USER_ID)
       LOG.info('Sample user found with username "%s" and User ID: %s' % (user.username, user.id))
-    elif auth_models.User.objects.filter(username=SAMPLE_USER_INSTALL).exists():
-      user = auth_models.User.objects.get(username=SAMPLE_USER_INSTALL)
+    elif User.objects.filter(username=SAMPLE_USER_INSTALL).exists():
+      user = User.objects.get(username=SAMPLE_USER_INSTALL)
       LOG.info('Sample user found: %s' % user.username)
     else:
-      user, created = auth_models.User.objects.get_or_create(
+      user, created = User.objects.get_or_create(
         username=SAMPLE_USER_INSTALL,
         password='!',
         is_active=False,
@@ -326,10 +344,10 @@ def install_sample_user():
     if user.username != SAMPLE_USER_INSTALL:
       LOG.warn('Sample user does not have username "%s", will attempt to modify the username.' % SAMPLE_USER_INSTALL)
       with transaction.atomic():
-        user = auth_models.User.objects.get(id=SAMPLE_USER_ID)
+        user = User.objects.get(id=SAMPLE_USER_ID)
         user.username = SAMPLE_USER_INSTALL
         user.save()
-  except Exception, ex:
+  except Exception as ex:
     LOG.exception('Failed to get or create sample user')
 
   # If sample user doesn't belong to default group, add to default group
@@ -346,7 +364,7 @@ def install_sample_user():
       LOG.info('Created home directory for user: %s' % SAMPLE_USER_INSTALL)
     else:
       LOG.info('Home directory already exists for user: %s' % SAMPLE_USER_INSTALL)
-  except Exception, ex:
+  except Exception as ex:
     LOG.exception('Failed to create home directory for user %s: %s' % (SAMPLE_USER_INSTALL, str(ex)))
 
   return user

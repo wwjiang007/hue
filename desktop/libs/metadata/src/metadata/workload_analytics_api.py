@@ -34,7 +34,7 @@ def error_handler(view_fn):
   def decorator(*args, **kwargs):
     try:
       return view_fn(*args, **kwargs)
-    except Exception, e:
+    except Exception as e:
       LOG.exception(e)
       response = {
         'status': -1,
@@ -42,6 +42,72 @@ def error_handler(view_fn):
       }
     return JsonResponse(response, status=500)
   return decorator
+
+
+@require_POST
+@error_handler
+def get_impala_query(request):
+  response = {'status': -1}
+
+  cluster = json.loads(request.POST.get('cluster'))
+  query_id = json.loads(request.POST.get('query_id'))
+
+  client = WorkfloadAnalyticsClient(request.user)
+  data = client.get_impala_query(cluster=cluster, query_id=query_id)
+
+  if data:
+    response['status'] = 0
+    response['data'] = data
+  else:
+    response['message'] = 'Workload Analytics: %s' % data['details']
+
+  return JsonResponse(response)
+
+
+@require_POST
+@error_handler
+def get_cluster_id(request):
+  response = {'status': -1}
+
+  crn = json.loads(request.POST.get('crn'))
+
+  client = WorkfloadAnalyticsClient(request.user)
+  data = client.list_uploads()
+
+  if data:
+    env = [_env for _env in data['environments'] if _env['crn'] == crn]
+    if not env:
+      response['message'] = 'Workload Analytics: %s environment not found' % crn
+    else:
+      response['status'] = 0
+      response['data'] = env[0]
+  else:
+    response['message'] = 'Workload Analytics: %s' % data['details']
+
+  return JsonResponse(response)
+
+
+@require_POST
+@error_handler
+def get_environment(request):
+  response = {'status': -1}
+
+  crn = json.loads(request.POST.get('crn'))
+
+  client = WorkfloadAnalyticsClient(request.user)
+  data = client.list_environments()
+
+  if data:
+    env = [_env for _env in data['environments'] if _env['crn'] == crn]
+    if not env:
+      response['message'] = 'Workload Analytics: %s environment not found' % crn
+    else:
+      response['status'] = 0
+      response['data'] = env[0]
+  else:
+    response['message'] = 'Workload Analytics: %s' % data['details']
+
+  return JsonResponse(response)
 
 
 @require_POST

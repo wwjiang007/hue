@@ -31,6 +31,7 @@ LOG = logging.getLogger(__name__)
 
 class FsUtilsTests(unittest.TestCase):
   requires_hadoop = True
+  integration = True
 
   @classmethod
   def setUpClass(cls):
@@ -42,7 +43,7 @@ class FsUtilsTests(unittest.TestCase):
   def tearDown(self):
     try:
       self.cluster.fs.purge_trash()
-    except Exception, e:
+    except Exception as e:
       LOG.error('Could not clean up trash: %s', e)
 
   def test_remove_header(self):

@@ -17,11 +17,10 @@
 
 import logging
 
-from django.contrib.auth.models import User, Group
-
 from desktop.decorators import check_superuser_permission
 from desktop.lib.django_util import JsonResponse
 from desktop.lib.i18n import smart_unicode
+from useradmin.models import User, Group
 
 
 LOG = logging.getLogger(__name__)
@@ -32,7 +31,7 @@ def error_handler(view_fn):
     response = {}
     try:
       return view_fn(*args, **kwargs)
-    except Exception, e:
+    except Exception as e:
       LOG.exception('Error running %s' % view_fn)
       response['status'] = -1
       response['message'] = smart_unicode(e)
@@ -73,7 +72,7 @@ def get_users(request):
       try:
         group = Group.objects.get(name=groupname)
         group_ids.append(group.id)
-      except Group.DoesNotExist, e:
+      except Group.DoesNotExist as e:
         LOG.exception("Failed to filter by group, group with name %s not found." % groupname)
     users = users.filter(groups__in=group_ids)
 

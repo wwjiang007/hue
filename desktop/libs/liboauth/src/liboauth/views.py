@@ -15,24 +15,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from future import standard_library
+standard_library.install_aliases()
 try:
   import oauth2 as oauth
 except:
   oauth = None
- 
+
 import logging
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import httplib2
 
 import django.contrib.auth.views
 from django.core import urlresolvers
 from django.core.exceptions import SuspiciousOperation
 from django.contrib.auth import login, get_backends, authenticate
-from django.contrib.auth.models import User
 from django.contrib.sessions.models import Session
 from django.http import HttpResponseRedirect
 from django.utils.translation import ugettext as _
 from hadoop.fs.exceptions import WebHdfsException
+from useradmin.models import User
 from useradmin.views import ensure_home_directory
 
 from desktop.auth.backend import AllowFirstUserDjangoBackend
@@ -75,10 +77,10 @@ def oauth_login(request):
 
   return HttpResponseRedirect(url)
 
-  
+
 @login_notrequired
 def oauth_authenticated(request):
-   
+
   access_token, next = OAuthBackend.handleAuthenticationRequest(request)
   if access_token == "":
       return show_login_page(request, True)

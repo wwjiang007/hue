@@ -15,6 +15,7 @@
 # limitations under the License.
 from __future__ import absolute_import
 
+from builtins import object
 import stat
 import posixpath
 
@@ -22,8 +23,8 @@ from aws.s3 import s3datetime_to_timestamp
 
 
 class S3Stat(object):
-  DIR_MODE = 0777 | stat.S_IFDIR
-  FILE_MODE = 0666 | stat.S_IFREG
+  DIR_MODE = 0o777 | stat.S_IFDIR
+  FILE_MODE = 0o666 | stat.S_IFREG
 
   def __init__(self, name, path, isDir, size, mtime):
     self.name = name
@@ -67,17 +68,17 @@ class S3Stat(object):
     return False
 
   @classmethod
-  def from_bucket(cls, bucket):
-    return cls(bucket.name, 's3a://%s' % bucket.name, True, 0, None)
+  def from_bucket(cls, bucket, fs='s3a'):
+    return cls(bucket.name, '%s://%s' % (fs, bucket.name), True, 0, None)
 
   @classmethod
-  def from_key(cls, key, is_dir=False):
+  def from_key(cls, key, is_dir=False, fs='s3a'):
     if key.name:
       name = posixpath.basename(key.name[:-1] if key.name[-1] == '/' else key.name)
-      path = 's3a://%s/%s' % (key.bucket.name, key.name)
+      path = '%s://%s/%s' % (fs, key.bucket.name, key.name)
     else:
       name = ''
-      path = 's3a://%s' % key.bucket.name
+      path = '%s://%s' % (fs, key.bucket.name)
 
     size = key.size or 0
 

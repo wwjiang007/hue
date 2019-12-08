@@ -17,7 +17,9 @@
 from django.template.defaultfilters import date, time
 from django.utils.translation import ugettext as _
 
+from desktop.lib.django_util import USERNAME_RE_RULE
 from desktop.views import commonheader, commonfooter, antixss
+from desktop.auth.backend import is_admin
 %>
 
 <%namespace name="actionbar" file="actionbar.mako" />
@@ -38,12 +40,12 @@ ${layout.menubar(section='users')}
           <input type="text" class="input-xlarge search-query filter-input" placeholder="${_('Search for name, group, etc...')}">
       </%def>
       <%def name="actions()">
-        %if user.is_superuser:
+        %if is_admin(user):
             <button class="btn delete-user-btn" title="${_('Delete')}" disabled="disabled"><i class="fa fa-trash-o"></i> ${_('Delete')}</button>
         %endif
       </%def>
       <%def name="creation()">
-        %if user.is_superuser:
+        %if is_admin(user):
             % if not is_ldap_setup:
               <a href="${ url('useradmin.views.edit_user') }" class="btn"><i class="fa fa-user"></i> ${_('Add user')}</a>
             %endif
@@ -67,7 +69,7 @@ ${layout.menubar(section='users')}
     <table class="table table-condensed datatables">
       <thead>
       <tr>
-        %if user.is_superuser:
+        %if is_admin(user):
             <th width="1%">
               <div class="select-all hue-checkbox fa"></div>
             </th>
@@ -84,13 +86,13 @@ ${layout.menubar(section='users')}
           % for listed_user in users:
           <tr class="tableRow"
               data-search="${listed_user.username}${listed_user.first_name}${listed_user.last_name}${listed_user.email}${', '.join([group.name for group in listed_user.groups.all()])}">
-          %if user.is_superuser:
+          %if is_admin(user):
               <td data-row-selector-exclude="true">
                 <div class="hue-checkbox userCheck fa" data-row-selector-exclude="true" data-id="${ listed_user.id }"></div>
               </td>
           %endif
           <td>
-            %if user.is_superuser or user.username == listed_user.username:
+            %if is_admin(user) or user.username == listed_user.username:
               <strong><a title="${_('Edit %(username)s') % dict(username=listed_user.username)}"
                          href="${ url('useradmin.views.edit_user', username=listed_user.username) }"
                          data-row-selector="true">${listed_user.username}</a></strong>
@@ -168,7 +170,7 @@ ${layout.menubar(section='users')}
       "bInfo": false,
       "bFilter": true,
       "aoColumns": [
-        %if user.is_superuser:
+        %if is_admin(user):
             { "bSortable": false },
         %endif
         null,
@@ -198,20 +200,20 @@ ${layout.menubar(section='users')}
     $usersComponents.find('.delete-user form').ajaxForm({
       dataType:  'json',
       success: function(data) {
+        $usersComponents.find(".delete-user").modal("hide");
+        $.jHueNotify.info("${ _('The users were deleted.') }")
         if (data && data.url){
           huePubSub.publish('open.link', data.url);
         }
-        $.jHueNotify.info("${ _('The users were deleted.') }")
-        $usersComponents.find(".delete-user").modal("hide");
       },
       error: function(response, status, err) {
+        $usersComponents.find(".delete-user").modal("hide");
         if (response.responseJSON && response.responseJSON.message && response.status == 401) {
           $.jHueNotify.error(response.responseJSON.message);
         }
         else {
           $.jHueNotify.error("${ _('An unknown error has occurred while deleting the user. Please try again.') }");
         }
-        $usersComponents.find(".delete-user").modal("hide");
       }
     });
     % endif
@@ -241,13 +243,16 @@ ${layout.menubar(section='users')}
                 renderUseradminErrors(data.errors);
               }
               else if (data && data.url) {
-                huePubSub.publish('open.link', data.url);
-                $.jHueNotify.info("${ _('The users and groups were updated correctly.') }")
                 $usersComponents.find(".sync-ldap").modal("hide");
+                $.jHueNotify.info("${ _('The users and groups were updated correctly.') }");
+                huePubSub.publish('open.link', data.url);
               }
             },
             error: function(data) {
               $usersComponents.find('input[type="submit"]').removeAttr("disabled");
+              $usersComponents.find(".sync-ldap").modal("hide");
+              $.jHueNotify.error(data.responseJSON['message']);
+              huePubSub.publish('open.link', data.url);
             }
           });
           % endif

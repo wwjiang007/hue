@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import logging
+import os
 
 from subprocess import CalledProcessError
 
@@ -23,9 +24,10 @@ from django.utils.translation import ugettext_lazy as _t
 
 from desktop.conf import AUTH_USERNAME as DEFAULT_AUTH_USERNAME, CLUSTER_ID as DEFAULT_CLUSTER_ID
 from desktop.lib.conf import Config, ConfigSection, coerce_bool, coerce_password_from_script
-from desktop.lib.paths import get_config_root
+from desktop.lib.paths import get_config_root, get_desktop_root
 
 from metadata.settings import DJANGO_APPS
+from metadata.catalog import atlas_flags
 
 
 OPTIMIZER_AUTH_PASSWORD = None
@@ -38,11 +40,21 @@ def get_auth_username():
   """Get from top level default from desktop"""
   return DEFAULT_AUTH_USERNAME.get()
 
+def default_catalog_url():
+  """Get from main Hue config directory if present"""
+  return atlas_flags.get_api_url() if atlas_flags.get_api_url() else None
+
+def default_catalog_config_dir():
+  """Get from usual main Hue config directory"""
+  return os.environ.get("HUE_CONF_DIR", get_desktop_root("conf")) + '/hive-conf'
+
+def default_catalog_interface():
+  """Detect if the configured catalog is Navigator or default to Atlas"""
+  return 'atlas' if atlas_flags.get_api_url() else 'navigator'
 
 def default_navigator_config_dir():
   """Get from usual main Hue config directory"""
   return get_config_root()
-
 
 def default_navigator_url():
   """Get from usual main Hue config directory"""
@@ -56,21 +68,16 @@ def get_optimizer_url():
 def has_optimizer():
   return bool(OPTIMIZER.AUTH_KEY_ID.get())
 
-
-def get_navigator_url():
-  return NAVIGATOR.API_URL.get() and NAVIGATOR.API_URL.get().strip('/')[:-3]
-
-def has_navigator(user):
-  return bool(get_navigator_url() and get_navigator_auth_password()) \
-      and (user.is_superuser or user.has_hue_permission(action="access", app=DJANGO_APPS[0]))
+def has_workload_analytics():
+  # Note: unused
+  return bool(ALTUS.AUTH_KEY_ID.get()) and ALTUS.HAS_WA.get()
 
 
 def get_security_default():
-  '''Get default security value from Hadoop'''
-  from hadoop import cluster # Avoid dependencies conflicts
-  cluster = cluster.get_yarn()
+  '''Get if Sentry is available so that we filter the objects or not'''
+  from libsentry.conf import is_enabled
 
-  return cluster.SECURITY_ENABLED.get()
+  return is_enabled()
 
 
 def get_optimizer_password_script():
@@ -87,6 +94,10 @@ OPTIMIZER = ConfigSection(
   key='optimizer',
   help=_t("""Configuration options for Optimizer API"""),
   members=dict(
+    INTERFACE=Config(
+      key='interface',
+      help=_t('Type of Optimizer connector to query, e.g. optimizer, dummy'),
+      default='optimizer'),
     HOSTNAME=Config(
       key='hostname',
       help=_t('Hostname to Optimizer API or compatible service.'),
@@ -158,9 +169,153 @@ OPTIMIZER = ConfigSection(
 )
 
 
+ALTUS = ConfigSection(
+  key='altus',
+  help=_t("""Configuration options for Altus API"""),
+  members=dict(
+    HOSTNAME=Config(
+      key='hostname',
+      help=_t('Hostname prefix to Altus API or compatible service.'),
+      default='sdxapi.us-west-1.altus.cloudera.com'),
+    HOSTNAME_ANALYTICDB=Config(
+      key='hostname_analyticdb',
+      help=_t('Hostname prefix to Altus ADB API or compatible service.'),
+      default='analyticdbapi.us-west-1.altus.cloudera.com'),
+    HOSTNAME_DATAENG=Config(
+      key='hostname_dataeng',
+      help=_t('Hostname prefix to Altus DE API or compatible service.'),
+      default='dataengapi.us-west-1.altus.cloudera.com'),
+    HOSTNAME_WA=Config(
+      key='hostname_wa',
+      help=_t('Hostname prefix to Altus WA API or compatible service.'),
+      default='waapi.us-west-1.altus.cloudera.com'),
+    HAS_WA = Config(
+      key="has_wa",
+      help=_t("Switch to turn on workload analytics insights."),
+      default=True,
+      type=coerce_bool),
+    AUTH_KEY_ID=Config(
+      key="auth_key_id",
+      help=_t("The name of the key of the service."),
+      private=False,
+      default=None),
+    AUTH_KEY_SECRET=Config(
+      key="auth_key_secret",
+      help=_t("The private part of the key associated with the auth_key."),
+      private=True,
+      default=None)
+  )
+)
+
+K8S = ConfigSection(
+  key='k8s',
+  help=_t("""Configuration options for Kubernetes API"""),
+  members=dict(
+    API_URL=Config(
+      key='api_url',
+      help=_t('API URL to Kubernetes API or compatible service.'),
+      default='http://provisioner.com/'),
+  )
+)
+
+DEFAULT_PUBLIC_KEY = Config(
+  key="default_publick_key",
+  help=_t("Public key used for cluster creation."),
+  type=str,
+  default=''
+)
+
+# Data Catalog
+
+def get_catalog_url():
+  return (CATALOG.API_URL.get() and CATALOG.API_URL.get().strip('/')) or (CATALOG.INTERFACE.get() == 'navigator' and get_navigator_url())
+
+def has_catalog(user):
+  from desktop.auth.backend import is_admin
+  return (
+      bool(get_catalog_url()) or has_navigator(user)
+    ) and (
+      is_admin(user) or user.has_hue_permission(action="access", app=DJANGO_APPS[0])
+    )
+
+def has_readonly_catalog(user):
+  return has_catalog(user) and not has_navigator(user)
+
+def get_catalog_search_cluster():
+  return CATALOG.SEARCH_CLUSTER.get()
+
+def get_kerberos_enabled_default():
+  '''Use atlas.authentication.method.kerberos if catalog interface is atlas else False '''
+  return atlas_flags.is_kerberos_enabled() if CATALOG.INTERFACE.get() == 'atlas' else False
+
+def get_catalog_server_password_script():
+  '''Execute script at path'''
+  return CATALOG.SERVER_PASSWORD_SCRIPT.get()
+
+
+CATALOG = ConfigSection(
+  key='catalog',
+  help=_t("""Configuration options for Catalog API"""),
+  members=dict(
+    INTERFACE=Config(
+      key='interface',
+      help=_t('Type of Catalog to connect to, e.g. Apache Atlas, Navigator...'),
+      dynamic_default=default_catalog_interface),
+    API_URL=Config(
+      key='api_url',
+      help=_t('Base URL to Catalog API.'),
+      dynamic_default=default_catalog_url),
+    SERVER_USER=Config(
+      key="server_user",
+      help=_t("Username of the CM user used for authentication."),
+      dynamic_default=get_auth_username),
+    SERVER_PASSWORD=Config(
+      key="server_password",
+      help=_t("Password of the user used for authentication."),
+      private=True,
+      dynamic_default=get_catalog_server_password_script),
+    SERVER_PASSWORD_SCRIPT=Config(
+      key="server_password_script",
+      help=_t("Execute this script to produce the server password secret. This will be used when `server_password` is not set."),
+      private=True,
+      type=coerce_password_from_script,
+      default=None),
+    SEARCH_CLUSTER=Config(
+      key="search_cluster",
+      help=_t("Limits found entities to a specific cluster."),
+      default=None),
+    FETCH_SIZE_SEARCH_INTERACTIVE = Config(
+      key="fetch_size_search_interactive",
+      help=_t("Max number of items to fetch in one call in object search autocomplete."),
+      default=25,
+      type=int
+    ),
+    KERBEROS_ENABLED=Config(
+      key="kerberos_enabled",
+      help=_t("Set to true when authenticating via kerberos instead of username/password"),
+      type=coerce_bool,
+      dynamic_default=get_kerberos_enabled_default
+    ),
+    CONF_DIR=Config(
+      key="conf_dir",
+      help=_t("Directory of the configuration. Defaults to HUE_CONF_DIR/hue-conf"),
+      dynamic_default=default_catalog_config_dir
+    )
+  )
+)
+
+# Navigator is deprecated over generic Catalog above
+
+def get_navigator_url():
+  return NAVIGATOR.API_URL.get() and NAVIGATOR.API_URL.get().strip('/')[:-3]
+
+def has_navigator(user):
+  from desktop.auth.backend import is_admin
+  return bool(get_navigator_url() and get_navigator_auth_password()) \
+      and (is_admin(user) or user.has_hue_permission(action="access", app=DJANGO_APPS[0]))
+
 def get_navigator_auth_type():
   return NAVIGATOR.AUTH_TYPE.get().lower()
-
 
 def get_navigator_auth_username():
   '''Get the username to authenticate with.'''
@@ -201,9 +356,8 @@ def get_navigator_saml_password():
   '''Get default password from secured file'''
   return NAVIGATOR.AUTH_SAML_PASSWORD_SCRIPT.get()
 
-
-def has_navigator_file_search(user):
-  return has_navigator(user) and NAVIGATOR.ENABLE_FILE_SEARCH.get()
+def has_catalog_file_search(user):
+  return has_catalog(user) and NAVIGATOR.ENABLE_FILE_SEARCH.get()
 
 
 NAVIGATOR = ConfigSection(
@@ -300,6 +454,7 @@ NAVIGATOR = ConfigSection(
   )
 )
 
+# Administration configs
 
 MANAGER = ConfigSection(
   key='manager',
@@ -312,6 +467,17 @@ MANAGER = ConfigSection(
   )
   # username comes from get_navigator_auth_username()
   # password comes from get_navigator_auth_password()
+)
+
+PROMETHEUS = ConfigSection(
+  key='prometheus',
+  help=_t("""Configuration options for Prometheus API"""),
+  members=dict(
+    API_URL=Config(
+      key='api_url',
+      help=_t('Base URL to API.'),
+      default=None),
+  )
 )
 
 

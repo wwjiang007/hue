@@ -15,108 +15,216 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import logging
 import re
+import sys
 import threading
 import time
+import json
 
+from django.core.cache import caches
 from django.urls import reverse
-from django.utils.encoding import force_unicode
 from django.utils.translation import ugettext as _
+from kazoo.client import KazooClient
 
+from desktop.conf import CLUSTER_ID, has_connectors
 from desktop.lib.django_util import format_preserving_redirect
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.parameterization import substitute_variables
-from desktop.models import Cluster, ANALYTIC_DB
 from desktop.lib.view_util import location_to_url
+from desktop.models import Cluster
+from desktop.settings import CACHES_HIVE_DISCOVERY_KEY
 from indexer.file_format import HiveFormat
+from libzookeeper import conf as libzookeeper_conf
 
 from beeswax import hive_site
-from beeswax.conf import HIVE_SERVER_HOST, HIVE_SERVER_PORT, LIST_PARTITIONS_LIMIT, SERVER_CONN_TIMEOUT, \
-  AUTH_USERNAME, AUTH_PASSWORD, APPLY_NATURAL_SORT_MAX, QUERY_PARTITIONS_LIMIT
+from beeswax.conf import HIVE_SERVER_HOST, HIVE_SERVER_PORT, HIVE_SERVER_HOST, HIVE_HTTP_THRIFT_PORT, HIVE_METASTORE_HOST, HIVE_METASTORE_PORT, LIST_PARTITIONS_LIMIT, SERVER_CONN_TIMEOUT, \
+  AUTH_USERNAME, AUTH_PASSWORD, APPLY_NATURAL_SORT_MAX, QUERY_PARTITIONS_LIMIT, HIVE_DISCOVERY_HIVESERVER2_ZNODE, \
+  HIVE_DISCOVERY_HS2, HIVE_DISCOVERY_LLAP, HIVE_DISCOVERY_LLAP_HA, HIVE_DISCOVERY_LLAP_ZNODE, CACHE_TIMEOUT, \
+  LLAP_SERVER_HOST, LLAP_SERVER_PORT, LLAP_SERVER_THRIFT_PORT, USE_SASL as HIVE_USE_SASL
 from beeswax.common import apply_natural_sort
 from beeswax.design import hql_query
 from beeswax.hive_site import hiveserver2_use_ssl
 from beeswax.models import QueryHistory, QUERY_TYPES
 
 
-LOG = logging.getLogger(__name__)
+if sys.version_info[0] > 2:
+    from django.utils.encoding import force_text as force_unicode
+else:
+    from django.utils.encoding import force_unicode
 
+
+LOG = logging.getLogger(__name__)
 
 DBMS_CACHE = {}
 DBMS_CACHE_LOCK = threading.Lock()
+cache = caches[CACHES_HIVE_DISCOVERY_KEY]
+
+# Using file cache to make sure eventlet threads are uniform, this cache is persistent on startup
+# So we clear it to make sure the server resets hiveserver2 host.
+cache.clear()
 
 
-def get(user, query_server=None):
+def get(user, query_server=None, cluster=None):
   global DBMS_CACHE
   global DBMS_CACHE_LOCK
 
   if query_server is None:
-    cluster_type = Cluster(user).get_type()
-    if cluster_type == ANALYTIC_DB:
-      kwargs = {'name': 'impala'}
-    else:
-      kwargs = {}
-    query_server = get_query_server_config(**kwargs)
+    query_server = get_query_server_config(connector=cluster)
 
   DBMS_CACHE_LOCK.acquire()
   try:
-    DBMS_CACHE.setdefault(user.username, {})
+    DBMS_CACHE.setdefault(user.id, {})
 
-    if query_server['server_name'] not in DBMS_CACHE[user.username]:
+    if query_server['server_name'] not in DBMS_CACHE[user.id]:
       # Avoid circular dependency
       from beeswax.server.hive_server2_lib import HiveServerClientCompatible
 
-      if query_server['server_name'] == 'impala':
+      if query_server['server_name'].startswith('impala'):
         from impala.dbms import ImpalaDbms
         from impala.server import ImpalaServerClient
-        DBMS_CACHE[user.username][query_server['server_name']] = ImpalaDbms(HiveServerClientCompatible(ImpalaServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
+        DBMS_CACHE[user.id][query_server['server_name']] = ImpalaDbms(HiveServerClientCompatible(ImpalaServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
+      elif query_server['server_name'] == 'hms':
+        from beeswax.server.hive_metastore_server import HiveMetastoreClient
+        DBMS_CACHE[user.id][query_server['server_name']] = HiveServer2Dbms(HiveMetastoreClient(query_server, user), QueryHistory.SERVER_TYPE[1][0])
       else:
         from beeswax.server.hive_server2_lib import HiveServerClient
-        DBMS_CACHE[user.username][query_server['server_name']] = HiveServer2Dbms(HiveServerClientCompatible(HiveServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
+        DBMS_CACHE[user.id][query_server['server_name']] = HiveServer2Dbms(HiveServerClientCompatible(HiveServerClient(query_server, user)), QueryHistory.SERVER_TYPE[1][0])
 
-    return DBMS_CACHE[user.username][query_server['server_name']]
+    return DBMS_CACHE[user.id][query_server['server_name']]
   finally:
     DBMS_CACHE_LOCK.release()
 
 
-def get_query_server_config(name='beeswax', server=None):
-  if name == 'impala':
-    from impala.dbms import get_query_server_config as impala_query_server_config
-    query_server = impala_query_server_config()
+def get_query_server_config(name='beeswax', connector=None):
+  if connector and has_connectors(): # TODO: Give empty connector when no connector in use
+    query_server = get_query_server_config_via_connector(connector)
   else:
-    kerberos_principal = hive_site.get_hiveserver2_kerberos_principal(HIVE_SERVER_HOST.get())
+    LOG.debug("Query cluster %s" % name)
+    if name == "llap":
+      activeEndpoint = cache.get('llap')
+      if activeEndpoint is None:
+        if HIVE_DISCOVERY_LLAP.get():
+          LOG.debug("Checking zookeeper for Hive Server Interactive endpoint")
+          zk = KazooClient(hosts=libzookeeper_conf.ENSEMBLE.get(), read_only=True)
+          zk.start()
+          if HIVE_DISCOVERY_LLAP_HA.get():
+            znode = "{0}/instances".format(HIVE_DISCOVERY_LLAP_ZNODE.get())
+            LOG.debug("Setting up LLAP with the following node {0}".format(znode))
+            if zk.exists(znode):
+              hiveservers = zk.get_children(znode)
+              for server in hiveservers:
+                llap_servers= json.loads(zk.get("{0}/{1}".format(znode, server))[0])["internal"][0]
+                if llap_servers["api"] == "activeEndpoint":
+                  cache.set("llap", json.dumps({"host": llap_servers["addresses"][0]["host"], "port": llap_servers["addresses"][0]["port"]}), CACHE_TIMEOUT.get())
+            else:
+              LOG.error("LLAP Endpoint not found, reverting to HiveServer2")
+              cache.set("llap", json.dumps({"host": HIVE_SERVER_HOST.get(), "port": HIVE_HTTP_THRIFT_PORT.get()}), CACHE_TIMEOUT.get())
+          else:
+            znode = "{0}".format(HIVE_DISCOVERY_LLAP_ZNODE.get())
+            LOG.debug("Setting up LLAP with the following node {0}".format(znode))
+            if zk.exists(znode):
+              hiveservers = zk.get_children(znode)
+              for server in hiveservers:
+                cache.set("llap", json.dumps({"host": server.split(';')[0].split('=')[1].split(":")[0], "port": server.split(';')[0].split('=')[1].split(":")[1]}))
+          zk.stop()
+        else:
+          LOG.debug("Zookeeper Discovery not enabled, reverting to config values")
+          cache.set("llap", json.dumps({"host": LLAP_SERVER_HOST.get(), "port": LLAP_SERVER_THRIFT_PORT.get()}), CACHE_TIMEOUT.get())
+      activeEndpoint = json.loads(cache.get("llap"))
+    elif name != 'hms' and name != 'impala':
+      activeEndpoint = cache.get("hiveserver2")
+      if activeEndpoint is None:
+        if HIVE_DISCOVERY_HS2.get():
+          zk = KazooClient(hosts=libzookeeper_conf.ENSEMBLE.get(), read_only=True)
+          zk.start()
+          znode = HIVE_DISCOVERY_HIVESERVER2_ZNODE.get()
+          LOG.info("Setting up Hive with the following node {0}".format(znode))
+          if zk.exists(znode):
+            hiveservers = zk.get_children(znode)
+            server_to_use = 0 # if CONF.HIVE_SPREAD.get() randint(0, len(hiveservers)-1) else 0
+            cache.set("hiveserver2", json.dumps({"host": hiveservers[server_to_use].split(";")[0].split("=")[1].split(":")[0], "port": hiveservers[server_to_use].split(";")[0].split("=")[1].split(":")[1]}))
+          else:
+            cache.set("hiveserver2", json.dumps({"host": HIVE_SERVER_HOST.get(), "port": HIVE_HTTP_THRIFT_PORT.get()}))
+          zk.stop()
+        else:
+          cache.set("hiveserver2", json.dumps({"host": HIVE_SERVER_HOST.get(), "port": HIVE_HTTP_THRIFT_PORT.get()}))
+      activeEndpoint = json.loads(cache.get("hiveserver2"))
 
-    query_server = {
-        'server_name': name,
-        'server_host': HIVE_SERVER_HOST.get(),
-        'server_port': HIVE_SERVER_PORT.get(),
-        'principal': kerberos_principal,
-        'http_url': '%(protocol)s://%(host)s:%(port)s/%(end_point)s' % {
-            'protocol': 'https' if hiveserver2_use_ssl() else 'http',
-            'host': HIVE_SERVER_HOST.get(),
-            'port': hive_site.hiveserver2_thrift_http_port(),
-            'end_point': hive_site.hiveserver2_thrift_http_path()
-        },
-        'transport_mode': 'http' if hive_site.hiveserver2_transport_mode() == 'HTTP' else 'socket',
-        'auth_username': AUTH_USERNAME.get(),
-        'auth_password': AUTH_PASSWORD.get()
-    }
+    if name == 'impala':
+      from impala.dbms import get_query_server_config as impala_query_server_config
+      query_server = impala_query_server_config()
+    elif name == 'hms':
+      kerberos_principal = hive_site.get_hiveserver2_kerberos_principal(HIVE_SERVER_HOST.get())
+      query_server = {
+          'server_name': 'hms',
+          'server_host': HIVE_METASTORE_HOST.get() if not cluster_config else cluster_config.get('server_host'),
+          'server_port': HIVE_METASTORE_PORT.get(),
+          'principal': kerberos_principal,
+          'transport_mode': 'http' if hive_site.hiveserver2_transport_mode() == 'HTTP' else 'socket',
+          'auth_username': AUTH_USERNAME.get(),
+          'auth_password': AUTH_PASSWORD.get(),
+          'use_sasl': HIVE_USE_SASL.get()
+      }
+    else:
+      kerberos_principal = hive_site.get_hiveserver2_kerberos_principal(HIVE_SERVER_HOST.get())
+      query_server = {
+          'server_name': 'beeswax',
+          'server_host': activeEndpoint["host"],
+          'server_port': LLAP_SERVER_PORT.get() if name == 'llap' else HIVE_SERVER_PORT.get(),
+          'principal': kerberos_principal,
+          'http_url': '%(protocol)s://%(host)s:%(port)s/%(end_point)s' % {
+              'protocol': 'https' if hiveserver2_use_ssl() else 'http',
+              'host': activeEndpoint["host"],
+              'port': activeEndpoint["port"],
+              'end_point': hive_site.hiveserver2_thrift_http_path()
+            },
+          'transport_mode': 'http' if hive_site.hiveserver2_transport_mode() == 'HTTP' else 'socket',
+          'auth_username': AUTH_USERNAME.get(),
+          'auth_password': AUTH_PASSWORD.get(),
+          'use_sasl': HIVE_USE_SASL.get()
+        }
 
-  if name == 'sparksql': # Spark SQL is almost the same as Hive
-    from spark.conf import SQL_SERVER_HOST as SPARK_SERVER_HOST, SQL_SERVER_PORT as SPARK_SERVER_PORT
+    if name == 'sparksql': # Extends Hive as very similar
+      from spark.conf import SQL_SERVER_HOST as SPARK_SERVER_HOST, SQL_SERVER_PORT as SPARK_SERVER_PORT, USE_SASL as SPARK_USE_SASL
 
-    query_server.update({
-        'server_name': 'sparksql',
-        'server_host': SPARK_SERVER_HOST.get(),
-        'server_port': SPARK_SERVER_PORT.get()
-    })
+      query_server.update({
+          'server_name': 'sparksql',
+          'server_host': SPARK_SERVER_HOST.get(),
+          'server_port': SPARK_SERVER_PORT.get(),
+          'use_sasl': SPARK_USE_SASL.get()
+      })
 
   debug_query_server = query_server.copy()
-  debug_query_server['auth_password_used'] = bool(debug_query_server.pop('auth_password'))
+  debug_query_server['auth_password_used'] = bool(debug_query_server.pop('auth_password', None))
   LOG.debug("Query Server: %s" % debug_query_server)
 
   return query_server
+
+
+def get_query_server_config_via_connector(connector):
+  connector_name = full_connector_name = connector['type']
+  compute_name = None
+  if connector.get('compute'):
+    compute_name = connector['compute']['name']
+    full_connector_name = '%s-%s' % (connector_name, compute_name)
+  LOG.debug("Query cluster connector %s compute %s" % (connector_name, compute_name))
+
+  return {
+      'server_name': full_connector_name,
+      'server_host': (connector['compute']['options'] if 'compute' in connector else connector['options'])['server_host'],
+      'server_port': int((connector['compute']['options'] if 'compute' in connector else connector['options'])['server_port']),
+      'principal': 'TODO',
+      'auth_username': AUTH_USERNAME.get(),
+      'auth_password': AUTH_PASSWORD.get(),
+
+      'impersonation_enabled': False, # TODO, Impala only, to add to connector class
+      'use_sasl': connector['dialect'] in ('impala', 'hive'),
+      'SESSION_TIMEOUT_S': 15 * 60,
+      'querycache_rows': 1000,
+      'QUERY_TIMEOUT_S': 15 * 60,
+  }
 
 
 class QueryServerException(Exception):
@@ -168,7 +276,7 @@ class HiveServer2Dbms(object):
 
   def alter_database(self, database, properties):
     hql = 'ALTER database `%s` SET DBPROPERTIES (' % database
-    hql += ', '.join(["'%s'='%s'" % (k, v) for k, v in properties.items()])
+    hql += ', '.join(["'%s'='%s'" % (k, v) for k, v in list(properties.items())])
     hql += ');'
 
     timeout = SERVER_CONN_TIMEOUT.get()
@@ -213,7 +321,7 @@ class HiveServer2Dbms(object):
   def get_table(self, database, table_name):
     try:
       return self.client.get_table(database, table_name)
-    except QueryServerException, e:
+    except QueryServerException as e:
       LOG.debug("Seems like %s.%s could be a Kudu table" % (database, table_name))
       if 'java.lang.ClassNotFoundException' in e.message and [prop for prop in self.get_table_properties(database, table_name, property_name='storage_handler').rows() if 'KuduStorageHandler' in prop[0]]:
         query_server = get_query_server_config('impala')
@@ -241,7 +349,7 @@ class HiveServer2Dbms(object):
     elif comment is not None:
       hql += " SET TBLPROPERTIES ('comment' = '%s')" % comment
     elif tblproperties:
-      hql += " SET TBLPROPERTIES (%s)" % ' ,'.join("'%s' = '%s'" % (k, v) for k, v in tblproperties.items())
+      hql += " SET TBLPROPERTIES (%s)" % ' ,'.join("'%s' = '%s'" % (k, v) for k, v in list(tblproperties.items()))
 
     timeout = SERVER_CONN_TIMEOUT.get()
     query = hql_query(hql)
@@ -312,7 +420,7 @@ class HiveServer2Dbms(object):
 
 
   def execute_statement(self, hql):
-    if self.server_name == 'impala':
+    if self.server_name.startswith('impala'):
       query = hql_query(hql, QUERY_TYPES[1])
     else:
       query = hql_query(hql, QUERY_TYPES[0])
@@ -353,28 +461,42 @@ class HiveServer2Dbms(object):
 
   def cancel_operation(self, query_handle):
     resp = self.client.cancel_operation(query_handle)
-    if self.client.query_server['server_name'] == 'impala':
+    if self.client.query_server['server_name'].startswith('impala'):
       resp = self.client.close_operation(query_handle)
     return resp
 
 
-  def get_sample(self, database, table, column=None, nested=None, limit=100, generate_sql_only=False):
+  def get_sample(self, database, table, column=None, nested=None, limit=100, generate_sql_only=False, operation=None):
     result = None
     hql = None
 
     # Filter on max # of partitions for partitioned tables
     column = '`%s`' % column if column else '*'
     if table.partition_keys:
-      hql = self._get_sample_partition_query(database, table, column, limit)
-    elif self.server_name == 'impala':
+      hql = self._get_sample_partition_query(database, table, column, limit, operation)
+    elif self.server_name.startswith('impala'):
       if column or nested:
         from impala.dbms import ImpalaDbms
         select_clause, from_clause = ImpalaDbms.get_nested_select(database, table.name, column, nested)
-        hql = 'SELECT %s FROM %s LIMIT %s;' % (select_clause, from_clause, limit)
+        if operation == 'distinct':
+          hql = 'SELECT DISTINCT %s FROM %s LIMIT %s;' % (select_clause, from_clause, limit)
+        elif operation == 'max':
+          hql = 'SELECT max(%s) FROM %s;' % (select_clause, from_clause)
+        elif operation == 'min':
+          hql = 'SELECT min(%s) FROM %s;' % (select_clause, from_clause)
+        else:
+          hql = 'SELECT %s FROM %s LIMIT %s;' % (select_clause, from_clause, limit)
       else:
         hql = "SELECT * FROM `%s`.`%s` LIMIT %s;" % (database, table.name, limit)
     else:
-      hql = "SELECT %s FROM `%s`.`%s` LIMIT %s;" % (column, database, table.name, limit)
+      if operation == 'distinct':
+        hql = "SELECT DISTINCT %s FROM `%s`.`%s` LIMIT %s;" % (column, database, table.name, limit)
+      if operation == 'max':
+        hql = "SELECT max(%s) FROM `%s`.`%s`;" % (column, database, table.name)
+      if operation == 'min':
+        hql = "SELECT min(%s) FROM `%s`.`%s`;" % (column, database, table.name)
+      else:
+        hql = "SELECT %s FROM `%s`.`%s` LIMIT %s;" % (column, database, table.name, limit)
       # TODO: Add nested select support for HS2
 
     if hql:
@@ -391,7 +513,7 @@ class HiveServer2Dbms(object):
     return result
 
 
-  def _get_sample_partition_query(self, database, table, column='*', limit=100):
+  def _get_sample_partition_query(self, database, table, column='*', limit=100, operation=None):
     max_parts = QUERY_PARTITIONS_LIMIT.get()
     partitions = self.get_partitions(database, table, partition_spec=None, max_parts=max_parts)
 
@@ -403,12 +525,21 @@ class HiveServer2Dbms(object):
     else:
       partition_clause = ''
 
-    return "SELECT %(column)s FROM `%(database)s`.`%(table)s` %(partition_clause)s LIMIT %(limit)s" % \
-      {'column': column, 'database': database, 'table': table.name, 'partition_clause': partition_clause, 'limit': limit}
+    if operation == 'distinct':
+      prefix = 'SELECT DISTINCT %s' % column
+    elif operation == 'max':
+      prefix = 'SELECT max(%s)' % column
+    elif operation == 'min':
+      prefix = 'SELECT min(%s)' % column
+    else:
+      prefix = 'SELECT %s' % column
+
+    return prefix + " FROM `%(database)s`.`%(table)s` %(partition_clause)s LIMIT %(limit)s" % \
+      {'database': database, 'table': table.name, 'partition_clause': partition_clause, 'limit': limit}
 
 
   def analyze_table(self, database, table):
-    if self.server_name == 'impala':
+    if self.server_name.startswith('impala'):
       hql = 'COMPUTE STATS `%(database)s`.`%(table)s`' % {'database': database, 'table': table}
     else:
       table_obj = self.get_table(database, table)
@@ -424,7 +555,7 @@ class HiveServer2Dbms(object):
 
 
   def analyze_table_columns(self, database, table):
-    if self.server_name == 'impala':
+    if self.server_name.startswith('impala'):
       hql = 'COMPUTE STATS `%(database)s`.`%(table)s`' % {'database': database, 'table': table}
     else:
       table_obj = self.get_table(database, table)
@@ -439,7 +570,7 @@ class HiveServer2Dbms(object):
   def get_table_stats(self, database, table):
     stats = []
 
-    if self.server_name == 'impala':
+    if self.server_name.startswith('impala'):
       hql = 'SHOW TABLE STATS `%(database)s`.`%(table)s`' % {'database': database, 'table': table}
 
       query = hql_query(hql)
@@ -457,7 +588,7 @@ class HiveServer2Dbms(object):
 
 
   def get_table_columns_stats(self, database, table, column):
-    if self.server_name == 'impala':
+    if self.server_name.startswith('impala'):
       hql = 'SHOW COLUMN STATS `%(database)s`.`%(table)s`' % {'database': database, 'table': table}
     else:
       hql = 'DESCRIBE FORMATTED `%(database)s`.`%(table)s` `%(column)s`' % {'database': database, 'table': table, 'column': column}
@@ -470,7 +601,7 @@ class HiveServer2Dbms(object):
       self.close(handle)
       data = list(result.rows())
 
-      if self.server_name == 'impala':
+      if self.server_name.startswith('impala'):
         if column == -1: # All the columns
           return [self._extract_impala_column(col) for col in data]
         else:
@@ -689,11 +820,11 @@ class HiveServer2Dbms(object):
         LOG.debug("Moved results from %s to %s" % (result_meta.table_dir, table_loc))
         request.info(request, _('Saved query results as new table %(table)s.') % {'table': target_table})
         query_history.save_state(QueryHistory.STATE.expired)
-      except Exception, ex:
+      except Exception as ex:
         query = hql_query('DROP TABLE `%s`' % target_table)
         try:
           self.execute_and_wait(query)
-        except Exception, double_trouble:
+        except Exception as double_trouble:
           LOG.exception('Failed to drop table "%s" as well: %s' % (target_table, double_trouble))
         raise ex
       url = format_preserving_redirect(request, reverse('metastore:index'))
@@ -740,7 +871,7 @@ class HiveServer2Dbms(object):
     LOG.warning(msg)
     try:
       self.cancel_operation(handle)
-    except Exception, e:
+    except Exception as e:
       msg = "Failed to cancel query."
       LOG.warning(msg)
       self.close_operation(handle)
@@ -797,7 +928,7 @@ class HiveServer2Dbms(object):
       if not handle.is_valid():
         msg = _("Server returning invalid handle for query id %(id)d [%(query)s]...") % {'id': query_history.id, 'query': query[:40]}
         raise QueryServerException(msg)
-    except QueryServerException, ex:
+    except QueryServerException as ex:
       LOG.exception(ex)
       # Kind of expected (hql compile/syntax error, etc.)
       if hasattr(ex, 'handle') and ex.handle:
@@ -837,7 +968,7 @@ class HiveServer2Dbms(object):
 
 
   def get_partition(self, db_name, table_name, partition_spec, generate_ddl_only=False):
-    if partition_spec and self.server_name == 'impala': # partition_spec not supported
+    if partition_spec and self.server_name.startswith('impala'): # partition_spec not supported
       partition_query = " AND ".join(partition_spec.split(','))
     else:
       table = self.get_table(db_name, table_name)
@@ -935,7 +1066,7 @@ class HiveServer2Dbms(object):
     return self.client.get_default_configuration(include_hadoop)
 
 
-class Table:
+class Table(object):
   """
   Represents the metadata of a Hive Table.
   """
@@ -944,7 +1075,7 @@ class Table:
     return location_to_url(self.path_location)
 
 
-class DataTable:
+class DataTable(object):
   """
   Represents the data of a Hive Table.
 
@@ -953,7 +1084,7 @@ class DataTable:
   pass
 
 
-class SubQueryTable:
+class SubQueryTable(object):
 
   def __init__(self, db, query):
     self.query = query
@@ -981,7 +1112,7 @@ def expand_exception(exc, db, handle=None):
       log = db.get_log(exc)
     else:
       log = ''
-  except Exception, e:
+  except Exception as e:
     # Always show something, even if server has died on the job.
     log = _("Could not retrieve logs: %s." % e)
 

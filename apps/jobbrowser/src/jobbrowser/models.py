@@ -15,8 +15,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from __future__ import division
+from builtins import str
+from builtins import object
 import datetime
 import logging
+import math
 import functools
 import re
 
@@ -30,6 +34,7 @@ from django.utils.translation import ugettext as _
 from desktop.lib.view_util import location_to_url
 
 from jobbrowser.conf import DISABLE_KILLING_JOBS
+from desktop.auth.backend import is_admin
 
 
 LOG = logging.getLogger(__name__)
@@ -45,7 +50,12 @@ def can_modify_job(username, job):
 
 def get_acls(job):
   if job.is_mr2:
-    return job.acls
+    try:
+      acls = job.acls
+    except:
+      LOG.exception('failed to get acls')
+      acls = {}
+    return acls
   else:
     return job.full_job_conf
 
@@ -56,7 +66,7 @@ def can_kill_job(self, user):
   if self.status.lower() not in ('running', 'pending', 'accepted'):
     return False
 
-  if user.is_superuser:
+  if is_admin(user):
     return True
 
   if can_modify_job(user.username, self):
@@ -94,7 +104,7 @@ class LinkJobLogs(object):
   @classmethod
   def _replace_mr_link(self, match):
     try:
-      return '<a href="%s">%s</a>' % (reverse('jobbrowser.views.single_job', kwargs={'job': match.group(0)}), match.group(0))
+      return '<a href="/hue%s">%s</a>' % (reverse('jobbrowser.views.single_job', kwargs={'job': match.group(0)}), match.group(0))
     except:
       LOG.exception('failed to replace mr links: %s' % (match.groups(),))
       return match.group(0)
@@ -105,6 +115,6 @@ def format_unixtime_ms(unixtime):
   Format a unix timestamp in ms to a human readable string
   """
   if unixtime:
-    return str(datetime.datetime.fromtimestamp(unixtime/1000).strftime("%x %X %Z"))
+    return str(datetime.datetime.fromtimestamp(math.floor(unixtime / 1000)).strftime("%x %X %Z"))
   else:
     return ""

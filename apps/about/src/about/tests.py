@@ -15,9 +15,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
 import json
 
-from django.contrib.auth.models import User
 from django.urls import reverse
 
 from nose.tools import assert_true, assert_false, assert_equal
@@ -26,7 +26,7 @@ from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.test_utils import grant_access
 from desktop.models import Settings
 from oozie.tests import OozieBase
-
+from useradmin.models import User
 
 
 class TestAboutBase(object):

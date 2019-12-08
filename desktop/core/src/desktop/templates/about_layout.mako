@@ -17,6 +17,9 @@
 <%!
 from django.utils.translation import ugettext as _
 
+from desktop.auth.backend import is_admin
+from desktop.conf import METRICS, has_connectors, ANALYTICS
+
 def is_selected(section, matcher):
   if section == matcher:
     return "active"
@@ -36,22 +39,34 @@ def is_selected(section, matcher):
                   ${ _('About Hue') }
                 </a>
                </li>
-              % if user.is_superuser:
+              % if is_admin(user):
                 <li class="${is_selected(section, 'quick_start')}">
                   <a href="${ url('about:admin_wizard') }">${_('Quick start')}</a>
                 </li>
                 <li class="${is_selected(section, 'dump_config')}">
                   <a href="${ url('desktop.views.dump_config') }">${_('Configuration')}</a>
                 </li>
+                % if has_connectors():
+                <li class="${is_selected(section, 'connectors')}">
+                  <a href="${ url('desktop.lib.connectors.views.index') }">${_('Connectors')}</a>
+                </li>
+                % endif
+                % if ANALYTICS.IS_ENABLED.get():
+                <li class="${is_selected(section, 'analytics')}">
+                  <a href="${ url('desktop.lib.analytics.views.index') }">${_('Analytics')}</a>
+                </li>
+                % endif
                 <li class="${is_selected(section, 'log_view')}">
                   <a href="${ url('desktop.views.log_view') }">${_('Server Logs')}</a>
                 </li>
                 <li class="${is_selected(section, 'threads')}">
                   <a href="${ url('desktop.views.threads') }">${_('Threads')}</a>
                 </li>
+                % if METRICS.ENABLE_WEB_METRICS.get():
                 <li class="${is_selected(section, 'metrics')}">
                   <a href="${ url('desktop.lib.metrics.views.index') }">${_('Metrics')}</a>
                 </li>
+                % endif
               % endif
             </ul>
           </div>

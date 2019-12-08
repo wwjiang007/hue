@@ -15,6 +15,7 @@
 # limitations under the License.
 from __future__ import absolute_import
 
+from builtins import range
 import logging
 import os
 import random
@@ -26,7 +27,6 @@ from nose.plugins.skip import SkipTest
 import aws
 
 from contextlib import contextmanager
-
 from aws.s3 import parse_uri, join
 
 
@@ -39,6 +39,7 @@ def generate_id(size=6, chars=string.ascii_uppercase + string.digits):
 
 
 class S3TestBase(unittest.TestCase):
+  integration = True
 
   @classmethod
   def setUpClass(cls):
@@ -97,4 +98,3 @@ class S3TestBase(unittest.TestCase):
       yield paths
     finally:
       cls.clean_up(*paths)
-

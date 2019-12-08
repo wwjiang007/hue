@@ -32,8 +32,10 @@ try:
   from oozie.conf import OOZIE_JOBS_COUNT, ENABLE_OOZIE_BACKEND_FILTERING
   from oozie.views.dashboard import get_oozie_job_log, list_oozie_workflow, manage_oozie_jobs, bulk_manage_oozie_jobs, has_dashboard_jobs_access, massaged_oozie_jobs_for_json, \
       has_job_edition_permission
-except Exception, e:
-  LOG.exception('Some applications are not enabled for Job Browser v2: %s' % e)
+  has_oozie_installed = True
+except Exception as e:
+  LOG.warn('Some applications are not enabled for Job Browser v2: %s' % e)
+  has_oozie_installed = False
 
 
 class WorkflowApi(Api):
@@ -126,7 +128,7 @@ class WorkflowApi(Api):
       workflow = oozie_api.get_job(jobid=appid)
       return {
         'properties': workflow.conf_dict,
-        'properties_display': [{'name': key, 'value': val, 'link': is_linkable(key, val) and hdfs_link_js(val)} for key, val in workflow.conf_dict.iteritems()],
+        'properties_display': [{'name': key, 'value': val, 'link': is_linkable(key, val) and hdfs_link_js(val)} for key, val in workflow.conf_dict.items()],
       }
 
     return {}
@@ -144,7 +146,7 @@ class WorkflowApi(Api):
   def _get_variables(self, workflow):
     parameters = []
 
-    for var, val in workflow.conf_dict.iteritems():
+    for var, val in workflow.conf_dict.items():
       if var not in ParameterForm.NON_PARAMETERS and var != 'oozie.use.system.libpath' or var == 'oozie.wf.application.path':
         link = ''
         if is_linkable(var, val):
@@ -172,7 +174,7 @@ class WorkflowActionApi(Api):
     common['properties']['conf'] = properties.pop('conf')
     common['properties']['externalId'] = properties.get('externalId', '')
     common['properties']['externalChildIDs'] = properties.get('externalChildIDs') and properties.pop('externalChildIDs').split(',')
-    common['properties']['properties'] = [{'name': key, 'value': val} for key, val in properties.iteritems()]
+    common['properties']['properties'] = [{'name': key, 'value': val} for key, val in properties.items()]
 
     common['properties']['workflow_id'] = appid.split('@', 1)[0]
 
@@ -200,7 +202,7 @@ def _manage_oozie_job(user, action, app_ids):
 def _filter_oozie_jobs(user, filters, kwargs):
     text_filters = _extract_query_params(filters)
 
-    if not has_dashboard_jobs_access(user):
+    if has_oozie_installed and not has_dashboard_jobs_access(user):
       kwargs['filters'].append(('user', user.username))
     elif 'username' in text_filters:
       kwargs['filters'].append(('user', text_filters['username']))
@@ -208,7 +210,7 @@ def _filter_oozie_jobs(user, filters, kwargs):
     if 'time' in filters:
       kwargs['filters'].extend([('startcreatedtime', '-%s%s' % (filters['time']['time_value'], filters['time']['time_unit'][:1]))])
 
-    if hasattr(ENABLE_OOZIE_BACKEND_FILTERING, 'get') and ENABLE_OOZIE_BACKEND_FILTERING.get() and text_filters.get('text'):
+    if has_oozie_installed and ENABLE_OOZIE_BACKEND_FILTERING.get() and text_filters.get('text'):
       kwargs['filters'].extend([('text', text_filters.get('text'))])
 
     if filters['pagination']:

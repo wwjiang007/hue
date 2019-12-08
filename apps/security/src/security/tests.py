@@ -16,20 +16,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import object
+from django.urls import reverse
 from nose.tools import assert_true, assert_equal, assert_false
 
 from desktop.lib.django_test_util import make_logged_in_client
 from desktop.lib.test_utils import grant_access
-
-from django.contrib.auth.models import User, Group
-from django.urls import reverse
-
-from useradmin.models import HuePermission, GroupPermission
+from useradmin.models import HuePermission, GroupPermission, User, Group
 
 from security.api.hive import _to_sentry_privilege
 
 
-class TestSecurity():
+class TestSecurity(object):
 
   def test_permissions(self):
     client = make_logged_in_client(username='test_permissions', groupname='test_permissions', is_superuser=False)

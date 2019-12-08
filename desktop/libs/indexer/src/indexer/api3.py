@@ -15,23 +15,30 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import chardet
+from __future__ import print_function
+from future import standard_library
+standard_library.install_aliases()
+from builtins import oct
+from builtins import zip
+from past.builtins import basestring
 import json
 import logging
-import urllib
-import StringIO
+import urllib.request, urllib.error
+import sys
 
 from django.urls import reverse
 from django.utils.translation import ugettext as _
+from django.views.decorators.http import require_POST
 from simple_salesforce.api import Salesforce
+from simple_salesforce.exceptions import SalesforceRefusedRequest
 
 from desktop.lib import django_mako
 from desktop.lib.django_util import JsonResponse
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.i18n import smart_unicode
+from desktop.lib.python_util import check_encoding
 from desktop.models import Document2
 from kafka.kafka_api import get_topics
-from librdbms.server import dbms as rdbms
 from metadata.manager_client import ManagerApi
 from notebook.connectors.base import get_api, Notebook
 from notebook.decorators import api_error_handler
@@ -41,10 +48,20 @@ from indexer.controller import CollectionManagerController
 from indexer.file_format import HiveFormat
 from indexer.fields import Field
 from indexer.indexers.envelope import EnvelopeIndexer
+from indexer.models import _save_pipeline
 from indexer.indexers.morphline import MorphlineIndexer
-from indexer.indexers.rdbms import RdbmsIndexer, run_sqoop
+from indexer.indexers.rdbms import run_sqoop, _get_api
 from indexer.indexers.sql import SQLIndexer
 from indexer.solr_client import SolrClient, MAX_UPLOAD_SIZE
+from indexer.indexers.flume import FlumeIndexer
+
+if sys.version_info[0] > 2:
+  from io import StringIO as string_io
+  from urllib.parse import urlparse, unquote as urllib_unquote
+else:
+  from StringIO import StringIO as string_io
+  from urllib import unquote as urllib_unquote
+  from urlparse import urlparse
 
 
 LOG = logging.getLogger(__name__)
@@ -52,17 +69,17 @@ LOG = logging.getLogger(__name__)
 
 try:
   from beeswax.server import dbms
-except ImportError, e:
+except ImportError as e:
   LOG.warn('Hive and HiveServer2 interfaces are not enabled')
 
 try:
   from filebrowser.views import detect_parquet
-except ImportError, e:
+except ImportError as e:
   LOG.warn('File Browser interface is not enabled')
 
 try:
   from search.conf import SOLR_URL
-except ImportError, e:
+except ImportError as e:
   LOG.warn('Solr Search interface is not enabled')
 
 
@@ -77,7 +94,7 @@ def _escape_white_space_characters(s, inverse = False):
   to = 1 if inverse else 0
   from_ = 0 if inverse else 1
 
-  for pair in MAPPINGS.iteritems():
+  for pair in MAPPINGS.items():
     s = s.replace(pair[to], pair[from_]).encode('utf-8')
 
   return s
@@ -94,7 +111,7 @@ def guess_format(request):
   file_format = json.loads(request.POST.get('fileFormat', '{}'))
 
   if file_format['inputFormat'] == 'file':
-    path = urllib.unquote(file_format["path"])
+    path = urllib_unquote(file_format["path"])
     indexer = MorphlineIndexer(request.user, request.fs)
     if not request.fs.isfile(path):
       raise PopupException(_('Path %(path)s is not a file') % file_format)
@@ -111,7 +128,7 @@ def guess_format(request):
     db = dbms.get(request.user)
     try:
       table_metadata = db.get_table(database=file_format['databaseName'], table_name=file_format['tableName'])
-    except Exception, e:
+    except Exception as e:
       raise PopupException(e.message if hasattr(e, 'message') and e.message else e)
     storage = {}
     for delim in table_metadata.storage_details:
@@ -130,17 +147,24 @@ def guess_format(request):
   elif file_format['inputFormat'] == 'query':
     format_ = {"quoteChar": "\"", "recordSeparator": "\\n", "type": "csv", "hasHeader": False, "fieldSeparator": "\u0001"}
   elif file_format['inputFormat'] == 'rdbms':
-    format_ = RdbmsIndexer(request.user, file_format['rdbmsType']).guess_format()
+    format_ = {"type": "csv"}
   elif file_format['inputFormat'] == 'stream':
     if file_format['streamSelection'] == 'kafka':
       format_ = {"type": "csv", "fieldSeparator": ",", "hasHeader": True, "quoteChar": "\"", "recordSeparator": "\\n", 'topics': get_topics()}
-    elif file_format['streamSelection'] == 'sfdc':
+    elif file_format['streamSelection'] == 'flume':
+      format_ = {"type": "csv", "fieldSeparator": ",", "hasHeader": True, "quoteChar": "\"", "recordSeparator": "\\n"}
+  elif file_format['inputFormat'] == 'connector':
+    if file_format['connectorSelection'] == 'sfdc':
       sf = Salesforce(
           username=file_format['streamUsername'],
           password=file_format['streamPassword'],
           security_token=file_format['streamToken']
       )
       format_ = {"type": "csv", "fieldSeparator": ",", "hasHeader": True, "quoteChar": "\"", "recordSeparator": "\\n", 'objects': [sobject['name'] for sobject in sf.restful('sobjects/')['sobjects'] if sobject['queryable']]}
+    else:
+      raise PopupException(_('Input format %(inputFormat)s connector not recognized: $(connectorSelection)s') % file_format)
+  else:
+    raise PopupException(_('Input format not recognized: %(inputFormat)s') % file_format)
 
   format_['status'] = 0
   return JsonResponse(format_)
@@ -151,9 +175,9 @@ def guess_field_types(request):
 
   if file_format['inputFormat'] == 'file':
     indexer = MorphlineIndexer(request.user, request.fs)
-    path = urllib.unquote(file_format["path"])
+    path = urllib_unquote(file_format["path"])
     stream = request.fs.open(path)
-    encoding = chardet.detect(stream.read(10000)).get('encoding')
+    encoding = check_encoding(stream.read(10000))
     stream.seek(0)
     _convert_format(file_format["format"], inverse=True)
 
@@ -166,7 +190,7 @@ def guess_field_types(request):
     })
 
     # Note: Would also need to set charset to table (only supported in Hive)
-    if 'sample' in format_:
+    if 'sample' in format_ and format_['sample']:
       format_['sample'] = escape_rows(format_['sample'], nulls_only=True, encoding=encoding)
     for col in format_['columns']:
       col['name'] = smart_unicode(col['name'], errors='replace', encoding=encoding)
@@ -197,7 +221,7 @@ def guess_field_types(request):
       snippet['query'] = snippet['statement']
       try:
         sample = db.fetch_result(notebook, snippet, 4, start_over=True)['rows'][:4]
-      except Exception, e:
+      except Exception as e:
         LOG.warn('Skipping sample data as query handle might be expired: %s' % e)
         sample = [[], [], [], [], []]
       columns = db.autocomplete(snippet=snippet, database='', table='')
@@ -210,27 +234,46 @@ def guess_field_types(request):
         "columns": columns,
     }
   elif file_format['inputFormat'] == 'rdbms':
-    query_server = rdbms.get_query_server_config(server=file_format['rdbmsType'])
-    db = rdbms.get(request.user, query_server=query_server)
-    sample = RdbmsIndexer(request.user, file_format['rdbmsType']).get_sample_data(mode=file_format['rdbmsMode'], database=file_format['rdbmsDatabaseName'], table=file_format['rdbmsTableName'])
-    table_metadata = db.get_columns(file_format['rdbmsDatabaseName'], file_format['rdbmsTableName'], names_only=False)
+    api = _get_api(request)
+    sample = api.get_sample_data(None, database=file_format['rdbmsDatabaseName'], table=file_format['tableName'])
 
     format_ = {
-        "sample": list(sample['rows'])[:4],
-        "columns": [
-            Field(col['name'], HiveFormat.FIELD_TYPE_TRANSLATE.get(col['type'], 'string')).to_dict()
-            for col in table_metadata
-        ]
+      "sample": list(sample['rows'])[:4],
+      "columns": [
+          Field(col['name'], col['type']).to_dict()
+          for col in sample['full_headers']
+      ]
     }
   elif file_format['inputFormat'] == 'stream':
-    # Note: mocked here, should come from SFDC or Kafka API or sampling job
     if file_format['streamSelection'] == 'kafka':
+      if file_format.get('kafkaSelectedTopics') == 'NavigatorAuditEvents':
+        kafkaFieldNames = [
+          'id',
+          'additionalInfo', 'allowed', 'collectionName', 'databaseName', 'db',
+          'DELEGATION_TOKEN_ID', 'dst', 'entityId', 'family', 'impersonator',
+          'ip', 'name', 'objectType', 'objType', 'objUsageType',
+          'operationParams', 'operationText', 'op', 'opText', 'path',
+          'perms', 'privilege', 'qualifier', 'QUERY_ID', 'resourcePath',
+          'service', 'SESSION_ID', 'solrVersion', 'src', 'status',
+          'subOperation', 'tableName', 'table', 'time', 'type',
+          'url', 'user'
+        ]
+        kafkaFieldTypes = [
+          'string'
+        ] * len(kafkaFieldNames)
+        kafkaFieldNames.append('timeDate')
+        kafkaFieldTypes.append('date')
+      else:
+        # Note: mocked here, should come from SFDC or Kafka API or sampling job
+        kafkaFieldNames = file_format.get('kafkaFieldNames', '').split(',')
+        kafkaFieldTypes = file_format.get('kafkaFieldTypes', '').split(',')
+
       data = """%(kafkaFieldNames)s
 %(data)s""" % {
-        'kafkaFieldNames': file_format.get('kafkaFieldNames', ''),
-        'data': '\n'.join([','.join(['...'] * len(file_format.get('kafkaFieldTypes', '').split(',')))] * 5)
+        'kafkaFieldNames': ','.join(kafkaFieldNames),
+        'data': '\n'.join([','.join(['...'] * len(kafkaFieldTypes))] * 5)
       }
-      stream = StringIO.StringIO()
+      stream = string_io()
       stream.write(data)
 
       _convert_format(file_format["format"], inverse=True)
@@ -240,15 +283,41 @@ def guess_field_types(request):
         "file": {
             "stream": stream,
             "name": file_format['path']
-          },
+        },
         "format": file_format['format']
       })
+      type_mapping = dict(list(zip(kafkaFieldNames, kafkaFieldTypes)))
 
-      type_mapping = dict(zip(file_format['kafkaFieldNames'].split(','), file_format['kafkaFieldTypes'].split(',')))
       for col in format_['columns']:
         col['keyType'] = type_mapping[col['name']]
         col['type'] = type_mapping[col['name']]
-    elif file_format['streamSelection'] == 'sfdc':
+    elif file_format['streamSelection'] == 'flume':
+      if 'hue-httpd/access_log' in file_format['channelSourcePath']:
+        columns = [
+          {'name': 'id', 'type': 'string', 'unique': True},
+          {'name': 'client_ip', 'type': 'string'},
+          {'name': 'time', 'type': 'date'},
+          {'name': 'request', 'type': 'string'},
+          {'name': 'code', 'type': 'plong'},
+          {'name': 'bytes', 'type': 'plong'},
+          {'name': 'method', 'type': 'string'},
+          {'name': 'url', 'type': 'string'},
+          {'name': 'protocol', 'type': 'string'},
+          {'name': 'app', 'type': 'string'},
+          {'name': 'subapp', 'type': 'string'}
+        ]
+      else:
+        columns = [{'name': 'message', 'type': 'string'}]
+
+      format_ = {
+          "sample": [['...'] * len(columns)] * 4,
+          "columns": [
+              Field(col['name'], HiveFormat.FIELD_TYPE_TRANSLATE.get(col['type'], 'string'), unique=col.get('unique')).to_dict()
+              for col in columns
+          ]
+      }
+  elif file_format['inputFormat'] == 'connector':
+    if file_format['connectorSelection'] == 'sfdc':
       sf = Salesforce(
           username=file_format['streamUsername'],
           password=file_format['streamPassword'],
@@ -260,14 +329,24 @@ def guess_field_types(request):
         } for column in sf.restful('sobjects/%(streamObject)s/describe/' % file_format)['fields']
       ]
       query = 'SELECT %s FROM %s LIMIT 4' % (', '.join([col['name'] for col in table_metadata]), file_format['streamObject'])
-      print query
+      print(query)
+
+      try:
+        records = sf.query_all(query)
+      except SalesforceRefusedRequest as e:
+        raise PopupException(message=str(e))
+
       format_ = {
-        "sample": [row.values()[1:] for row in sf.query_all(query)['records']],
+        "sample": [list(row.values())[1:] for row in records['records']],
         "columns": [
             Field(col['name'], HiveFormat.FIELD_TYPE_TRANSLATE.get(col['type'], 'string')).to_dict()
             for col in table_metadata
         ]
-       }
+      }
+    else:
+      raise PopupException(_('Connector format not recognized: %(connectorSelection)s') % file_format)
+  else:
+      raise PopupException(_('Input format not recognized: %(inputFormat)s') % file_format)
 
   return JsonResponse(format_)
 
@@ -282,28 +361,32 @@ def importer_submit(request):
 
   if source['inputFormat'] == 'file':
     if source['path']:
-      path = urllib.unquote(source['path'])
+      path = urllib_unquote(source['path'])
       source['path'] = request.fs.netnormpath(path)
+
   if destination['ouputFormat'] in ('database', 'table'):
     destination['nonDefaultLocation'] = request.fs.netnormpath(destination['nonDefaultLocation']) if destination['nonDefaultLocation'] else destination['nonDefaultLocation']
 
-  if source['inputFormat'] == 'stream':
-    job_handle = _envelope_job(request, source, destination, start_time=start_time, lib_path=destination['indexerJobLibPath'])
-  elif destination['ouputFormat'] == 'index':
+  if destination['ouputFormat'] == 'index':
     source['columns'] = destination['columns']
     index_name = destination["name"]
 
-    if destination['indexerRunJob']:
+    if destination['indexerRunJob'] or source['inputFormat'] == 'stream':
       _convert_format(source["format"], inverse=True)
-      job_handle = _large_indexing(request, source, index_name, start_time=start_time, lib_path=destination['indexerJobLibPath'])
+      job_handle = _large_indexing(request, source, index_name, start_time=start_time, lib_path=destination['indexerJobLibPath'], destination=destination)
     else:
       client = SolrClient(request.user)
       job_handle = _small_indexing(request.user, request.fs, client, source, destination, index_name)
+  elif source['inputFormat'] in ('stream', 'connector') or destination['ouputFormat'] == 'stream':
+    job_handle = _envelope_job(request, source, destination, start_time=start_time, lib_path=destination['indexerJobLibPath'])
+  elif source['inputFormat'] == 'altus':
+    # BDR copy or DistCP + DDL + Sentry DDL copy
+    pass
+  elif source['inputFormat'] == 'rdbms':
+    if destination['outputFormat'] in ('database', 'file', 'table', 'hbase'):
+      job_handle = run_sqoop(request, source, destination, start_time)
   elif destination['ouputFormat'] == 'database':
     job_handle = _create_database(request, source, destination, start_time)
-  elif source['inputFormat'] == 'rdbms':
-    if destination['outputFormat'] in ('file', 'table', 'hbase'):
-      job_handle = run_sqoop(request, source, destination, start_time)
   else:
     job_handle = _create_table(request, source, destination, start_time)
 
@@ -326,7 +409,7 @@ def _small_indexing(user, fs, client, source, destination, index_name):
   errors = []
 
   if source['inputFormat'] not in ('manual', 'table', 'query_handle'):
-    path = urllib.unquote(source["path"])
+    path = urllib_unquote(source["path"])
     stats = fs.stats(path)
     if stats.size > MAX_UPLOAD_SIZE:
       raise PopupException(_('File size is too large to handle!'))
@@ -337,7 +420,7 @@ def _small_indexing(user, fs, client, source, destination, index_name):
   _create_solr_collection(user, fs, client, destination, index_name, kwargs)
 
   if source['inputFormat'] == 'file':
-    path = urllib.unquote(source["path"])
+    path = urllib_unquote(source["path"])
     data = fs.read(path, 0, MAX_UPLOAD_SIZE)
 
   if client.is_solr_six_or_more():
@@ -362,10 +445,10 @@ def _small_indexing(user, fs, client, source, destination, index_name):
     else:
       response = client.index(name=index_name, data=data, **kwargs)
       errors = [error.get('message', '') for error in response['responseHeader'].get('errors', [])]
-  except Exception, e:
+  except Exception as e:
     try:
       client.delete_index(index_name, keep_config=False)
-    except Exception, e2:
+    except Exception as e2:
       LOG.warn('Error while cleaning-up config of failed collection creation %s: %s' % (index_name, e2))
     raise e
 
@@ -391,7 +474,7 @@ def _create_database(request, source, destination, start_time):
   )
 
   editor_type = destination['apiHelperType']
-  on_success_url = reverse('metastore:show_tables', kwargs={'database': database})
+  on_success_url = reverse('metastore:show_tables', kwargs={'database': database}) + "?source_type=" + source.get('sourceType', 'hive')
 
   notebook = make_notebook(
       name=_('Creating database %(name)s') % destination,
@@ -407,10 +490,14 @@ def _create_database(request, source, destination, start_time):
 
 def _create_table(request, source, destination, start_time=-1):
   notebook = SQLIndexer(user=request.user, fs=request.fs).create_table_from_a_file(source, destination, start_time)
-  return notebook.execute(request, batch=False)
+
+  if request.POST.get('show_command'):
+    return {'status': 0, 'commands': notebook.get_str()}
+  else:
+    return notebook.execute(request, batch=False)
 
 
-def _large_indexing(request, file_format, collection_name, query=None, start_time=None, lib_path=None):
+def _large_indexing(request, file_format, collection_name, query=None, start_time=None, lib_path=None, destination=None):
   indexer = MorphlineIndexer(request.user, request.fs)
 
   unique_field = indexer.get_unique_field(file_format)
@@ -422,20 +509,32 @@ def _large_indexing(request, file_format, collection_name, query=None, start_tim
 
   client = SolrClient(user=request.user)
 
-  if not client.exists(collection_name):
+  if not client.exists(collection_name) and not request.POST.get('show_command'): # if destination['isTargetExisting']:
     client.create_index(
       name=collection_name,
       fields=request.POST.get('fields', schema_fields),
       unique_key_field=unique_field
       # No df currently
     )
+  else:
+    # TODO: check if format matches
+    pass
 
   if file_format['inputFormat'] == 'table':
     db = dbms.get(request.user)
     table_metadata = db.get_table(database=file_format['databaseName'], table_name=file_format['tableName'])
     input_path = table_metadata.path_location
+  elif file_format['inputFormat'] == 'stream' and file_format['streamSelection'] == 'flume':
+    indexer = FlumeIndexer(user=request.user)
+    if request.POST.get('show_command'):
+      configs = indexer.generate_config(file_format, destination)
+      return {'status': 0, 'commands': configs[-1]}
+    else:
+      return indexer.start(collection_name, file_format, destination)
+  elif file_format['inputFormat'] == 'stream':
+    return _envelope_job(request, file_format, destination, start_time=start_time, lib_path=lib_path)
   elif file_format['inputFormat'] == 'file':
-    input_path = '${nameNode}%s' % urllib.unquote(file_format["path"])
+    input_path = '${nameNode}%s' % urllib_unquote(file_format["path"])
   else:
     input_path = None
 
@@ -448,7 +547,7 @@ def _envelope_job(request, file_format, destination, start_time=None, lib_path=N
   collection_name = destination['name']
   indexer = EnvelopeIndexer(request.user, request.fs)
 
-  lib_path = '/tmp/envelope-0.5.0.jar'
+  lib_path = None # Todo optional input field
   input_path = None
 
   if file_format['inputFormat'] == 'table':
@@ -456,12 +555,53 @@ def _envelope_job(request, file_format, destination, start_time=None, lib_path=N
     table_metadata = db.get_table(database=file_format['databaseName'], table_name=file_format['tableName'])
     input_path = table_metadata.path_location
   elif file_format['inputFormat'] == 'file':
-    input_path = '${nameNode}%s' % file_format["path"]
+    input_path = file_format["path"]
     properties = {
-      'format': 'json'
+      'input_path': input_path,
+      'format': 'csv'
     }
+  elif file_format['inputFormat'] == 'stream' and file_format['streamSelection'] == 'flume':
+    pass
   elif file_format['inputFormat'] == 'stream':
-    if file_format['streamSelection'] == 'sfdc':
+    if file_format['streamSelection'] == 'kafka':
+      manager = ManagerApi()
+      properties = {
+        "brokers": manager.get_kafka_brokers(),
+        "topics": file_format['kafkaSelectedTopics'],
+        "kafkaFieldType": file_format['kafkaFieldType'],
+        "kafkaFieldDelimiter": file_format['kafkaFieldDelimiter'],
+      }
+
+      if file_format.get('kafkaSelectedTopics') == 'NavigatorAuditEvents':
+        schema_fields = MorphlineIndexer.get_kept_field_list(file_format['sampleCols'])
+        properties.update({
+          "kafkaFieldNames": ', '.join([_field['name'] for _field in schema_fields]),
+          "kafkaFieldTypes": ', '.join([_field['type'] for _field in schema_fields])
+        })
+      else:
+        properties.update({
+          "kafkaFieldNames": file_format['kafkaFieldNames'],
+          "kafkaFieldTypes": file_format['kafkaFieldTypes']
+        })
+
+      if True:
+        properties['window'] = ''
+      else: # For "KafkaSQL"
+        properties['window'] = '''
+            window {
+                enabled = true
+                milliseconds = 60000
+            }'''
+  elif file_format['inputFormat'] == 'connector':
+    if file_format['streamSelection'] == 'flume':
+      properties = {
+        'streamSelection': file_format['streamSelection'],
+        'channelSourceHosts': file_format['channelSourceHosts'],
+        'channelSourceSelectedHosts': file_format['channelSourceSelectedHosts'],
+        'channelSourcePath': file_format['channelSourcePath'],
+      }
+    else:
+      # sfdc
       properties = {
         'streamSelection': file_format['streamSelection'],
         'streamUsername': file_format['streamUsername'],
@@ -470,53 +610,51 @@ def _envelope_job(request, file_format, destination, start_time=None, lib_path=N
         'streamEndpointUrl': file_format['streamEndpointUrl'],
         'streamObject': file_format['streamObject'],
       }
-    elif file_format['streamSelection'] == 'kafka':
-      manager = ManagerApi()
-      properties = {
-        "brokers": manager.get_kafka_brokers(),
-        "output_table": "impala::%s" % collection_name,
-        "topics": file_format['kafkaSelectedTopics'],
-        "kafkaFieldType": file_format['kafkaFieldType'],
-        "kafkaFieldDelimiter": file_format['kafkaFieldDelimiter'],
-        "kafkaFieldNames": file_format['kafkaFieldNames'],
-        "kafkaFieldTypes": file_format['kafkaFieldTypes']
-      }
 
-    if destination['outputFormat'] == 'table':
-      if destination['isTargetExisting']:
-        # Todo: check if format matches
-        pass
-      else:
-        sql = SQLIndexer(user=request.user, fs=request.fs).create_table_from_a_file(file_format, destination).get_str()
-        print sql
+  if destination['outputFormat'] == 'table':
+    if destination['isTargetExisting']: # Todo: check if format matches
+      pass
+    else:
+      destination['importData'] = False # Avoid LOAD DATA
       if destination['tableFormat'] == 'kudu':
-        manager = ManagerApi()
-        properties["output_table"] = "impala::%s" % collection_name
-        properties["kudu_master"] = manager.get_kudu_master()
-      else:
-        properties['output_table'] = collection_name
-    elif destination['outputFormat'] == 'file':
-      properties['path'] = file_format["path"]
+        properties['kafkaFieldNames'] = properties['kafkaFieldNames'].lower() # Kudu names should be all lowercase
+      # Create table
+      if not request.POST.get('show_command'):
+        SQLIndexer(user=request.user, fs=request.fs).create_table_from_a_file(file_format, destination).execute(request)
+
+    if destination['tableFormat'] == 'kudu':
+      manager = ManagerApi()
+      properties["output_table"] = "impala::%s" % collection_name
+      properties["kudu_master"] = manager.get_kudu_master()
+    else:
+      properties['output_table'] = collection_name
+  elif destination['outputFormat'] == 'stream':
+    manager = ManagerApi()
+    properties['brokers'] = manager.get_kafka_brokers()
+    properties['topics'] = file_format['kafkaSelectedTopics']
+    properties['kafkaFieldDelimiter'] = file_format['kafkaFieldDelimiter']
+  elif destination['outputFormat'] == 'file':
+    properties['path'] = file_format["path"]
+    if file_format['inputFormat'] == 'stream':
+      properties['format'] = 'csv'
+    else:
       properties['format'] = file_format['tableFormat'] # or csv
-    elif destination['outputFormat'] == 'index':
-      properties['collectionName'] = collection_name
-      properties['connection'] = SOLR_URL.get()
-      if destination['isTargetExisting']:
-        # Todo: check if format matches
-        pass
-      else:
-        client = SolrClient(request.user)
-        kwargs = {}
-        _create_solr_collection(request.user, request.fs, client, destination, collection_name, kwargs)
+  elif destination['outputFormat'] == 'index':
+    properties['collectionName'] = collection_name
+    properties['connection'] = SOLR_URL.get()
+
 
   properties["app_name"] = 'Data Ingest'
   properties["inputFormat"] = file_format['inputFormat']
   properties["ouputFormat"] = destination['ouputFormat']
   properties["streamSelection"] = file_format["streamSelection"]
 
-  envelope = indexer.generate_config(properties)
+  configs = indexer.generate_config(properties)
 
-  return indexer.run(request, collection_name, envelope, input_path, start_time=start_time, lib_path=lib_path)
+  if request.POST.get('show_command'):
+    return {'status': 0, 'commands': configs['envelope.conf']}
+  else:
+    return indexer.run(request, collection_name, configs, input_path, start_time=start_time, lib_path=lib_path)
 
 
 def _create_solr_collection(user, fs, client, destination, index_name, kwargs):
@@ -559,3 +697,20 @@ def _create_solr_collection(user, fs, client, destination, index_name, kwargs):
         shards=destination['indexerNumShards'],
         replication=destination['indexerReplicationFactor']
     )
+
+@api_error_handler
+@require_POST
+# @check_document_modify_permission()
+def save_pipeline(request):
+  response = {'status': -1}
+
+  notebook = json.loads(request.POST.get('notebook', '{}'))
+
+  notebook_doc, save_as = _save_pipeline(notebook, request.user)
+
+  response['status'] = 0
+  response['save_as'] = save_as
+  response.update(notebook_doc.to_dict())
+  response['message'] = request.POST.get('editorMode') == 'true' and _('Query saved successfully') or _('Notebook saved successfully')
+
+  return JsonResponse(response)

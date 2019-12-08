@@ -97,6 +97,7 @@ class LocalSubFileSystemTest(unittest.TestCase):
     self.assertRaises(TypeError, self.fs.open, name="/foo", mode="w")
 
 
+@attr('integration')
 @attr('requires_hadoop')
 def test_hdfs_copy():
   minicluster = pseudo_hdfs4.shared_cluster()
@@ -106,7 +107,7 @@ def test_hdfs_copy():
   copy_test_dst = minicluster.fs_prefix + '/copy_test_dst'
   try:
     data = "I will not make flatulent noises in class\n" * 2000
-    minifs.create(copy_test_src, permission=0646, data=data)
+    minifs.create(copy_test_src, permission=0o646, data=data)
     minifs.create(copy_test_dst, data="some initial data")
 
     minifs.copyfile(copy_test_src, copy_test_dst)
@@ -114,12 +115,13 @@ def test_hdfs_copy():
     assert_equal(data, actual)
 
     sb = minifs.stats(copy_test_dst)
-    assert_equal(0646, stat.S_IMODE(sb.mode))
+    assert_equal(0o646, stat.S_IMODE(sb.mode))
   finally:
     minifs.do_as_superuser(minifs.rmtree, copy_test_src)
     minifs.do_as_superuser(minifs.rmtree, copy_test_dst)
 
 
+@attr('integration')
 @attr('requires_hadoop')
 def test_hdfs_full_copy():
   minicluster = pseudo_hdfs4.shared_cluster()
@@ -135,7 +137,7 @@ def test_hdfs_full_copy():
     # File to directory copy.
     # No guarantees on file permissions at the moment.
     data = "I will not make flatulent noises in class\n" * 2000
-    minifs.create(prefix + '/src/file.txt', permission=0646, data=data)
+    minifs.create(prefix + '/src/file.txt', permission=0o646, data=data)
     minifs.copy(prefix + '/src/file.txt', prefix + '/dest')
     assert_true(minifs.exists(prefix + '/dest/file.txt'))
 
@@ -154,6 +156,8 @@ def test_hdfs_full_copy():
   finally:
     minifs.do_as_superuser(minifs.rmtree, prefix)
 
+
+@attr('integration')
 @attr('requires_hadoop')
 def test_hdfs_copy_from_local():
   minicluster = pseudo_hdfs4.shared_cluster()

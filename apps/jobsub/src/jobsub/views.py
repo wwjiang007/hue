@@ -25,13 +25,13 @@ to the cluster.  A parameterized, submitted job design
 is a "job submission".  Submissions can be "watched".
 """
 
+from builtins import str
 import logging
 import time as py_time
 
 from django.utils.translation import ugettext as _
 
 from desktop import appmanager
-from desktop.conf import IS_HUE_4
 from desktop.lib.django_util import render, render_json
 from desktop.lib.exceptions import StructuredException
 from desktop.lib.exceptions_renderable import PopupException
@@ -43,6 +43,7 @@ from oozie.forms import design_form_by_type
 from oozie.utils import model_to_dict, format_dict_field_values,\
                         sanitize_node_dict
 
+from desktop.auth.backend import is_admin
 
 LOG = logging.getLogger(__name__)
 MAX_DESIGNS = 250
@@ -106,8 +107,7 @@ def list_designs(request):
       'currentuser': request.user,
       'owner': owner,
       'name': name,
-      'apps': appmanager.get_apps_dict(),
-      'is_hue_4': IS_HUE_4.get()
+      'apps': appmanager.get_apps_dict()
     })
 
 def not_available(request):
@@ -124,7 +124,7 @@ def _get_design(user, design_id):
 def _check_permission(request, owner_name, error_msg, allow_root=False):
   """Raise PopupException if user doesn't have permission to modify the design"""
   if request.user.username != owner_name:
-    if allow_root and request.user.is_superuser:
+    if allow_root and is_admin(request.user):
       return
     access_warn(request, error_msg)
     raise PopupException(_("Permission denied. You are not the owner."))

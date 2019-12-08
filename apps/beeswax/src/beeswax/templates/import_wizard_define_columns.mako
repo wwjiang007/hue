@@ -19,7 +19,6 @@ from desktop.views import commonheader, commonfooter
 from django.utils.translation import ugettext as _
 %>
 
-<%namespace name="assist" file="/assist.mako" />
 <%namespace name="comps" file="beeswax_components.mako" />
 <%namespace name="layout" file="layout.mako" />
 <%namespace name="util" file="util.mako" />
@@ -27,14 +26,6 @@ from django.utils.translation import ugettext as _
 ${ commonheader(_('Create table from file'), 'metastore', user, request) | n,unicode }
 <span class="notebook">
 ${ layout.metastore_menubar() }
-
-<script src="${ static('desktop/ext/js/jquery/plugins/jquery-ui-1.10.4.custom.min.js') }"></script>
-<script src="${ static('desktop/ext/js/selectize.min.js') }"></script>
-<script src="${ static('metastore/js/metastore.ko.js') }"></script>
-<script src="${ static('desktop/ext/js/knockout-sortable.min.js') }"></script>
-<script src="${ static('desktop/js/ko.editable.js') }"></script>
-
-${ assist.assistJSModels() }
 
 <link rel="stylesheet" href="${ static('metastore/css/metastore.css') }" type="text/css">
 <link rel="stylesheet" href="${ static('notebook/css/notebook.css') }">
@@ -49,8 +40,6 @@ ${ assist.assistJSModels() }
   }
 % endif
 </style>
-
-${ assist.assistPanel() }
 
 <a title="${_('Toggle Assist')}" class="pointer show-assist" data-bind="visible: !$root.isLeftPanelVisible() && $root.assistAvailable(), click: function() { $root.isLeftPanelVisible(true); }">
   <i class="fa fa-chevron-right"></i>
@@ -225,18 +214,18 @@ ${ assist.assistPanel() }
 
     function ImportWizardDefineColumnsViewModel() {
       var self = this;
-      self.apiHelper = ApiHelper.getInstance();
+      self.apiHelper = window.apiHelper;
       self.assistAvailable = ko.observable(true);
       self.isLeftPanelVisible = ko.observable();
       self.apiHelper.withTotalStorage('assist', 'assist_panel_visible', self.isLeftPanelVisible, true);
 
 
       huePubSub.subscribe("assist.table.selected", function (tableDef) {
-        location.href = '/metastore/table/' + tableDef.database + '/' + tableDef.name;
+        location.href = '/metastore/table/' + tableDef.database + '/' + tableDef.name + '?source=' + tableDef.sourceType + '&namespace=' + tableDef.namespace.id;
       });
 
       huePubSub.subscribe("assist.database.selected", function (databaseDef) {
-        location.href = '/metastore/tables/' + databaseDef.name;
+        location.href = '/metastore/tables/' + databaseDef.name + '?source=' + databaseDef.sourceType + '&namespace=' + databaseDef.namespace.id;
       });
     }
 

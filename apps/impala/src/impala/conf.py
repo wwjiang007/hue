@@ -27,7 +27,7 @@ from desktop.lib.conf import ConfigSection, Config, coerce_bool, coerce_csv, coe
 from desktop.lib.exceptions import StructuredThriftTransportException
 from desktop.lib.paths import get_desktop_root
 
-from impala.impala_flags import get_max_result_cache_size, is_impersonation_enabled
+from impala.impala_flags import get_max_result_cache_size, is_impersonation_enabled, is_kerberos_enabled
 from impala.settings import NICE_NAME
 
 
@@ -105,6 +105,7 @@ CONFIG_WHITELIST = Config(
 IMPALA_CONF_DIR = Config(
   key='impala_conf_dir',
   help=_t('Impala configuration directory, where impala_flags is located.'),
+  type=str,
   default=os.environ.get("HUE_CONF_DIR", get_desktop_root("conf")) + '/impala-conf'
 )
 
@@ -118,28 +119,24 @@ SSL = ConfigSection(
       type=coerce_bool,
       default=False
     ),
-
     CACERTS = Config(
       key="cacerts",
       help=_t("Path to Certificate Authority certificates."),
       type=str,
       dynamic_default=default_ssl_cacerts,
     ),
-
     KEY = Config(
       key="key",
       help=_t("Path to the private key file, e.g. /etc/hue/key.pem"),
       type=str,
       default=None
     ),
-
     CERT = Config(
       key="cert",
       help=_t("Path to the public certificate file, e.g. /etc/hue/cert.pem"),
       type=str,
       default=None
     ),
-
     VALIDATE = Config(
       key="validate",
       help=_t("Choose whether Hue should validate certificates received from the server."),
@@ -171,14 +168,71 @@ AUTH_PASSWORD = Config(
   key="auth_password",
   help=_t("LDAP/PAM/.. password of the hue user used for authentications."),
   private=True,
-  dynamic_default=get_auth_password)
+  dynamic_default=get_auth_password
+)
 
 AUTH_PASSWORD_SCRIPT = Config(
   key="auth_password_script",
   help=_t("Execute this script to produce the auth password. This will be used when `auth_password` is not set."),
   private=True,
   type=coerce_password_from_script,
-  default=None)
+  default=None
+)
+
+def get_daemon_config(key):
+  from metadata.conf import MANAGER
+  from metadata.manager_client import ManagerApi
+
+  if MANAGER.API_URL.get():
+    return ManagerApi().get_impalad_config(key=key, impalad_host=SERVER_HOST.get())
+
+  return None
+
+def get_daemon_api_username():
+  """
+    Try to get daemon_api_username from Cloudera Manager API
+  """
+  return get_daemon_config('webserver_htpassword_user')
+
+def get_daemon_api_password():
+  """
+    Try to get daemon_api_password from Cloudera Manager API
+  """
+  return get_daemon_config('webserver_htpassword_password')
+
+DAEMON_API_PASSWORD = Config(
+  key="daemon_api_password",
+  help=_t("Password for Impala Daemon when username/password authentication is enabled for the Impala Daemon UI."),
+  private=True,
+  dynamic_default=get_daemon_api_password
+)
+
+DAEMON_API_PASSWORD_SCRIPT = Config(
+  key="daemon_api_password_script",
+  help=_t("Execute this script to produce the Impala Daemon Password. This will be used when `daemon_api_password` is not set."),
+  private=True,
+  type=coerce_password_from_script,
+  default=None
+)
+
+DAEMON_API_USERNAME = Config(
+  key="daemon_api_username",
+  help=_t("Username for Impala Daemon when username/password authentication is enabled for the Impala Daemon UI."),
+  private=True,
+  dynamic_default=get_daemon_api_username
+)
+
+def get_use_sasl_default():
+  """kerberos enabled or password is specified"""
+  return is_kerberos_enabled() or AUTH_PASSWORD.get() is not None # Maps closely to legacy behavior
+
+USE_SASL = Config(
+  key="use_sasl",
+  help=_t("Use SASL framework to establish connection to host."),
+  private=False,
+  type=coerce_bool,
+  dynamic_default=get_use_sasl_default
+)
 
 
 def config_validator(user):
@@ -200,14 +254,14 @@ def config_validator(user):
         if handle:
           server.fetch(handle, rows=100)
           server.close(handle)
-    except StructuredThriftTransportException, ex:
+    except StructuredThriftTransportException as ex:
       if 'TSocket read 0 bytes' in str(ex):  # this message appears when authentication fails
         msg = "Failed to authenticate to Impalad, check authentication configurations."
         LOG.exception(msg)
         res.append((NICE_NAME, _(msg)))
       else:
-       raise ex
-  except Exception, ex:
+        raise ex
+  except Exception as ex:
     msg = "No available Impalad to send queries to."
     LOG.exception(msg)
     res.append((NICE_NAME, _(msg)))

@@ -19,8 +19,24 @@
 @import (reference) "hue-mixins.less";
 
 .dashboard-container {
+  &.dashboard-container-flex {
+    .display-flex();
+    .flex-direction(column);
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    left: 0;
+  }
+
   .dashboard .container-fluid {
     padding: 6px;
+  }
+
+  .dashboard-flex {
+    .flex(1 1 auto);
+    overflow-y: scroll;
+    overflow-x: hidden;
   }
 
   .row-container {
@@ -38,7 +54,7 @@
   }
 
   .ui-sortable.white {
-    background-color: @cui-white!important;
+    background-color: @cui-white !important;
   }
 
   .ui-sortable h2 {
@@ -56,7 +72,7 @@
   }
 
   .sortable-arguments {
-    margin-left: -10px!important;
+    margin-left: -10px !important;
     width: 99%;
   }
 
@@ -261,8 +277,8 @@
       border-radius: 4px !important;
     }
     .flat-left {
-      border-top-left-radius: 0!important;
-      border-bottom-left-radius: 0!important;
+      border-top-left-radius: 0 !important;
+      border-bottom-left-radius: 0 !important;
       border-left-width: 0;
       margin-left: 0;
     }
@@ -494,7 +510,7 @@
   }
 
   .text-widget-filter {
-    .inline-autocomplete-container {
+    .inline-autocomp-container {
       height: 25px;
     }
     input {
@@ -513,7 +529,7 @@
 
   .singleValued.form-horizontal .control-label {
     text-align: left;
-    margin-left: 0px;
+    margin-left: 0;
     width: 60px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -597,7 +613,7 @@
     }
   }
 
-  .empty-gridster-widget {
+  .empty-gridster-widget, .html-resultset:hover {
     .edit-dimensions {
       opacity: 1;
       .action-icon, .dimensions-badge-container-add {
@@ -644,19 +660,40 @@
     }
   }
 
-  .search-bar .form-search .selectize-control {
-    width: 220px;
-    display: inline-block;
-    vertical-align: top;
-    margin-top: 1px;
+  .search-bar .form-search {
+    .selectize-control {
+      width: 220px;
+      display: inline-block;
+      vertical-align: top;
+      border-radius: 0 !important;
+      .selectize-input {
+        border-radius: 0 !important;
+      }
+    }
+    .simple-ace-single-line {
+      border-left: none !important;
+    }
   }
 
-  #addFacetDemiModal .inline-autocomplete-container {
+  #addFacetDemiModal .inline-autocomp-container {
     width: 220px;
     height: 30px;
   }
 
-  #addFacetDemiModal .inline-autocomplete-container .inline-autocomplete-input {
+  #addFacetDemiModal .inline-autocomp-container .inline-autocomp-input {
     width: calc(100% ~"-" 10px);
+  }
+
+  .draggable-plus-button:hover i:before {
+    content: "\f047";
+  }
+
+  .demi-modal-label {
+    float: left;
+    font-weight: bold;
+    color: @cui-blue-700;
+    padding-right: 8px;
+    padding-left: 20px;
+    padding-top: 5px;
   }
 }

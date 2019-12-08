@@ -15,27 +15,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from builtins import range
+from builtins import object
 import base64
 import datetime
-import logging
 import json
+import logging
+import sys
 
 from django.db import models
-from django.contrib.auth.models import User
 from django.contrib.contenttypes.fields import GenericRelation
 from django.urls import reverse
 from django.utils.translation import ugettext as _, ugettext_lazy as _t
 
 from enum import Enum
+from TCLIService.ttypes import TSessionHandle, THandleIdentifier, TOperationState, TOperationHandle, TOperationType
 
-from librdbms.server import dbms as librdbms_dbms
-
-from desktop.redaction import global_redaction_engine
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.models import Document
-
-from TCLIService.ttypes import TSessionHandle, THandleIdentifier,\
-  TOperationState, TOperationHandle, TOperationType
+from desktop.redaction import global_redaction_engine
+from librdbms.server import dbms as librdbms_dbms
+from useradmin.models import User
 
 from beeswax.design import HQLdesign
 
@@ -47,7 +47,7 @@ QUERY_SUBMISSION_TIMEOUT = datetime.timedelta(0, 60 * 60)               # 1 hour
 # Constants for DB fields, hue ini
 BEESWAX = 'beeswax'
 HIVE_SERVER2 = 'hiveserver2'
-QUERY_TYPES = (HQL, IMPALA, RDBMS, SPARK) = range(4)
+QUERY_TYPES = (HQL, IMPALA, RDBMS, SPARK) = list(range(4))
 
 class QueryHistory(models.Model):
   """
@@ -91,7 +91,7 @@ class QueryHistory(models.Model):
   extra = models.TextField(default='{}')                   # Json fields for extra properties
   is_cleared = models.BooleanField(default=False)
 
-  class Meta:
+  class Meta(object):
     ordering = ['-submission_date']
 
   @staticmethod
@@ -232,7 +232,7 @@ class HiveServerQueryHistory(QueryHistory):
 
   node_type = HIVE_SERVER2
 
-  class Meta:
+  class Meta(object):
     proxy = True
 
   def get_handle(self):
@@ -282,7 +282,7 @@ class SavedQuery(models.Model):
 
   doc = GenericRelation(Document, related_query_name='hql_doc')
 
-  class Meta:
+  class Meta(object):
     ordering = ['-mtime']
 
   def get_design(self):
@@ -333,7 +333,7 @@ class SavedQuery(models.Model):
     """
     try:
       design = SavedQuery.objects.get(id=id)
-    except SavedQuery.DoesNotExist, err:
+    except SavedQuery.DoesNotExist as err:
       msg = _('Cannot retrieve query id %(id)s.') % {'id': id}
       raise err
 
@@ -397,7 +397,7 @@ class SessionManager(models.Manager):
       if filter_open:
         q = q.filter(status_code=0)
       return q.latest("last_used")
-    except Session.DoesNotExist, e:
+    except Session.DoesNotExist as e:
       return None
 
   def get_n_sessions(self, user, n, application='beeswax', filter_open=True):
@@ -432,7 +432,7 @@ class Session(models.Model):
     return json.loads(self.properties) if self.properties else {}
 
   def get_formatted_properties(self):
-    return [dict({'key': key, 'value': value}) for key, value in self.get_properties().items()]
+    return [dict({'key': key, 'value': value}) for key, value in list(self.get_properties().items())]
 
   def __str__(self):
     return '%s %s' % (self.owner, self.last_used)
@@ -482,10 +482,16 @@ class HiveServerQueryHandle(QueryHandle):
 
   @classmethod
   def get_decoded(cls, secret, guid):
-    return base64.decodestring(secret), base64.decodestring(guid)
+    if sys.version_info[0] > 2:
+      return base64.b64decode(secret), base64.b64decode(guid)
+    else:
+      return base64.decodestring(secret), base64.decodestring(guid)
 
   def get_encoded(self):
-    return base64.encodestring(self.secret), base64.encodestring(self.guid)
+    if sys.version_info[0] > 2:
+      return base64.b64encode(self.secret), base64.b64encode(self.guid)
+    else:
+      return base64.encodestring(self.secret), base64.encodestring(self.guid)
 
 
 # Deprecated. Could be removed.

@@ -15,6 +15,8 @@
 # limitations under the License.
 from __future__ import absolute_import
 
+from builtins import map
+from future.utils import raise_
 import calendar
 import errno
 import logging
@@ -54,7 +56,7 @@ def translate_s3_error(fn):
       _, exc, tb = sys.exc_info()
       logging.error('S3 error: %s' % exc)
       lookup = lookup_s3error(exc)
-      raise lookup.__class__, lookup, tb
+      raise_(lookup.__class__, lookup, tb)
   return wrapped
 
 
@@ -98,7 +100,7 @@ def join(*comp_list):
       return '/%s/%s' % parse_uri(uri)[:2]
     except ValueError:
       return '/' if is_root(uri) else uri
-  joined = posixpath.join(*map(_prep, comp_list))
+  joined = posixpath.join(*list(map(_prep, comp_list)))
   if joined and joined[0] == '/':
     joined = 's3a:/%s' % joined
   return joined
