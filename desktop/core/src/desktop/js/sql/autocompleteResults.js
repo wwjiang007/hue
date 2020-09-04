@@ -24,7 +24,17 @@ import hueUtils from 'utils/hueUtils';
 import huePubSub from 'utils/huePubSub';
 import I18n from 'utils/i18n';
 import sqlUtils from 'sql/sqlUtils';
-import { SqlSetOptions, SqlFunctions } from 'sql/sqlFunctions';
+import { matchesType } from 'sql/reference/typeUtils';
+import { DIALECT } from 'apps/notebook2/snippet';
+import { cancelActiveRequest } from 'api/apiUtils';
+import { findBrowserConnector, getRootFilePath } from 'utils/hueConfig';
+import {
+  findUdf,
+  getArgumentDetailsForUdf,
+  getUdfsWithReturnTypes,
+  getReturnTypesForUdf,
+  getSetOptions
+} from './reference/sqlReferenceRepository';
 
 const normalizedColors = HueColors.getNormalizedColors();
 
@@ -222,14 +232,14 @@ const POPULAR_CATEGORIES = [
   CATEGORIES.POPULAR_JOIN
 ];
 
-const initLoading = function(loadingObservable, deferred) {
+const initLoading = function (loadingObservable, deferred) {
   loadingObservable(true);
   deferred.always(() => {
     loadingObservable(false);
   });
 };
 
-const locateSubQuery = function(subQueries, subQueryName) {
+const locateSubQuery = function (subQueries, subQueryName) {
   if (typeof subQueries === 'undefined') {
     return null;
   }
@@ -249,7 +259,7 @@ const locateSubQuery = function(subQueries, subQueryName) {
  * @param columnsDeferred
  * @param suggestions
  */
-const mergeWithColumns = function(sourceDeferred, columnsDeferred, suggestions) {
+const mergeWithColumns = function (sourceDeferred, columnsDeferred, suggestions) {
   columnsDeferred.done(columns => {
     const suggestionIndex = {};
     suggestions.forEach(suggestion => {
@@ -273,6 +283,7 @@ class AutocompleteResults {
   constructor(options) {
     const self = this;
     self.snippet = options.snippet;
+    self.dialect = () => (window.ENABLE_NOTEBOOK_2 ? self.snippet.dialect() : self.snippet.type());
     self.editor = options.editor;
     self.temporaryOnly =
       options.snippet.autocompleteSettings && options.snippet.autocompleteSettings.temporaryOnly;
@@ -305,7 +316,7 @@ class AutocompleteResults {
     self.loadingPopularTables = ko.observable(false);
     self.loadingPopularColumns = ko.observable(false);
 
-    self.appendEntries = function(entries) {
+    self.appendEntries = function (entries) {
       self.entries(self.entries().concat(entries));
     };
 
@@ -343,7 +354,7 @@ class AutocompleteResults {
 
     self.activeCategory = ko.observable(CATEGORIES.ALL);
 
-    const updateCategories = function(suggestions) {
+    const updateCategories = function (suggestions) {
       const newCategories = {};
       suggestions.forEach(suggestion => {
         if (suggestion.popular() && !newCategories[CATEGORIES.POPULAR.label]) {
@@ -415,7 +426,7 @@ class AutocompleteResults {
     const self = this;
 
     while (self.lastKnownRequests.length) {
-      apiHelper.cancelActiveRequest(self.lastKnownRequests.pop());
+      cancelActiveRequest(self.lastKnownRequests.pop());
     }
 
     while (self.cancellablePromises.length) {
@@ -426,7 +437,7 @@ class AutocompleteResults {
     }
   }
 
-  update(parseResult) {
+  async update(parseResult) {
     const self = this;
 
     while (self.activeDeferrals.length > 0) {
@@ -456,6 +467,10 @@ class AutocompleteResults {
 
     self.filter('');
 
+    if (self.parseResult.udfArgument) {
+      await self.adjustForUdfArgument();
+    }
+
     const colRefDeferred = self.handleColumnReference();
     self.activeDeferrals.push(colRefDeferred);
     const databasesDeferred = self.loadDatabases();
@@ -463,10 +478,10 @@ class AutocompleteResults {
 
     self.handleKeywords(colRefDeferred);
     self.handleIdentifiers();
-    self.handleColumnAliases();
+    self.activeDeferrals.push(self.handleColumnAliases());
     self.handleCommonTableExpressions();
-    self.handleOptions();
-    self.handleFunctions(colRefDeferred);
+    self.activeDeferrals.push(self.handleOptions());
+    self.activeDeferrals.push(self.handleFunctions(colRefDeferred));
     self.handleDatabases(databasesDeferred);
     const tablesDeferred = self.handleTables(databasesDeferred);
     self.activeDeferrals.push(tablesDeferred);
@@ -491,6 +506,58 @@ class AutocompleteResults {
     });
   }
 
+  async adjustForUdfArgument() {
+    return new Promise(async resolve => {
+      const foundArgumentDetails = (await getArgumentDetailsForUdf(
+        this.snippet.connector(),
+        this.parseResult.udfArgument.name,
+        this.parseResult.udfArgument.position
+      )) || [{ type: 'T' }];
+      if (foundArgumentDetails.length === 0 && this.parseResult.suggestColumns) {
+        delete this.parseResult.suggestColumns;
+        delete this.parseResult.suggestKeyValues;
+        delete this.parseResult.suggestValues;
+        delete this.parseResult.suggestFunctions;
+        delete this.parseResult.suggestIdentifiers;
+        delete this.parseResult.suggestKeywords;
+      } else if (foundArgumentDetails[0].type !== 'BOOLEAN') {
+        if (this.parseResult.suggestFunctions && !this.parseResult.suggestFunctions.types) {
+          this.parseResult.suggestFunctions.types = foundArgumentDetails.map(
+            details => details.type
+          );
+        }
+        if (this.parseResult.suggestColumns && !this.parseResult.suggestColumns.types) {
+          this.parseResult.suggestColumns.types = foundArgumentDetails.map(details => details.type);
+        }
+      }
+      if (foundArgumentDetails.length) {
+        const keywords = [];
+        foundArgumentDetails.forEach(details => {
+          if (details.keywords) {
+            keywords.push(...details.keywords);
+          }
+        });
+        if (keywords.length) {
+          if (!this.parseResult.suggestKeywords) {
+            this.parseResult.suggestKeywords = [];
+          }
+          this.parseResult.suggestKeywords.push(
+            ...keywords.map(keyword => {
+              if (typeof keyword === 'object') {
+                return keyword;
+              }
+              return {
+                value: keyword,
+                weight: 10000 // Bubble up units etc on top
+              };
+            })
+          );
+        }
+      }
+      resolve();
+    });
+  }
+
   /**
    * For some suggestions the column type is needed, for instance with functions we should only suggest
    * columns that matches the argument type, cos(|) etc.
@@ -503,7 +570,7 @@ class AutocompleteResults {
     const self = this;
     const colRefDeferred = $.Deferred();
     if (self.parseResult.colRef) {
-      const colRefCallback = function(catalogEntry) {
+      const colRefCallback = function (catalogEntry) {
         self.cancellablePromises.push(
           catalogEntry
             .getSourceMeta({ silenceErrors: true, cancellable: true })
@@ -545,9 +612,9 @@ class AutocompleteResults {
     const databasesDeferred = $.Deferred();
     dataCatalog
       .getEntry({
-        sourceType: self.snippet.type(),
         namespace: self.snippet.namespace(),
         compute: self.snippet.compute(),
+        connector: self.snippet.connector(),
         path: [],
         temporaryOnly: self.temporaryOnly
       })
@@ -587,13 +654,7 @@ class AutocompleteResults {
       colRefDeferred.done(colRef => {
         const colRefKeywordSuggestions = [];
         Object.keys(self.parseResult.suggestColRefKeywords).forEach(typeForKeywords => {
-          if (
-            SqlFunctions.matchesType(
-              self.snippet.type(),
-              [typeForKeywords],
-              [colRef.type.toUpperCase()]
-            )
-          ) {
+          if (matchesType(self.dialect(), [typeForKeywords], [colRef.type.toUpperCase()])) {
             self.parseResult.suggestColRefKeywords[typeForKeywords].forEach(keyword => {
               colRefKeywordSuggestions.push({
                 value: self.parseResult.lowerCase ? keyword.toLowerCase() : keyword,
@@ -631,8 +692,10 @@ class AutocompleteResults {
 
   handleColumnAliases() {
     const self = this;
+    const deferrals = [];
+    const columnAliasesDeferred = $.Deferred();
+    const columnAliasSuggestions = [];
     if (self.parseResult.suggestColumnAliases) {
-      const columnAliasSuggestions = [];
       self.parseResult.suggestColumnAliases.forEach(columnAlias => {
         const type =
           columnAlias.types && columnAlias.types.length === 1 ? columnAlias.types[0] : 'T';
@@ -644,6 +707,21 @@ class AutocompleteResults {
             popular: ko.observable(false),
             details: columnAlias
           });
+        } else if (type === 'UDFREF') {
+          const udfDeferred = $.Deferred();
+          deferrals.push(udfDeferred);
+          getReturnTypesForUdf(self.snippet.connector(), columnAlias.udfRef)
+            .then(types => {
+              const resolvedType = types.length === 1 ? types[0] : 'T';
+              columnAliasSuggestions.push({
+                value: columnAlias.name,
+                meta: resolvedType,
+                category: CATEGORIES.COLUMN,
+                popular: ko.observable(false),
+                details: columnAlias
+              });
+            })
+            .finally(udfDeferred.resolve);
         } else {
           columnAliasSuggestions.push({
             value: columnAlias.name,
@@ -654,8 +732,14 @@ class AutocompleteResults {
           });
         }
       });
-      self.appendEntries(columnAliasSuggestions);
     }
+    $.when.apply($, deferrals).always(() => {
+      if (columnAliasSuggestions.length) {
+        self.appendEntries(columnAliasSuggestions);
+      }
+      columnAliasesDeferred.resolve();
+    });
+    return columnAliasesDeferred;
   }
 
   handleCommonTableExpressions() {
@@ -682,78 +766,117 @@ class AutocompleteResults {
 
   handleOptions() {
     const self = this;
+    const setOptionsDeferred = $.Deferred();
     if (self.parseResult.suggestSetOptions) {
-      const suggestions = [];
-      SqlSetOptions.suggestOptions(self.snippet.type(), suggestions, CATEGORIES.OPTION);
-      self.appendEntries(suggestions);
+      getSetOptions(self.snippet.connector())
+        .then(setOptions => {
+          const suggestions = [];
+          Object.keys(setOptions).forEach(name => {
+            suggestions.push({
+              category: CATEGORIES.OPTION,
+              value: name,
+              meta: '',
+              popular: ko.observable(false),
+              weightAdjust: 0,
+              details: setOptions[name]
+            });
+          });
+          self.appendEntries(suggestions);
+          setOptionsDeferred.resolve();
+        })
+        .catch(setOptionsDeferred.reject);
+    } else {
+      setOptionsDeferred.resolve();
     }
+    return setOptionsDeferred;
   }
 
   handleFunctions(colRefDeferred) {
     const self = this;
+    const functionsDeferred = $.Deferred();
     if (self.parseResult.suggestFunctions) {
       const functionSuggestions = [];
       if (
         self.parseResult.suggestFunctions.types &&
-        self.parseResult.suggestFunctions.types[0] === 'COLREF'
+        (self.parseResult.suggestFunctions.types[0] === 'COLREF' ||
+          self.parseResult.suggestFunctions.types[0] === 'UDFREF')
       ) {
         initLoading(self.loadingFunctions, colRefDeferred);
 
-        colRefDeferred.done(colRef => {
-          const functionsToSuggest = SqlFunctions.getFunctionsWithReturnTypes(
-            self.snippet.type(),
-            [colRef.type.toUpperCase()],
+        const addUdfsOfTypes = async types => {
+          const functionsToSuggest = await getUdfsWithReturnTypes(
+            self.snippet.connector(),
+            types,
             self.parseResult.suggestAggregateFunctions || false,
             self.parseResult.suggestAnalyticFunctions || false
           );
 
-          Object.keys(functionsToSuggest).forEach(name => {
+          const firstType = types[0].toUpperCase();
+
+          functionsToSuggest.forEach(udf => {
             functionSuggestions.push({
               category: CATEGORIES.UDF,
-              value: name + '()',
-              meta: functionsToSuggest[name].returnTypes.join('|'),
+              value: udf.name + '()',
+              meta: udf.returnTypes.join('|'),
               weightAdjust:
-                colRef.type.toUpperCase() !== 'T' &&
-                functionsToSuggest[name].returnTypes.some(otherType => {
-                  return otherType === colRef.type.toUpperCase();
-                })
+                firstType !== 'T' && udf.returnTypes.some(otherType => otherType === firstType)
                   ? 1
                   : 0,
               popular: ko.observable(false),
-              details: functionsToSuggest[name]
+              details: udf
             });
           });
 
           self.appendEntries(functionSuggestions);
-        });
+          functionsDeferred.resolve();
+        };
+
+        if (self.parseResult.suggestFunctions.types[0] === 'COLREF') {
+          colRefDeferred
+            .done(async colRef => {
+              await addUdfsOfTypes([colRef.type.toUpperCase()]);
+            })
+            .fail(functionsDeferred.reject);
+        } else {
+          getReturnTypesForUdf(self.snippet.connector(), self.parseResult.suggestFunctions.udfRef)
+            .then(addUdfsOfTypes)
+            .catch(async () => {
+              await addUdfsOfTypes(['T']);
+            });
+        }
       } else {
         const types = self.parseResult.suggestFunctions.types || ['T'];
-        const functionsToSuggest = SqlFunctions.getFunctionsWithReturnTypes(
-          self.snippet.type(),
+
+        getUdfsWithReturnTypes(
+          self.snippet.connector(),
           types,
           self.parseResult.suggestAggregateFunctions || false,
           self.parseResult.suggestAnalyticFunctions || false
-        );
-
-        Object.keys(functionsToSuggest).forEach(name => {
-          functionSuggestions.push({
-            category: CATEGORIES.UDF,
-            value: name + '()',
-            meta: functionsToSuggest[name].returnTypes.join('|'),
-            weightAdjust:
-              types[0].toUpperCase() !== 'T' &&
-              functionsToSuggest[name].returnTypes.some(otherType => {
-                return otherType === types[0].toUpperCase();
-              })
-                ? 1
-                : 0,
-            popular: ko.observable(false),
-            details: functionsToSuggest[name]
-          });
-        });
-        self.appendEntries(functionSuggestions);
+        )
+          .then(functionsToSuggest => {
+            functionsToSuggest.forEach(udf => {
+              functionSuggestions.push({
+                category: CATEGORIES.UDF,
+                value: udf.name + '()',
+                meta: udf.returnTypes.join('|'),
+                weightAdjust:
+                  types[0].toUpperCase() !== 'T' &&
+                  udf.returnTypes.some(otherType => otherType === types[0].toUpperCase())
+                    ? 1
+                    : 0,
+                popular: ko.observable(false),
+                details: udf
+              });
+            });
+            self.appendEntries(functionSuggestions);
+            functionsDeferred.resolve();
+          })
+          .catch(functionsDeferred.reject);
       }
+    } else {
+      functionsDeferred.resolve();
     }
+    return functionsDeferred;
   }
 
   handleDatabases(databasesDeferred) {
@@ -770,18 +893,20 @@ class AutocompleteResults {
 
       databasesDeferred.done(catalogEntries => {
         catalogEntries.forEach(dbEntry => {
-          databaseSuggestions.push({
-            value:
-              prefix +
-              sqlUtils.backTickIfNeeded(self.snippet.type(), dbEntry.name) +
-              (suggestDatabases.appendDot ? '.' : ''),
-            filterValue: dbEntry.name,
-            meta: META_I18n.database,
-            category: CATEGORIES.DATABASE,
-            popular: ko.observable(false),
-            hasCatalogEntry: true,
-            details: dbEntry
-          });
+          if (dbEntry.name !== '') {
+            databaseSuggestions.push({
+              value:
+                prefix +
+                sqlUtils.backTickIfNeeded(self.snippet.connector(), dbEntry.name) +
+                (suggestDatabases.appendDot ? '.' : ''),
+              filterValue: dbEntry.name,
+              meta: META_I18n.database,
+              category: CATEGORIES.DATABASE,
+              popular: ko.observable(false),
+              hasCatalogEntry: true,
+              details: dbEntry
+            });
+          }
         });
         self.appendEntries(databaseSuggestions);
       });
@@ -794,7 +919,7 @@ class AutocompleteResults {
 
     if (self.parseResult.suggestTables) {
       const suggestTables = self.parseResult.suggestTables;
-      const fetchTables = function() {
+      const fetchTables = function () {
         initLoading(self.loadingTables, tablesDeferred);
         tablesDeferred.done(self.appendEntries);
 
@@ -810,9 +935,9 @@ class AutocompleteResults {
 
         dataCatalog
           .getEntry({
-            sourceType: self.snippet.type(),
             namespace: self.snippet.namespace(),
             compute: self.snippet.compute(),
+            connector: self.snippet.connector(),
             path: [database],
             temporaryOnly: self.temporaryOnly
           })
@@ -832,7 +957,8 @@ class AutocompleteResults {
                     }
                     tableSuggestions.push({
                       value:
-                        prefix + sqlUtils.backTickIfNeeded(self.snippet.type(), tableEntry.name),
+                        prefix +
+                        sqlUtils.backTickIfNeeded(self.snippet.connector(), tableEntry.name),
                       filterValue: tableEntry.name,
                       tableName: tableEntry.name,
                       meta: META_I18n[tableEntry.getType().toLowerCase()],
@@ -851,7 +977,7 @@ class AutocompleteResults {
       };
 
       if (
-        self.snippet.type() === 'impala' &&
+        self.dialect() === DIALECT.impala &&
         self.parseResult.suggestTables.identifierChain &&
         self.parseResult.suggestTables.identifierChain.length === 1
       ) {
@@ -872,7 +998,7 @@ class AutocompleteResults {
           }
         });
       } else if (
-        self.snippet.type() === 'impala' &&
+        self.dialect() === DIALECT.impala &&
         self.parseResult.suggestTables.identifierChain &&
         self.parseResult.suggestTables.identifierChain.length > 1
       ) {
@@ -904,11 +1030,11 @@ class AutocompleteResults {
         // For multiple tables we need to merge and make sure identifiers are unique
         const columnDeferrals = [];
 
-        const waitForCols = function() {
+        const waitForCols = function () {
           $.when.apply($, columnDeferrals).always(() => {
             AutocompleteResults.mergeColumns(columnSuggestions);
             if (
-              self.snippet.type() === 'hive' &&
+              self.dialect() === DIALECT.hive &&
               /[^.]$/.test(self.editor().getTextBeforeCursor())
             ) {
               columnSuggestions.push({
@@ -930,22 +1056,25 @@ class AutocompleteResults {
           });
         };
 
-        if (suggestColumns.types && suggestColumns.types[0] === 'COLREF') {
-          colRefDeferred.done(colRef => {
-            suggestColumns.tables.forEach(table => {
-              columnDeferrals.push(
-                self.addColumns(table, [colRef.type.toUpperCase()], columnSuggestions)
-              );
-            });
-            waitForCols();
-          });
-        } else {
+        const applyTypes = types => {
           suggestColumns.tables.forEach(table => {
-            columnDeferrals.push(
-              self.addColumns(table, suggestColumns.types || ['T'], columnSuggestions)
-            );
+            columnDeferrals.push(self.addColumns(table, types, columnSuggestions));
           });
           waitForCols();
+        };
+
+        if (suggestColumns.types && suggestColumns.types[0] === 'COLREF') {
+          colRefDeferred.done(colRef => {
+            applyTypes([colRef.type.toUpperCase()]);
+          });
+        } else if (suggestColumns.types && suggestColumns.types[0] === 'UDFREF') {
+          getReturnTypesForUdf(self.snippet.connector(), suggestColumns.udfRef)
+            .then(applyTypes)
+            .catch(() => {
+              applyTypes(['T']);
+            });
+        } else {
+          applyTypes(suggestColumns.types || ['T']);
         }
       } else {
         columnsDeferred.reject();
@@ -975,7 +1104,7 @@ class AutocompleteResults {
                 typeof column.type !== 'undefined' && column.type !== 'COLREF' ? column.type : 'T';
               if (typeof column.alias !== 'undefined') {
                 columnSuggestions.push({
-                  value: sqlUtils.backTickIfNeeded(self.snippet.type(), column.alias),
+                  value: sqlUtils.backTickIfNeeded(self.snippet.connector(), column.alias),
                   filterValue: column.alias,
                   meta: type,
                   category: CATEGORIES.COLUMN,
@@ -991,7 +1120,7 @@ class AutocompleteResults {
               ) {
                 columnSuggestions.push({
                   value: sqlUtils.backTickIfNeeded(
-                    self.snippet.type(),
+                    self.snippet.connector(),
                     column.identifierChain[column.identifierChain.length - 1].name
                   ),
                   filterValue: column.identifierChain[column.identifierChain.length - 1].name,
@@ -1019,7 +1148,7 @@ class AutocompleteResults {
         table.identifierChain[0].subQuery
       );
 
-      const addSubQueryColumns = function(subQueryColumns) {
+      const addSubQueryColumns = function (subQueryColumns) {
         subQueryColumns.forEach(column => {
           if (column.alias || column.identifierChain) {
             // TODO: Potentially fetch column types for sub-queries, possible performance hit.
@@ -1027,7 +1156,7 @@ class AutocompleteResults {
               typeof column.type !== 'undefined' && column.type !== 'COLREF' ? column.type : 'T';
             if (column.alias) {
               columnSuggestions.push({
-                value: sqlUtils.backTickIfNeeded(self.snippet.type(), column.alias),
+                value: sqlUtils.backTickIfNeeded(self.snippet.connector(), column.alias),
                 filterValue: column.alias,
                 meta: type,
                 category: CATEGORIES.COLUMN,
@@ -1038,7 +1167,7 @@ class AutocompleteResults {
             } else if (column.identifierChain && column.identifierChain.length > 0) {
               columnSuggestions.push({
                 value: sqlUtils.backTickIfNeeded(
-                  self.snippet.type(),
+                  self.snippet.connector(),
                   column.identifierChain[column.identifierChain.length - 1].name
                 ),
                 filterValue: column.identifierChain[column.identifierChain.length - 1].name,
@@ -1062,7 +1191,7 @@ class AutocompleteResults {
       }
       addColumnsDeferred.resolve();
     } else if (typeof table.identifierChain !== 'undefined') {
-      const addColumnsFromEntry = function(dataCatalogEntry) {
+      const addColumnsFromEntry = function (dataCatalogEntry) {
         self.cancellablePromises.push(
           dataCatalogEntry
             .getSourceMeta({ silenceErrors: true, cancellable: true })
@@ -1072,22 +1201,19 @@ class AutocompleteResults {
                   .getChildren({ silenceErrors: true, cancellable: true })
                   .done(childEntries => {
                     childEntries.forEach(childEntry => {
-                      let name = sqlUtils.backTickIfNeeded(self.snippet.type(), childEntry.name);
+                      let name = sqlUtils.backTickIfNeeded(
+                        self.snippet.connector(),
+                        childEntry.name
+                      );
                       if (
-                        self.snippet.type() === 'hive' &&
+                        self.dialect() === DIALECT.hive &&
                         (childEntry.isArray() || childEntry.isMap())
                       ) {
                         name += '[]';
                       }
                       if (
-                        SqlFunctions.matchesType(self.snippet.type(), types, [
-                          childEntry.getType().toUpperCase()
-                        ]) ||
-                        SqlFunctions.matchesType(
-                          self.snippet.type(),
-                          [childEntry.getType().toUpperCase()],
-                          types
-                        ) ||
+                        matchesType(self.dialect(), types, [childEntry.getType().toUpperCase()]) ||
+                        matchesType(self.dialect(), [childEntry.getType().toUpperCase()], types) ||
                         childEntry.getType === 'column' ||
                         childEntry.isComplex()
                       ) {
@@ -1110,7 +1236,7 @@ class AutocompleteResults {
                       }
                     });
                     if (
-                      self.snippet.type() === 'hive' &&
+                      self.dialect() === DIALECT.hive &&
                       (dataCatalogEntry.isArray() || dataCatalogEntry.isMap())
                     ) {
                       // Remove 'item' or 'value' and 'key' for Hive
@@ -1124,7 +1250,7 @@ class AutocompleteResults {
                       (sourceMeta.value && sourceMeta.value.fields) ||
                       (sourceMeta.item && sourceMeta.item.fields);
                     if (
-                      (self.snippet.type() === 'impala' || self.snippet.type() === 'hive') &&
+                      (self.dialect() === DIALECT.impala || self.dialect() === DIALECT.hive) &&
                       complexExtras
                     ) {
                       complexExtras.forEach(field => {
@@ -1179,9 +1305,7 @@ class AutocompleteResults {
   }
 
   static mergeColumns(columnSuggestions) {
-    columnSuggestions.sort((a, b) => {
-      return a.value.localeCompare(b.value);
-    });
+    columnSuggestions.sort((a, b) => a.value.localeCompare(b.value));
 
     for (let i = 0; i < columnSuggestions.length; i++) {
       const suggestion = columnSuggestions[i];
@@ -1330,13 +1454,31 @@ class AutocompleteResults {
 
       if (/^s3a:\/\//i.test(path)) {
         fetchFunction = 'fetchS3Path';
-        path = path.substring(4);
+        path = path.substring(5);
       } else if (/^adl:\/\//i.test(path)) {
         fetchFunction = 'fetchAdlsPath';
-        path = path.substring(4);
+        path = path.substring(5);
       } else if (/^abfs:\/\//i.test(path)) {
         fetchFunction = 'fetchAbfsPath';
-        path = path.substring(5);
+        path = path.substring(6);
+        if (path === '/') {
+          // TODO: connector.id for browsers
+          const connector = findBrowserConnector(connector => connector.type === 'abfs');
+          const rootPath = getRootFilePath(connector);
+          if (rootPath) {
+            pathsDeferred.resolve([
+              {
+                value: rootPath,
+                meta: 'abfs',
+                category: CATEGORIES.HDFS,
+                weightAdjust: 0,
+                popular: ko.observable(false),
+                details: null
+              }
+            ]);
+            return pathsDeferred;
+          }
+        }
       } else if (/^hdfs:\/\//i.test(path)) {
         path = path.substring(6);
       }
@@ -1350,7 +1492,7 @@ class AutocompleteResults {
       self.lastKnownRequests.push(
         apiHelper[fetchFunction]({
           pathParts: parts,
-          successCallback: function(data) {
+          successCallback: function (data) {
             if (!data.error) {
               const pathSuggestions = [];
               data.files.forEach(file => {
@@ -1412,15 +1554,19 @@ class AutocompleteResults {
       if (paths.length) {
         dataCatalog
           .getMultiTableEntry({
-            sourceType: self.snippet.type(),
             namespace: self.snippet.namespace(),
             compute: self.snippet.compute(),
+            connector: self.snippet.connector(),
             paths: paths
           })
           .done(multiTableEntry => {
             self.cancellablePromises.push(
               multiTableEntry
-                .getTopJoins({ silenceErrors: true, cancellable: true })
+                .getTopJoins({
+                  silenceErrors: true,
+                  cancellable: true,
+                  connector: self.snippet.connector()
+                })
                 .done(topJoins => {
                   const joinSuggestions = [];
                   let totalCount = 0;
@@ -1448,7 +1594,7 @@ class AutocompleteResults {
                         const tableParts = table.split('.');
                         if (!existingTables[tableParts[tableParts.length - 1]]) {
                           tablesAdded = true;
-                          const identifier = self.convertNavOptQualifiedIdentifier(
+                          const identifier = self.convertOptimizerQualifiedIdentifier(
                             table,
                             suggestJoins.tables
                           );
@@ -1472,16 +1618,16 @@ class AutocompleteResults {
                             suggestionString += self.parseResult.lowerCase ? ' and ' : ' AND ';
                           }
                           suggestionString +=
-                            self.convertNavOptQualifiedIdentifier(
+                            self.convertOptimizerQualifiedIdentifier(
                               joinColPair.columns[0],
                               suggestJoins.tables,
-                              self.snippet.type()
+                              self.dialect()
                             ) +
                             ' = ' +
-                            self.convertNavOptQualifiedIdentifier(
+                            self.convertOptimizerQualifiedIdentifier(
                               joinColPair.columns[1],
                               suggestJoins.tables,
-                              self.snippet.type()
+                              self.dialect()
                             );
                           first = false;
                         });
@@ -1532,9 +1678,9 @@ class AutocompleteResults {
       if (paths.length) {
         dataCatalog
           .getMultiTableEntry({
-            sourceType: self.snippet.type(),
             namespace: self.snippet.namespace(),
             compute: self.snippet.compute(),
+            connector: self.snippet.connector(),
             paths: paths
           })
           .done(multiTableEntry => {
@@ -1558,12 +1704,12 @@ class AutocompleteResults {
                             suggestionString += self.parseResult.lowerCase ? ' and ' : ' AND ';
                           }
                           suggestionString +=
-                            self.convertNavOptQualifiedIdentifier(
+                            self.convertOptimizerQualifiedIdentifier(
                               joinColPair.columns[0],
                               suggestJoinConditions.tables
                             ) +
                             ' = ' +
-                            self.convertNavOptQualifiedIdentifier(
+                            self.convertOptimizerQualifiedIdentifier(
                               joinColPair.columns[1],
                               suggestJoinConditions.tables
                             );
@@ -1621,18 +1767,18 @@ class AutocompleteResults {
       if (paths.length) {
         dataCatalog
           .getMultiTableEntry({
-            sourceType: self.snippet.type(),
             namespace: self.snippet.namespace(),
             compute: self.snippet.compute(),
+            connector: self.snippet.connector(),
             paths: paths
           })
           .done(multiTableEntry => {
             self.cancellablePromises.push(
               multiTableEntry
                 .getTopAggs({ silenceErrors: true, cancellable: true })
-                .done(topAggs => {
-                  const aggregateFunctionsSuggestions = [];
+                .done(async topAggs => {
                   if (topAggs.values && topAggs.values.length > 0) {
+                    const aggregateFunctionsSuggestions = [];
                     // Expand all column names to the fully qualified name including db and table.
                     topAggs.values.forEach(value => {
                       value.aggregateInfo.forEach(info => {
@@ -1677,16 +1823,24 @@ class AutocompleteResults {
                     });
 
                     let totalCount = 0;
-                    topAggs.values.forEach(value => {
+                    for (let i = 0; i < topAggs.values.length; i++) {
+                      const value = topAggs.values[i];
+                      totalCount += value.totalQueryCount;
+
                       let clean = value.aggregateClause;
                       substitutions.forEach(substitution => {
                         clean = clean.replace(substitution.replace, substitution.with);
                       });
-                      totalCount += value.totalQueryCount;
-                      value.function = SqlFunctions.findFunction(
-                        self.snippet.type(),
+
+                      const foundUdfs = await findUdf(
+                        self.snippet.connector(),
                         value.aggregateFunction
                       );
+
+                      // TODO: Support showing multiple UDFs with the same name but different category in the autocomplete details.
+                      // For instance, trunc appears both for dates with one description and for numbers with another description.
+                      value.function = foundUdfs.length ? foundUdfs[0] : undefined;
+
                       aggregateFunctionsSuggestions.push({
                         value: clean,
                         meta: value.function.returnTypes.join('|'),
@@ -1695,7 +1849,7 @@ class AutocompleteResults {
                         popular: ko.observable(true),
                         details: value
                       });
-                    });
+                    }
 
                     aggregateFunctionsSuggestions.forEach(suggestion => {
                       suggestion.details.relativePopularity =
@@ -1704,8 +1858,10 @@ class AutocompleteResults {
                           : Math.round((100 * suggestion.details.totalQueryCount) / totalCount);
                       suggestion.weightAdjust = suggestion.details.relativePopularity + 1;
                     });
+                    aggregateFunctionsDeferred.resolve(aggregateFunctionsSuggestions);
+                  } else {
+                    aggregateFunctionsDeferred.resolve([]);
                   }
-                  aggregateFunctionsDeferred.resolve(aggregateFunctionsSuggestions);
                 })
                 .fail(aggregateFunctionsDeferred.reject)
             );
@@ -1720,7 +1876,7 @@ class AutocompleteResults {
     return aggregateFunctionsDeferred;
   }
 
-  handlePopularGroupByOrOrderBy(navOptAttribute, suggestSpec, deferred, columnsDeferred) {
+  handlePopularGroupByOrOrderBy(optimizerAttribute, suggestSpec, deferred, columnsDeferred) {
     const self = this;
     const paths = [];
     suggestSpec.tables.forEach(table => {
@@ -1739,8 +1895,8 @@ class AutocompleteResults {
 
     self.cancellablePromises.push(
       dataCatalog
-        .getCatalog(self.snippet.type())
-        .loadNavOptPopularityForTables({
+        .getCatalog(self.snippet.connector())
+        .loadOptimizerPopularityForTables({
           namespace: self.snippet.namespace(),
           compute: self.snippet.compute(),
           paths: paths,
@@ -1756,28 +1912,30 @@ class AutocompleteResults {
             : '';
 
           entries.forEach(entry => {
-            if (entry.navOptPopularity[navOptAttribute]) {
-              totalColumnCount += entry.navOptPopularity[navOptAttribute].columnCount;
+            if (entry.optimizerPopularity[optimizerAttribute]) {
+              totalColumnCount += entry.optimizerPopularity[optimizerAttribute].columnCount;
               matchedEntries.push(entry);
             }
           });
           if (totalColumnCount > 0) {
             const suggestions = [];
             matchedEntries.forEach(entry => {
-              const filterValue = self.createNavOptIdentifierForColumn(
-                entry.navOptPopularity[navOptAttribute],
+              const filterValue = self.createOptimizerIdentifierForColumn(
+                entry.optimizerPopularity[optimizerAttribute],
                 suggestSpec.tables
               );
               suggestions.push({
                 value: prefix + filterValue,
                 filterValue: filterValue,
-                meta: navOptAttribute === 'groupByColumn' ? META_I18n.groupBy : META_I18n.orderBy,
+                meta:
+                  optimizerAttribute === 'groupByColumn' ? META_I18n.groupBy : META_I18n.orderBy,
                 category:
-                  navOptAttribute === 'groupByColumn'
+                  optimizerAttribute === 'groupByColumn'
                     ? CATEGORIES.POPULAR_GROUP_BY
                     : CATEGORIES.POPULAR_ORDER_BY,
                 weightAdjust: Math.round(
-                  (100 * entry.navOptPopularity[navOptAttribute].columnCount) / totalColumnCount
+                  (100 * entry.optimizerPopularity[optimizerAttribute].columnCount) /
+                    totalColumnCount
                 ),
                 popular: ko.observable(true),
                 hasCatalogEntry: false,
@@ -1848,9 +2006,9 @@ class AutocompleteResults {
       if (paths.length) {
         dataCatalog
           .getMultiTableEntry({
-            sourceType: self.snippet.type(),
             namespace: self.snippet.namespace(),
             compute: self.snippet.compute(),
+            connector: self.snippet.connector(),
             paths: paths
           })
           .done(multiTableEntry => {
@@ -1874,7 +2032,7 @@ class AutocompleteResults {
                                     ? suggestFilters.prefix.toLowerCase()
                                     : suggestFilters.prefix) + ' '
                                 : '';
-                              compVal += self.createNavOptIdentifier(
+                              compVal += self.createOptimizerIdentifier(
                                 value.tableName,
                                 grp.columnName,
                                 suggestFilters.tables
@@ -1939,23 +2097,23 @@ class AutocompleteResults {
 
       dataCatalog
         .getEntry({
-          sourceType: self.snippet.type(),
           namespace: self.snippet.namespace(),
           compute: self.snippet.compute(),
+          connector: self.snippet.connector(),
           path: [db],
           temporaryOnly: self.temporaryOnly
         })
         .done(entry => {
           self.cancellablePromises.push(
             entry
-              .loadNavOptPopularityForChildren({ silenceErrors: true, cancellable: true })
+              .loadOptimizerPopularityForChildren({ silenceErrors: true, cancellable: true })
               .done(childEntries => {
                 let totalPopularity = 0;
                 const popularityIndex = {};
                 childEntries.forEach(childEntry => {
-                  if (childEntry.navOptPopularity && childEntry.navOptPopularity.popularity) {
+                  if (childEntry.optimizerPopularity && childEntry.optimizerPopularity.popularity) {
                     popularityIndex[childEntry.name] = true;
-                    totalPopularity += childEntry.navOptPopularity.popularity;
+                    totalPopularity += childEntry.optimizerPopularity.popularity;
                   }
                 });
                 if (totalPopularity > 0 && Object.keys(popularityIndex).length) {
@@ -1964,7 +2122,8 @@ class AutocompleteResults {
                       tableSuggestions.forEach(suggestion => {
                         if (popularityIndex[suggestion.details.name]) {
                           suggestion.relativePopularity = Math.round(
-                            (100 * suggestion.details.navOptPopularity.popularity) / totalPopularity
+                            (100 * suggestion.details.optimizerPopularity.popularity) /
+                              totalPopularity
                           );
                           if (suggestion.relativePopularity >= 5) {
                             suggestion.popular(true);
@@ -2025,8 +2184,8 @@ class AutocompleteResults {
 
       self.cancellablePromises.push(
         dataCatalog
-          .getCatalog(self.snippet.type())
-          .loadNavOptPopularityForTables({
+          .getCatalog(self.snippet.connector())
+          .loadOptimizerPopularityForTables({
             namespace: self.snippet.namespace(),
             compute: self.snippet.compute(),
             paths: paths,
@@ -2049,7 +2208,10 @@ class AutocompleteResults {
             const popularityIndex = {};
 
             popularEntries.forEach(popularEntry => {
-              if (popularEntry.navOptPopularity && popularEntry.navOptPopularity[valueAttribute]) {
+              if (
+                popularEntry.optimizerPopularity &&
+                popularEntry.optimizerPopularity[valueAttribute]
+              ) {
                 popularityIndex[popularEntry.getQualifiedPath()] = true;
               }
             });
@@ -2070,14 +2232,14 @@ class AutocompleteResults {
                   ) {
                     matchedSuggestions.push(suggestion);
                     totalColumnCount +=
-                      suggestion.details.navOptPopularity[valueAttribute].columnCount;
+                      suggestion.details.optimizerPopularity[valueAttribute].columnCount;
                   }
                 });
                 if (totalColumnCount > 0) {
                   matchedSuggestions.forEach(matchedSuggestion => {
                     matchedSuggestion.relativePopularity = Math.round(
                       (100 *
-                        matchedSuggestion.details.navOptPopularity[valueAttribute].columnCount) /
+                        matchedSuggestion.details.optimizerPopularity[valueAttribute].columnCount) /
                         totalColumnCount
                     );
                     if (matchedSuggestion.relativePopularity >= 5) {
@@ -2090,6 +2252,7 @@ class AutocompleteResults {
               })
               .fail(popularColumnsDeferred.reject);
           })
+          .fail(popularColumnsDeferred.reject)
       );
     } else {
       popularColumnsDeferred.reject();
@@ -2097,9 +2260,9 @@ class AutocompleteResults {
     return popularColumnsDeferred;
   }
 
-  createNavOptIdentifier(navOptTableName, navOptColumnName, tables) {
+  createOptimizerIdentifier(optimizerTableName, optimizerColumnName, tables) {
     const self = this;
-    let path = navOptTableName + '.' + navOptColumnName.split('.').pop();
+    let path = optimizerTableName + '.' + optimizerColumnName.split('.').pop();
     for (let i = 0; i < tables.length; i++) {
       let tablePath = '';
       if (tables[i].identifierChain.length === 2) {
@@ -2122,38 +2285,40 @@ class AutocompleteResults {
     return path;
   }
 
-  createNavOptIdentifierForColumn(navOptColumn, tables) {
+  createOptimizerIdentifierForColumn(optimizerColumn, tables) {
     const self = this;
     for (let i = 0; i < tables.length; i++) {
       if (
-        navOptColumn.dbName &&
-        (navOptColumn.dbName !== self.activeDatabase ||
-          navOptColumn.dbName !== tables[i].identifierChain[0].name)
+        optimizerColumn.dbName &&
+        (optimizerColumn.dbName !== self.activeDatabase ||
+          optimizerColumn.dbName !== tables[i].identifierChain[0].name)
       ) {
         continue;
       }
       if (
-        navOptColumn.tableName &&
+        optimizerColumn.tableName &&
         hueUtils.equalIgnoreCase(
-          navOptColumn.tableName,
+          optimizerColumn.tableName,
           tables[i].identifierChain[tables[i].identifierChain.length - 1].name
         ) &&
         tables[i].alias
       ) {
-        return tables[i].alias + '.' + navOptColumn.columnName;
+        return tables[i].alias + '.' + optimizerColumn.columnName;
       }
     }
 
-    if (navOptColumn.dbName && navOptColumn.dbName !== self.activeDatabase) {
-      return navOptColumn.dbName + '.' + navOptColumn.tableName + '.' + navOptColumn.columnName;
+    if (optimizerColumn.dbName && optimizerColumn.dbName !== self.activeDatabase) {
+      return (
+        optimizerColumn.dbName + '.' + optimizerColumn.tableName + '.' + optimizerColumn.columnName
+      );
     }
     if (tables.length > 1) {
-      return navOptColumn.tableName + '.' + navOptColumn.columnName;
+      return optimizerColumn.tableName + '.' + optimizerColumn.columnName;
     }
-    return navOptColumn.columnName;
+    return optimizerColumn.columnName;
   }
 
-  convertNavOptQualifiedIdentifier(qualifiedIdentifier, tables, type) {
+  convertOptimizerQualifiedIdentifier(qualifiedIdentifier, tables, type) {
     const self = this;
     const aliases = [];
     let tablesHasDefaultDatabase = false;
@@ -2227,7 +2392,7 @@ class AutocompleteResults {
       }
     }
 
-    const fetchFieldsInternal = function(remainingPath, fetchedPath) {
+    const fetchFieldsInternal = function (remainingPath, fetchedPath) {
       if (!fetchedPath) {
         fetchedPath = [];
       }
@@ -2244,9 +2409,9 @@ class AutocompleteResults {
 
       dataCatalog
         .getEntry({
-          sourceType: self.snippet.type(),
           namespace: self.snippet.namespace(),
           compute: self.snippet.compute(),
+          connector: self.snippet.connector(),
           path: fetchedPath,
           temporaryOnly: self.temporaryOnly
         })
@@ -2256,7 +2421,7 @@ class AutocompleteResults {
               .getSourceMeta({ silenceErrors: true, cancellable: true })
               .done(sourceMeta => {
                 if (
-                  self.snippet.type() === 'hive' &&
+                  self.dialect() === DIALECT.hive &&
                   typeof sourceMeta.extended_columns !== 'undefined' &&
                   sourceMeta.extended_columns.length === 1 &&
                   /^(?:map|array|struct)/i.test(sourceMeta.extended_columns[0].type)
@@ -2287,12 +2452,12 @@ class AutocompleteResults {
 
     // For Hive it could be either:
     // SELECT col.struct FROM db.tbl -or- SELECT col.struct FROM tbl
-    if (path.length > 1 && (self.snippet.type() === 'impala' || self.snippet.type() === 'hive')) {
+    if (path.length > 1 && (self.dialect() === DIALECT.impala || self.dialect() === DIALECT.hive)) {
       dataCatalog
         .getEntry({
-          sourceType: self.snippet.type(),
           namespace: self.snippet.namespace(),
           compute: self.snippet.compute(),
+          connector: self.snippet.connector(),
           path: [],
           temporaryOnly: self.temporaryOnly
         })

@@ -19,6 +19,7 @@ import * as ko from 'knockout';
 
 import apiHelper from 'api/apiHelper';
 import huePubSub from 'utils/huePubSub';
+import { ASSIST_DB_HIGHLIGHT_EVENT } from 'ko/components/assist/events';
 
 class DataCatalogContext {
   constructor(options) {
@@ -55,12 +56,13 @@ class DataCatalogContext {
             isActive: i === catalogEntry.path.length - 1,
             path: catalogEntry.path.slice(0, i + 1),
             catalogEntry: self.catalogEntry,
-            makeActive: function() {
+            makeActive: function () {
               self
                 .catalogEntry()
                 .dataCatalog.getEntry({
                   namespace: self.catalogEntry().namespace,
                   compute: self.catalogEntry().compute,
+                  connector: self.catalogEntry().connector,
                   path: this.path,
                   temporaryOnly: self.catalogEntry().isTemporary
                 })
@@ -75,12 +77,13 @@ class DataCatalogContext {
     self.load();
   }
 
+  setEntry(entry) {
+    this.catalogEntry(entry);
+  }
+
   refresh() {
     const self = this;
-    self
-      .catalogEntry()
-      .clearCache({ invalidate: 'invalidate', cascade: true })
-      .always(self.load.bind(self));
+    self.catalogEntry().clearCache({ cascade: true }).always(self.load.bind(self));
   }
 
   load() {
@@ -104,9 +107,10 @@ class DataCatalogContext {
         })
     );
 
+    // TODO: Use connector attributes in dataCatalogContext
     if (
-      self.catalogEntry().getSourceType() === 'impala' ||
-      self.catalogEntry().getSourceType() === 'hive'
+      self.catalogEntry().getDialect() === 'impala' ||
+      self.catalogEntry().getDialect() === 'hive'
     ) {
       self.activePromises.push(
         self
@@ -147,10 +151,7 @@ class DataCatalogContext {
     }
 
     self.activePromises.push(
-      self
-        .catalogEntry()
-        .getComment({ silenceErrors: true, cancellable: true })
-        .done(self.comment)
+      self.catalogEntry().getComment({ silenceErrors: true, cancellable: true }).done(self.comment)
     );
 
     $.when.apply($, self.activePromises).always(() => {
@@ -175,7 +176,7 @@ class DataCatalogContext {
 
   showInAssist() {
     const self = this;
-    huePubSub.publish('assist.db.highlight', self.catalogEntry());
+    huePubSub.publish(ASSIST_DB_HIGHLIGHT_EVENT, self.catalogEntry());
     huePubSub.publish('global.search.close');
   }
 
@@ -186,7 +187,7 @@ class DataCatalogContext {
       '/hue/dashboard/browse/' +
         self.catalogEntry().path.join('.') +
         '?engine=' +
-        self.catalogEntry().getSourceType()
+        self.catalogEntry().getConnector().id
     );
     huePubSub.publish('context.popover.hide');
     huePubSub.publish('global.search.close');
@@ -199,8 +200,8 @@ class DataCatalogContext {
       '/metastore/table' +
         (self.catalogEntry().isTableOrView() ? '/' : 's/') +
         self.catalogEntry().path.join('/') +
-        '?source_type=' +
-        self.catalogEntry().getSourceType() +
+        '?connector_id=' +
+        self.catalogEntry().getConnector().id +
         '&namespace=' +
         self.catalogEntry().namespace.id
     );

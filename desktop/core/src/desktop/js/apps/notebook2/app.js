@@ -32,8 +32,11 @@ import {
   REDRAW_FIXED_HEADERS_EVENT,
   SHOW_GRID_SEARCH_EVENT,
   SHOW_NORMAL_RESULT_EVENT,
-  REDRAW_CHART_EVENT
+  REDRAW_CHART_EVENT,
+  IGNORE_NEXT_UNLOAD_EVENT
 } from 'apps/notebook2/events';
+import { DIALECT } from 'apps/notebook2/snippet';
+import { SHOW_LEFT_ASSIST_EVENT } from 'ko/components/assist/events';
 
 export const initNotebook2 = () => {
   window.Clipboard = Clipboard;
@@ -73,25 +76,19 @@ export const initNotebook2 = () => {
             (dt.types &&
               (dt.types.indexOf ? dt.types.indexOf('Files') !== -1 : dt.types.contains('Files'))))
         ) {
-          $(window.EDITOR_BINDABLE_ELEMENT)
-            .find('.hoverMsg')
-            .removeClass('hide');
+          $(window.EDITOR_BINDABLE_ELEMENT).find('.hoverMsg').removeClass('hide');
         }
       };
 
       const hideHoverMsg = vm => {
         if (vm.editorMode()) {
-          $(window.EDITOR_BINDABLE_ELEMENT)
-            .find('.hoverText')
-            .html(I18n('Drop a SQL file here'));
+          $(window.EDITOR_BINDABLE_ELEMENT).find('.hoverText').html(I18n('Drop a SQL file here'));
         } else {
           $(window.EDITOR_BINDABLE_ELEMENT)
             .find('.hoverText')
             .html(I18n('Drop iPython/Zeppelin notebooks here'));
         }
-        $(window.EDITOR_BINDABLE_ELEMENT)
-          .find('.hoverMsg')
-          .addClass('hide');
+        $(window.EDITOR_BINDABLE_ELEMENT).find('.hoverMsg').addClass('hide');
       };
 
       if (ko.options) {
@@ -244,7 +241,7 @@ export const initNotebook2 = () => {
           }
         };
 
-        const handleFileSelect = function(evt) {
+        const handleFileSelect = evt => {
           evt.stopPropagation();
           evt.preventDefault();
           const dt = evt.dataTransfer;
@@ -257,8 +254,8 @@ export const initNotebook2 = () => {
 
           for (let i = 0, f; (f = files[i]); i++) {
             const reader = new FileReader();
-            reader.onload = (function(file) {
-              return function(e) {
+            reader.onload = (function (file) {
+              return function (e) {
                 $('.hoverText').html("<i class='fa fa-spinner fa-spin'></i>");
                 parseExternalJSON(e.target.result);
               };
@@ -267,7 +264,7 @@ export const initNotebook2 = () => {
           }
         };
 
-        const handleDragOver = function(evt) {
+        const handleDragOver = function (evt) {
           evt.stopPropagation();
           evt.preventDefault();
           evt.dataTransfer.dropEffect = 'copy';
@@ -354,8 +351,18 @@ export const initNotebook2 = () => {
         huePubSub.publish(REDRAW_FIXED_HEADERS_EVENT);
       });
 
+      let ignoreNextUnload = false;
+
+      huePubSub.subscribe(IGNORE_NEXT_UNLOAD_EVENT, () => {
+        ignoreNextUnload = true;
+      });
+
       // Close the notebook snippets when leaving the page
-      window.onbeforeunload = function(e) {
+      window.onbeforeunload = function (e) {
+        if (ignoreNextUnload) {
+          ignoreNextUnload = false;
+          return;
+        }
         if (!viewModel.selectedNotebook().avoidClosing) {
           viewModel.selectedNotebook().close();
         }
@@ -380,10 +387,7 @@ export const initNotebook2 = () => {
             viewModel.editorType(),
             null,
             viewModel.selectedNotebook()
-              ? viewModel
-                  .selectedNotebook()
-                  .snippets()[0]
-                  .currentQueryTab()
+              ? viewModel.selectedNotebook().snippets()[0].currentQueryTab()
               : null
           );
         }
@@ -429,10 +433,7 @@ export const initNotebook2 = () => {
         ) {
           if (
             viewModel.editorMode() &&
-            viewModel
-              .selectedNotebook()
-              .snippets()[0]
-              .currentQueryTab() === 'queryResults'
+            viewModel.selectedNotebook().snippets()[0].currentQueryTab() === 'queryResults'
           ) {
             e.preventDefault();
             huePubSub.publish(SHOW_GRID_SEARCH_EVENT);
@@ -456,14 +457,14 @@ export const initNotebook2 = () => {
       const getDraggableOptions = minY => {
         return {
           axis: 'y',
-          start: function(e, ui) {
+          start: function (e, ui) {
             initialResizePosition = ui.offset.top;
             huePubSub.publish(HIDE_FIXED_HEADERS_EVENT);
           },
-          drag: function(e, ui) {
+          drag: function (e, ui) {
             draggableHelper($(this), e, ui);
           },
-          stop: function(e, ui) {
+          stop: function (e, ui) {
             draggableHelper($(this), e, ui, true);
             huePubSub.publish(REDRAW_FIXED_HEADERS_EVENT);
             ui.helper.first().removeAttr('style');
@@ -472,14 +473,8 @@ export const initNotebook2 = () => {
         };
       };
 
-      $('.resize-panel a').each(function() {
-        $(this).draggable(
-          getDraggableOptions(
-            $(this)
-              .parents('.snippet')
-              .offset().top + 128
-          )
-        );
+      $('.resize-panel a').each(function () {
+        $(this).draggable(getDraggableOptions($(this).parents('.snippet').offset().top + 128));
       });
 
       // ======== PubSub ========
@@ -502,10 +497,10 @@ export const initNotebook2 = () => {
           if (app === 'editor') {
             huePubSub.publish(REDRAW_FIXED_HEADERS_EVENT);
             huePubSub.publish('hue.scrollleft.show');
-            huePubSub.publish('active.snippet.type.changed', {
-              type: viewModel.editorType(),
-              isSqlDialect: viewModel.getSnippetViewSettings(viewModel.editorType()).sqlDialect
-            });
+            viewModel.notifyDialectChange(
+              viewModel.editorType(),
+              viewModel.getSnippetViewSettings(viewModel.editorType()).sqlDialect
+            );
           }
         },
         HUE_PUB_SUB_EDITOR_ID
@@ -516,37 +511,6 @@ export const initNotebook2 = () => {
         tab => {
           if (tab !== 'queryResults') {
             $('.hue-datatable-search').hide();
-          }
-          if (tab === 'queryHistory') {
-            hueUtils.waitForRendered(
-              $('#queryHistory .history-table'),
-              el => {
-                return el.is(':visible');
-              },
-              () => {
-                viewModel.selectedNotebook().forceHistoryInitialHeight(true);
-                huePubSub.publish('editor.calculate.history.height');
-              }
-            );
-          }
-        },
-        HUE_PUB_SUB_EDITOR_ID
-      );
-
-      huePubSub.subscribe(
-        'editor.calculate.history.height',
-        () => {
-          if (
-            viewModel.editorMode() &&
-            (viewModel.selectedNotebook().historyInitialHeight() === 0 ||
-              viewModel.selectedNotebook().forceHistoryInitialHeight())
-          ) {
-            let h = $('#queryHistory .history-table').height();
-            if (h === 0) {
-              h = viewModel.selectedNotebook().history().length * 32;
-            }
-            viewModel.selectedNotebook().historyInitialHeight(h + 80); // add pagination too
-            viewModel.selectedNotebook().forceHistoryInitialHeight(false);
           }
         },
         HUE_PUB_SUB_EDITOR_ID
@@ -559,10 +523,7 @@ export const initNotebook2 = () => {
           huePubSub.subscribe(
             'editor.upload.query',
             query_id => {
-              viewModel
-                .selectedNotebook()
-                .snippets()[0]
-                .uploadQuery(query_id);
+              viewModel.selectedNotebook().snippets()[0].uploadQuery(query_id);
             },
             HUE_PUB_SUB_EDITOR_ID
           );
@@ -572,10 +533,7 @@ export const initNotebook2 = () => {
           huePubSub.subscribe(
             'editor.upload.table.stats',
             options => {
-              viewModel
-                .selectedNotebook()
-                .snippets()[0]
-                .uploadTableStats(options);
+              viewModel.selectedNotebook().snippets()[0].uploadTableStats(options);
             },
             HUE_PUB_SUB_EDITOR_ID
           );
@@ -585,10 +543,7 @@ export const initNotebook2 = () => {
           huePubSub.subscribe(
             'editor.upload.history',
             () => {
-              viewModel
-                .selectedNotebook()
-                .snippets()[0]
-                .uploadQueryHistory(5);
+              viewModel.selectedNotebook().snippets()[0].uploadQueryHistory(5);
             },
             HUE_PUB_SUB_EDITOR_ID
           );
@@ -604,7 +559,7 @@ export const initNotebook2 = () => {
       );
 
       huePubSub.subscribe(
-        'left.assist.show',
+        SHOW_LEFT_ASSIST_EVENT,
         () => {
           if (!viewModel.isLeftPanelVisible() && viewModel.assistAvailable()) {
             viewModel.isLeftPanelVisible(true);
@@ -743,36 +698,37 @@ export const initNotebook2 = () => {
       huePubSub.subscribe(
         'jobbrowser.data',
         jobs => {
-          const snippet = viewModel.selectedNotebook().snippets()[0];
-          if (!snippet || snippet.type() === 'impala') {
-            return;
-          }
-          if (jobs.length > 0) {
-            let progress = 0;
-            let parent;
-            jobs.forEach(job => {
-              const id = job.shortId || job.id;
-              const el = $('.jobs-overlay li:contains(' + id + ')');
-              if (!el.length) {
-                return;
-              }
-              const context = ko.contextFor(el[0]);
-              parent = context.$parent;
-              const _job = context.$data;
-              progress = parseInt(job.mapsPercentComplete);
-              if (isNaN(progress)) {
-                progress = parseInt(job.progress);
-              }
-              if (!isNaN(progress)) {
-                _job.percentJob(progress);
-              } else {
-                progress = 0;
-              }
-            });
-            if (parent && parent.jobs().length === 1) {
-              parent.progress(Math.max(progress, parent.progress()));
+          viewModel.withActiveSnippet(snippet => {
+            if (!snippet || snippet.dialect() === DIALECT.impala) {
+              return;
             }
-          }
+            if (jobs.length > 0) {
+              let progress = 0;
+              let parent;
+              jobs.forEach(job => {
+                const id = job.shortId || job.id;
+                const el = $('.jobs-overlay li:contains(' + id + ')');
+                if (!el.length) {
+                  return;
+                }
+                const context = ko.contextFor(el[0]);
+                parent = context.$parent;
+                const _job = context.$data;
+                progress = parseInt(job.mapsPercentComplete);
+                if (isNaN(progress)) {
+                  progress = parseInt(job.progress);
+                }
+                if (!isNaN(progress)) {
+                  _job.percentJob(progress);
+                } else {
+                  progress = 0;
+                }
+              });
+              if (parent && parent.jobs().length === 1) {
+                parent.progress(Math.max(progress, parent.progress()));
+              }
+            }
+          });
         },
         HUE_PUB_SUB_EDITOR_ID
       );
@@ -786,15 +742,8 @@ export const initNotebook2 = () => {
           };
           if (viewModel.selectedNotebook()) {
             if (viewModel.selectedNotebook().snippets().length === 1) {
-              result.editor = viewModel
-                .selectedNotebook()
-                .snippets()[0]
-                .ace();
-              result.risks =
-                viewModel
-                  .selectedNotebook()
-                  .snippets()[0]
-                  .complexity() || {};
+              result.editor = viewModel.selectedNotebook().snippets()[0].ace();
+              result.risks = viewModel.selectedNotebook().snippets()[0].complexity() || {};
             } else {
               viewModel
                 .selectedNotebook()
@@ -825,7 +774,7 @@ export const initNotebook2 = () => {
             () => {
               let cumulativeWidth = 0;
               $('.editorComponents .hue-title-bar ul li:not(.skip-width-calculation)').each(
-                function() {
+                function () {
                   cumulativeWidth += $(this).outerWidth();
                 }
               );

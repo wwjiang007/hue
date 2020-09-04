@@ -32,16 +32,22 @@ class AceAutocompleteWrapper {
 
     self.topTables = {};
 
-    const initializeAutocompleter = function() {
+    const initializeAutocompleter = function () {
       self.autocompleter = new HdfsAutocompleter({
         user: options.user,
         snippet: options.snippet,
         timeout: options.timeout
       });
     };
-    self.snippet.type.subscribe(() => {
-      initializeAutocompleter();
-    });
+    if (window.ENABLE_NOTEBOOK_2) {
+      self.snippet.dialect.subscribe(() => {
+        initializeAutocompleter();
+      });
+    } else {
+      self.snippet.type.subscribe(() => {
+        initializeAutocompleter();
+      });
+    }
     initializeAutocompleter();
   }
 

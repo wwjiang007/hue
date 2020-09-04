@@ -35,6 +35,9 @@ from desktop.lib.i18n import force_unicode
 from desktop.lib.parameterization import substitute_variables
 from metastore import parser
 from notebook.models import escape_rows, MockedDjangoRequest, make_notebook
+from metastore.conf import FORCE_HS2_METADATA
+from metastore.views import _get_db, _get_servername
+from useradmin.models import User
 
 import beeswax.models
 from beeswax.data_export import upload
@@ -43,13 +46,10 @@ from beeswax.conf import USE_GET_LOG_API
 from beeswax.forms import QueryForm
 from beeswax.models import Session, QueryHistory
 from beeswax.server import dbms
-from beeswax.server.dbms import expand_exception, get_query_server_config, QueryServerException, QueryServerTimeoutException,\
+from beeswax.server.dbms import expand_exception, get_query_server_config, QueryServerException, QueryServerTimeoutException, \
     SubQueryTable
-from beeswax.views import authorized_get_design, authorized_get_query_history, make_parameterization_form,\
+from beeswax.views import authorized_get_design, authorized_get_query_history, make_parameterization_form, \
     safe_get_design, save_design, massage_columns_for_json, _get_query_handle_and_state, parse_out_jobs
-from metastore.conf import FORCE_HS2_METADATA
-from metastore.views import _get_db, _get_servername
-from useradmin.models import User
 
 
 LOG = logging.getLogger(__name__)
@@ -103,11 +103,15 @@ def autocomplete(request, database=None, table=None, column=None, nested=None):
   return JsonResponse(response)
 
 
-def _autocomplete(db, database=None, table=None, column=None, nested=None, query=None, cluster=None):
+def _autocomplete(db, database=None, table=None, column=None, nested=None, query=None, cluster=None, operation='schema'):
   response = {}
 
   try:
-    if database is None:
+    if operation == 'functions':
+      response['functions'] = _get_functions(db, database)
+    elif operation == 'function':
+      response['function'] = _get_function(db, database)
+    elif database is None:
       response['databases'] = db.get_databases()
     elif table is None:
       tables_meta = db.get_tables_meta(database=database)
@@ -123,7 +127,7 @@ def _autocomplete(db, database=None, table=None, column=None, nested=None, query
       cols_extended = massage_columns_for_json(table.cols)
 
       if table.is_impala_only: # Expand Kudu table information
-        if db.client.query_server['server_name'] != 'impala':
+        if db.client.query_server['dialect'] != 'impala':
           query_server = get_query_server_config('impala', connector=cluster)
           db = dbms.get(db.client.user, query_server, cluster=cluster)
 
@@ -133,8 +137,10 @@ def _autocomplete(db, database=None, table=None, column=None, nested=None, query
           col_props.update(extra_col_options.get(col_props['name'], {}))
 
         primary_keys = [col['name'] for col in extra_col_options.values() if col.get('primary_key') == 'true'] # Until IMPALA-8291
+        foreign_keys = []  # Not supported yet
       else:
         primary_keys = [pk.name for pk in table.primary_keys]
+        foreign_keys = table.foreign_keys
 
       response['support_updates'] = table.is_impala_only
       response['columns'] = [column.name for column in table.cols]
@@ -142,6 +148,7 @@ def _autocomplete(db, database=None, table=None, column=None, nested=None, query
       response['is_view'] = table.is_view
       response['partition_keys'] = [{'name': part.name, 'type': part.type} for part in table.partition_keys]
       response['primary_keys'] = [{'name': pk} for pk in primary_keys]
+      response['foreign_keys'] = [{'name': fk.name, 'to': fk.type} for fk in foreign_keys]
     else:
       col = db.get_column(database, table, column)
       if col:
@@ -168,6 +175,49 @@ def _autocomplete(db, database=None, table=None, column=None, nested=None, query
     response['error'] = str(e)
 
   return response
+
+
+def _get_functions(db, database=None):
+  data = []
+
+  functions = db.get_functions(prefix=database)
+  if functions:
+    rows = escape_rows(functions, nulls_only=True)
+
+    if db.client.query_server['dialect'] == 'impala':
+      data = [{
+          'name': row[1].split('(', 1)[0],
+          'signature': '(' + row[1].split('(', 1)[1],
+          'return_type': row[0],
+          'is_builtin': row[2],
+          'is_persistent': row[3]
+        }
+        for row in rows
+      ]
+    else:
+      data = [{'name': row[0]} for row in rows]
+
+  return data
+
+
+def _get_function(db, name):
+  data = {}
+
+  if db.client.query_server['dialect'] == 'hive' or db.client.query_server['dialect'] == 'beeswax':
+    functions = db.get_function(name=name)
+    rows = escape_rows(functions, nulls_only=True)
+
+    full_description = '\n'.join([col for row in rows for col in row])
+    signature, description = full_description.split(' - ', 1)
+    name = name.split('(', 1)[0]
+
+    data = {
+      'name': name,
+      'signature': signature,
+      'description': description,
+    }
+
+  return data
 
 
 @error_handler
@@ -665,10 +715,13 @@ def get_sample_data(request, database, table, column=None):
 
 
 def _get_sample_data(db, database, table, column, is_async=False, cluster=None, operation=None):
-  table_obj = db.get_table(database, table)
-  if table_obj.is_impala_only and db.client.query_server['server_name'] != 'impala':
-    query_server = get_query_server_config('impala', connector=cluster)
-    db = dbms.get(db.client.user, query_server, cluster=cluster)
+  if operation == 'hello':
+    table_obj = None
+  else:
+    table_obj = db.get_table(database, table)
+    if table_obj.is_impala_only and db.client.query_server['server_name'] != 'impala':  # Kudu table, now Hive should support it though
+      query_server = get_query_server_config('impala', connector=cluster)
+      db = dbms.get(db.client.user, query_server, cluster=cluster)
 
   sample_data = db.get_sample(database, table_obj, column, generate_sql_only=is_async, operation=operation)
   response = {'status': -1}

@@ -16,6 +16,7 @@
 
 import Notebook from './notebook';
 import sessionManager from 'apps/notebook2/execution/sessionManager';
+import * as hueConfig from 'utils/hueConfig';
 
 describe('notebook.js', () => {
   const viewModel = {
@@ -33,27 +34,57 @@ describe('notebook.js', () => {
     }
   };
 
+  const previousEnableNotebook2 = window.ENABLE_NOTEBOOK_2;
+
+  beforeAll(() => {
+    window.ENABLE_NOTEBOOK_2 = true;
+  });
+
+  afterAll(() => {
+    window.ENABLE_NOTEBOOK_2 = previousEnableNotebook2;
+  });
+
   beforeEach(() => {
     jest.spyOn(sessionManager, 'getSession').mockImplementation(() => Promise.resolve());
   });
 
   it('should serialize a notebook to JSON', async () => {
+    const connectors = [
+      { id: 'hive', dialect: 'hive' },
+      { id: 'impala', dialect: 'impala' }
+    ];
+    const spy = jest
+      .spyOn(hueConfig, 'findEditorConnector')
+      .mockImplementation(connectors.find.bind(connectors));
+
     const notebook = new Notebook(viewModel, {});
-    notebook.addSnippet({ type: 'hive' });
-    notebook.addSnippet({ type: 'impala' });
+    notebook.addSnippet({ connector: { dialect: 'hive', id: 'hive' } });
+    notebook.addSnippet({ connector: { dialect: 'impala', id: 'impala' } });
+
+    expect(spy).toHaveBeenCalled();
+
+    spy.mockRestore();
 
     const notebookJSON = await notebook.toJson();
 
     const notebookRaw = JSON.parse(notebookJSON);
 
     expect(notebookRaw.snippets.length).toEqual(2);
-    expect(notebookRaw.snippets[0].type).toEqual('hive');
-    expect(notebookRaw.snippets[1].type).toEqual('impala');
+    expect(notebookRaw.snippets[0].connector.dialect).toEqual('hive');
+    expect(notebookRaw.snippets[1].connector.dialect).toEqual('impala');
   });
 
   it('should serialize a notebook context to JSON', async () => {
     const notebook = new Notebook(viewModel, {});
-    notebook.addSnippet({ type: 'hive' });
+    const connectors = [
+      { id: 'hive', dialect: 'hive' },
+      { id: 'impala', dialect: 'impala' }
+    ];
+    jest
+      .spyOn(hueConfig, 'findEditorConnector')
+      .mockImplementation(connectors.find.bind(connectors));
+
+    notebook.addSnippet({ connector: { dialect: 'hive' } });
 
     const notebookContextJSON = await notebook.toContextJson();
 

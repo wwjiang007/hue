@@ -35,7 +35,7 @@ import huePubSub from 'utils/huePubSub';
  *
  */
 ko.bindingHandlers.contextMenu = {
-  initContextMenu: function($menu, $scrollContainer) {
+  initContextMenu: function ($menu, $scrollContainer, onShow, onHide) {
     let active = false;
 
     let currentLeft = 0;
@@ -43,13 +43,13 @@ ko.bindingHandlers.contextMenu = {
     let openScrollTop = 0;
     let openScrollLeft = 0;
 
-    const adjustForScroll = function() {
+    const adjustForScroll = function () {
       $menu.css('top', currentTop - $scrollContainer.scrollTop() + openScrollTop);
       $menu.css('left', currentLeft - $scrollContainer.scrollLeft() + openScrollLeft);
     };
 
     return {
-      show: function(event) {
+      show: function (event) {
         $menu.css('top', 0);
         $menu.css('left', 0);
         $menu.css('opacity', 0);
@@ -74,8 +74,11 @@ ko.bindingHandlers.contextMenu = {
         $menu.css('opacity', 1);
         active = true;
         $scrollContainer.on('scroll', adjustForScroll);
+        if (onShow) {
+          onShow();
+        }
       },
-      hide: function() {
+      hide: function () {
         if (active) {
           $scrollContainer.off('scroll', adjustForScroll);
           $menu.css('opacity', 0);
@@ -84,10 +87,13 @@ ko.bindingHandlers.contextMenu = {
           }, 300);
           active = false;
         }
+        if (onHide) {
+          onHide();
+        }
       }
     };
   },
-  init: function(element, valueAccessor, allBindings, viewModel, bindingContext) {
+  init: function (element, valueAccessor, allBindings, viewModel, bindingContext) {
     const $element = $(element);
     const options = valueAccessor();
     const $menu = $element.find(options.menuSelector);

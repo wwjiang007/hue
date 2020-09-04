@@ -17,6 +17,7 @@
 import $ from 'jquery';
 
 import AssistStorageEntry from './assistStorageEntry';
+import * as hueConfig from 'utils/hueConfig';
 
 describe('assistStorageEntry.js', () => {
   it('it should handle domain in ADLS/ABFS', () => {
@@ -57,6 +58,10 @@ describe('assistStorageEntry.js', () => {
       return deferred.promise();
     });
 
+    const findSpy = jest
+      .spyOn(hueConfig, 'findBrowserConnector')
+      .mockImplementation(() => ({ type: 'abfs', page: '' }));
+
     AssistStorageEntry.getEntry('abfs://test.com/path').always(entry => {
       expect(entry.path).toBe('/path');
     });
@@ -69,6 +74,10 @@ describe('assistStorageEntry.js', () => {
     AssistStorageEntry.getEntry('abfs://path@test.com/p2').always(entry => {
       expect(entry.path).toBe('/path/p2');
     });
+    expect(spy).toHaveBeenCalled();
+    expect(findSpy).toHaveBeenCalled();
+
+    spy.mockRestore();
     spy.mockClear();
   });
 });

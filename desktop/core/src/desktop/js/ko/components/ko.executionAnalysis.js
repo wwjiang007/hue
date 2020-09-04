@@ -42,7 +42,7 @@ const TEMPLATE = `
         <h4>${I18n('Heatmap')}</h4>
         <div>
             <select data-bind="options: heatmapMetrics, event: { change: $parent.heatmapMetricChanged.bind($parent) }"></select>
-            <svg class="heatmap"/>
+            <svg class="heatmap"></svg>
         </div>
       </div>
       <div>
@@ -220,21 +220,17 @@ class ExecutionAnalysis {
     $heatmap.height((Math.trunc((data.data.length - 1) / cols) + 1) * (blockWidth + blockGap));
 
     // Attribute functions
-    const x = function(d, i) {
+    const x = function (d, i) {
       return (i % cols) * (blockWidth + blockGap) + 1;
     };
-    const y = function(d, i) {
+    const y = function (d, i) {
       return Math.trunc(i / cols) * (blockWidth + blockGap) + 1;
     };
-    const c = function(d) {
+    const c = function (d) {
       return colorScale(d[3]);
     };
 
-    d3.select('.heatmap')
-      .selectAll('.box')
-      .data([])
-      .exit()
-      .remove();
+    d3.select('.heatmap').selectAll('.box').data([]).exit().remove();
     d3.select('.heatmap')
       .selectAll('.box')
       .data(data.data)
@@ -259,7 +255,7 @@ class ExecutionAnalysis {
         compute: self.details().compute
       })
       .done(resp => {
-        huePubSub.publish('notebook.task.submitted', resp.task.history_uuid);
+        huePubSub.publish('notebook.task.submitted', resp);
         fix.fixed = true;
         self.analysis.valueHasMutated();
       });

@@ -16,12 +16,14 @@
 
 import $ from 'jquery';
 import * as ko from 'knockout';
-
+import { registerBinding } from './bindingUtils';
 import hueUtils from 'utils/hueUtils';
 
-ko.bindingHandlers.tooltip = {
+export const NAME = 'tooltip';
+
+registerBinding(NAME, {
   after: ['attr'],
-  update: function(element, valueAccessor) {
+  update: function (element, valueAccessor) {
     const local = ko.utils.unwrapObservable(valueAccessor());
     const options = {
       container: 'body'
@@ -44,4 +46,4 @@ ko.bindingHandlers.tooltip = {
       $(element).tooltip('destroy');
     });
   }
-};
+});

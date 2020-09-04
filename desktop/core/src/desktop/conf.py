@@ -33,10 +33,8 @@ from metadata.metadata_sites import get_navigator_audit_log_dir, get_navigator_a
 
 from desktop import appmanager
 from desktop.redaction.engine import parse_redaction_policy_from_file
-from desktop.lib.conf import Config, ConfigSection, UnspecifiedConfigSection,\
-                             coerce_bool, coerce_csv, coerce_json_dict,\
-                             validate_path, list_of_compiled_res, coerce_str_lowercase, \
-                             coerce_password_from_script, coerce_string
+from desktop.lib.conf import Config, ConfigSection, UnspecifiedConfigSection, coerce_bool, coerce_csv, coerce_json_dict, \
+    validate_path, list_of_compiled_res, coerce_str_lowercase, coerce_password_from_script, coerce_string
 from desktop.lib.i18n import force_unicode
 from desktop.lib.paths import get_desktop_root, get_run_root
 
@@ -250,6 +248,18 @@ SSL_CIPHER_LIST = Config(
     '!EDH-RSA-DES-CBC3-SHA',
     '!KRB5-DES-CBC3-SHA',
   ]))
+
+def has_ssl_no_renegotiation():
+  return sys.version_info[:2] >= (3, 7)
+
+SSL_NO_RENEGOTIATION = Config(
+  key="ssl_no_renegotiation",
+  type=coerce_bool,
+  default=has_ssl_no_renegotiation(),
+  help=_(
+    "Disable all renegotiation in TLSv1.2 and earlier. Do not send HelloRequest messages, and ignore renegotiation requests"
+    " via ClientHello. This option is only available with OpenSSL 1.1.0h and later and python 3.7")
+  )
 
 SSL_PASSWORD = Config(
   key="ssl_password",
@@ -858,7 +868,7 @@ KERBEROS = ConfigSection(
       help=_("Kerberos principal name for Hue. Typically 'hue/hostname.foo.com'."),
       type=str,
       default="hue/%s" % socket.getfqdn()),
-    KEYTAB_REINIT_FREQUENCY=Config(
+    REINIT_FREQUENCY=Config(
       key='reinit_frequency',
       help=_("Frequency in seconds with which Hue will renew its keytab."),
       type=int,
@@ -1612,6 +1622,13 @@ ENABLE_DOWNLOAD = Config(
   type=coerce_bool,
   default=True)
 
+ENABLE_SHARING = Config(
+  key="enable_sharing",
+  help=_(
+    'Global setting to enable or disable document sharing. Note that this does not affect currently shared documents.'),
+  type=coerce_bool,
+  default=True)
+
 ENABLE_DJANGO_DEBUG_TOOL = Config(
   key="enable_django_debug_tool",
   help=_('Allow use django debug tool with Chrome browser for debugging issue, django_debug_mode must be true also'),
@@ -1863,6 +1880,31 @@ CLUSTERS = UnspecifiedConfigSection(
   )
 )
 
+ENABLE_GIST = Config(
+  key='enable_gist',
+  default=True,
+  type=coerce_bool,
+  help=_('Turn on the Gist snippet sharing.')
+)
+
+def default_gist_preview():
+  """Gist preview only enabled automatically in private setups."""
+  return not ENABLE_ORGANIZATIONS.get()
+
+ENABLE_GIST_PREVIEW = Config(
+  key='enable_gist_preview',
+  dynamic_default=default_gist_preview,
+  type=coerce_bool,
+  help=_('Add public description so that the link can be unfurled in a preview by websites like Slack.')
+)
+
+ENABLE_LINK_SHARING = Config(
+  key='enable_link_sharing',
+  default=True,
+  type=coerce_bool,
+  help=_('Turn on the direct link sharing of saved document.')
+)
+
 ENABLE_CONNECTORS = Config(
   key='enable_connectors',
   default=False,
@@ -1870,9 +1912,30 @@ ENABLE_CONNECTORS = Config(
   help=_('Turn on the Connector configuration and usage.')
 )
 
+CUSTOM_DASHBOARD_URL = Config(
+  key='custom_dashboard_url',
+  default='',
+  type=coerce_string,
+  help=_('Custom URL to use for the dashboard application and editor result charting')
+)
+
+CONNECTORS_BLACKLIST = Config(
+  key='connectors_blacklist',
+  default='',
+  type=coerce_csv,
+  help=_('Comma separated list of connector types to hide.')
+)
+
+CONNECTORS_WHITELIST = Config(
+  key='connectors_whitelist',
+  default=[],
+  type=coerce_csv,
+  help=_('If not empty, comma separated list of connector types to keep.')
+)
+
 CONNECTORS = UnspecifiedConfigSection(
   key='connectors',
-  help=_("""Configuration options for connectors to external services"""),
+  help=_("""Configuration options for connectors instances to external services"""),
   each=ConfigSection(
     help=_("Id of the connector."),
     members=dict(
@@ -1890,7 +1953,7 @@ CONNECTORS = UnspecifiedConfigSection(
       ),
       INTERFACE=Config(
           "interface",
-          help=_("The class of connector to use to connect to the service."),
+          help=_("The class of connector to use to connect to the service (optional)."),
           default=None,
           type=str,
       ),
@@ -1901,6 +1964,63 @@ CONNECTORS = UnspecifiedConfigSection(
           type=coerce_json_dict,
       ),
     )
+  )
+)
+
+
+QUERY_DATABASE = ConfigSection(
+  key='query_database',
+  help=_("""Configuration options for specifying the Query History Database."""),
+  members=dict(
+    ENGINE=Config(
+      key='engine',
+      help=_('Database engine, such as postgresql_psycopg2, mysql, or sqlite3.'),
+      type=coerce_database,
+      default='django.db.backends.sqlite3',
+    ),
+    NAME=Config(
+      key='name',
+      help=_('Database name, or path to DB if using sqlite3.'),
+      type=str,
+      default='das',
+    ),
+    USER=Config(
+      key='user',
+      help=_('Database username.'),
+      type=str,
+      default='',
+    ),
+    SCHEMA=Config(
+      key='schema',
+      help=_('Database schema, to be used only when public schema is revoked in postgres.'),
+      type=str,
+      default='public',
+    ),
+    PASSWORD=Config(
+      key='password',
+      help=_('Database password.'),
+      private=True,
+      type=str,
+      default="",
+    ),
+    HOST=Config(
+      key='host',
+      help=_('Database host.'),
+      type=str,
+      default='',
+    ),
+    PORT=Config(
+      key='port',
+      help=_('Database port.'),
+      type=coerce_port,
+      default='',
+    ),
+    OPTIONS=Config(
+      key='options',
+      help=_('Database options to send to the server when connecting.'),
+      type=coerce_json_dict,
+      dynamic_default=default_database_options
+    ),
   )
 )
 

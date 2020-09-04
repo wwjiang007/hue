@@ -33,22 +33,24 @@ import {
 
 import { attachTracker } from 'apps/notebook2/components/executableStateHandler';
 
-export const NAME = 'result-grid';
+export const RESULT_GRID_COMPONENT = 'result-grid';
 
 // prettier-ignore
 const TEMPLATE = `
-<div class="result-actions-append">
+<div class="snippet-tab-actions-append">
   <div class="btn-group">
     <button class="btn btn-editor btn-mini disable-feedback" data-bind="toggle: columnsVisible, css: { 'active' : columnsVisible }">
       <i class="fa fa-columns"></i> ${ I18n('Columns') }
     </button>
   </div>
 
+  <!-- ko ifnot: streaming -->
   <div class="btn-group">
     <button class="btn btn-editor btn-mini disable-feedback" data-bind="click: showSearch.bind($data), css: { 'disabled': !data().length }">
       <i class="fa fa-search"></i> ${ I18n('Search') }
     </button>
   </div>
+  <!-- /ko -->
 
   <!-- ko component: {
     name: 'result-download-actions',
@@ -66,10 +68,19 @@ const TEMPLATE = `
           params: {
             gridSideBtn: false,
             snippet: $data,
-            notebook: $parent 
-          } 
+            notebook: $parent
+          }
         }
       " style="display:inline-block;"></div>
+  <!-- /ko -->
+
+  <!-- ko if: streaming -->
+  <form autocomplete="off" class="inline-block">
+    <input class="input-small search-input" style="margin-left: 10px;" type="text" ${ window.PREVENT_AUTOFILL_INPUT_ATTRS } placeholder="${ I18n('Live filter') }" data-bind="
+        textInput: filter,
+        clearable: filter
+      "/>
+  </form>
   <!-- /ko -->
 </div>
 
@@ -150,7 +161,7 @@ const TEMPLATE = `
         onPosition: function() { redrawFixedHeaders(); }
       }
     "><div class="resize-bar"></div></div>
-    
+
   <div class="split-result-content" data-bind="delayedOverflow: 'slow', css: resultsKlass">
     <table class="table table-condensed resultTable">
       <thead>
@@ -159,7 +170,7 @@ const TEMPLATE = `
             text: ($index() == 0 ? '&nbsp;' : $data.name),
             css: typeof cssClass != 'undefined' ? cssClass : 'sort-string',
             attr: { title: $data.type },
-            style: { 
+            style: {
               'width': $index() == 0 ? '1%' : '',
               'height': $index() == 0 ? '32px' : ''
             },
@@ -180,6 +191,8 @@ const TEMPLATE = `
 </div>
 `;
 
+const STREAMING_MAX_ROWS = 1000;
+
 class ResultGrid extends DisposableComponent {
   constructor(params, element) {
     super();
@@ -187,10 +200,18 @@ class ResultGrid extends DisposableComponent {
     this.activeExecutable = params.activeExecutable;
 
     this.isResultFullScreenMode = params.isResultFullScreenMode;
-    this.editorMode = params.editorMode;
-    this.isPresentationMode = params.isPresentationMode;
+    this.notebookMode = params.notebookMode;
     this.hasMore = params.hasMore;
     this.fetchResult = params.fetchResult;
+    this.streaming = params.streaming;
+
+    this.filter = ko.observable().extend({ throttle: 100 });
+
+    this.filter.subscribe(filter => {
+      if (this.hueDatatable) {
+        this.hueDatatable.setFilter(filter);
+      }
+    });
 
     const trackedObservables = {
       columnsVisible: false,
@@ -206,7 +227,12 @@ class ResultGrid extends DisposableComponent {
     this.data = params.data;
     this.lastFetchedRows = params.lastFetchedRows;
 
-    const tracker = attachTracker(this.activeExecutable, NAME, this, trackedObservables);
+    const tracker = attachTracker(
+      this.activeExecutable,
+      RESULT_GRID_COMPONENT,
+      this,
+      trackedObservables
+    );
     super.addDisposalCallback(tracker.dispose.bind(tracker));
 
     this.hueDatatable = undefined;
@@ -251,6 +277,14 @@ class ResultGrid extends DisposableComponent {
     });
 
     this.subscribe(this.data, this.render.bind(this));
+
+    this.subscribe(this.hasMore, val => {
+      // Hive reports hasMore = true when there's actually no more results, this prevents the grid
+      // from being grayed out after scroll as this.data doesn't change but this.hasMore does.
+      if (!val) {
+        this.showNormalResult();
+      }
+    });
 
     this.subscribe(this.meta, meta => {
       if (meta) {
@@ -309,7 +343,6 @@ class ResultGrid extends DisposableComponent {
       const colCount = this.data()[0].length;
       invisibleRows = colCount > 200 ? 10 : colCount > 30 ? 50 : 100;
     }
-    const $datatablesWrapper = $resultTable.parents('.dataTables_wrapper');
 
     const hueDatatable = $resultTable.hueDataTable({
       i18n: {
@@ -318,7 +351,8 @@ class ResultGrid extends DisposableComponent {
       },
       fnDrawCallback: () => {
         const $resultTable = this.getResultTableElement();
-        if (this.editorMode()) {
+        const $datatablesWrapper = $resultTable.parents('.dataTables_wrapper');
+        if (!this.notebookMode()) {
           $('#queryResults').removeAttr('style');
           datatablesMaxHeight = $(window).height() - $resultTable.parent().offset().top - 40;
           $datatablesWrapper.css('overflow-x', 'hidden');
@@ -330,15 +364,14 @@ class ResultGrid extends DisposableComponent {
             heightAfterCorrection: 0
           });
           this.disposals.push(() => {
-            $datatablesWrapper.data('plugin_jHueTableScroller').destroy();
+            if ($datatablesWrapper.data('plugin_jHueTableScroller')) {
+              $datatablesWrapper.data('plugin_jHueTableScroller').destroy();
+            }
           });
         }
       },
-      scrollable:
-        this.editorMode() && !this.isPresentationMode()
-          ? window.MAIN_SCROLLABLE
-          : '.dataTables_wrapper',
-      contained: !this.editorMode() || this.isPresentationMode(),
+      scrollable: this.notebookMode() ? '.dataTables_wrapper' : window.MAIN_SCROLLABLE,
+      contained: this.notebookMode(),
       forceInvisible: invisibleRows
     });
 
@@ -350,19 +383,16 @@ class ResultGrid extends DisposableComponent {
       const $resultTable = this.getResultTableElement();
 
       const tableExtenderOptions = {
-        mainScrollable: window.MAIN_SCROLLABLE,
-        fixedFirstColumn: this.editorMode(),
+        mainScrollable: this.notebookMode() ? '.dataTables_wrapper' : window.MAIN_SCROLLABLE,
+        fixedFirstColumn: !this.notebookMode(),
         parentId: $resultTable.parents('.snippet').attr('id'),
-        clonedContainerPosition: 'fixed',
+        clonedContainerPosition: this.notebookMode() ? 'absolute' : 'fixed',
         app: 'editor'
       };
-      if (this.editorMode()) {
+      if (!this.notebookMode()) {
         $resultTable.parents('.dataTables_wrapper').css('overflow-x', 'hidden');
         const bannerTopHeight = window.BANNER_TOP_HTML ? 30 : 2;
         tableExtenderOptions.stickToTopPosition = 48 + bannerTopHeight;
-      } else {
-        tableExtenderOptions.mainScrollable = $datatablesWrapper[0];
-        tableExtenderOptions.clonedContainerPosition = 'absolute';
       }
 
       $resultTable.jHueTableExtender2(tableExtenderOptions);
@@ -373,7 +403,7 @@ class ResultGrid extends DisposableComponent {
         }
       });
 
-      if (this.editorMode()) {
+      if (!this.notebookMode()) {
         $resultTable.jHueHorizontalScrollbar();
       }
     });
@@ -395,13 +425,16 @@ class ResultGrid extends DisposableComponent {
     $resultTable.addClass('dt');
 
     this.hueDatatable = this.createHueDatatable($resultTable);
+    if (this.filter()) {
+      this.hueDatatable.setFilter(this.filter());
+    }
 
     const $dataTablesWrapper = $resultTable.parents('.dataTables_wrapper');
 
-    if (!this.editorMode()) {
+    if (this.notebookMode()) {
       $dataTablesWrapper.on(
         'mousewheel.resultGrid DOMMouseScroll.resultGrid wheel.resultGrid',
-        function(event) {
+        function (event) {
           if ($resultTable.closest('.results').css('overflow') === 'hidden') {
             return;
           }
@@ -425,8 +458,12 @@ class ResultGrid extends DisposableComponent {
     }
 
     let $scrollElement = $dataTablesWrapper;
-    if (this.editorMode()) {
+    if (!this.notebookMode()) {
       $scrollElement = $(window.MAIN_SCROLLABLE);
+    }
+
+    if ($scrollElement.data('scrollFnDtCreation')) {
+      $scrollElement.off('scroll', $scrollElement.data('scrollFnDtCreation'));
     }
 
     let scrollThrottle = -1;
@@ -436,7 +473,10 @@ class ResultGrid extends DisposableComponent {
     });
 
     const dataScroll = () => {
-      if (!$resultTable.is(':visible')) {
+      if (
+        !$resultTable.is(':visible') ||
+        (this.activeExecutable().result && this.activeExecutable().result.streaming)
+      ) {
         return;
       }
 
@@ -445,7 +485,7 @@ class ResultGrid extends DisposableComponent {
       window.clearTimeout(scrollThrottle);
       $scrollElement.data('scrollPosition', $scrollElement.scrollTop());
       scrollThrottle = window.setTimeout(() => {
-        if (this.editorMode()) {
+        if (!this.notebookMode()) {
           lastScrollPosition--; //hack for forcing fetching
         }
         if (
@@ -567,10 +607,15 @@ class ResultGrid extends DisposableComponent {
         dataTable = this.createDatatable();
         $resultTable.data('rendered', true);
       } else {
-        dataTable = $resultTable.hueDataTable();
+        dataTable = this.hueDatatable;
       }
       try {
-        dataTable.fnAddData(initial && this.data().length ? this.data() : this.lastFetchedRows());
+        dataTable.fnAddData(
+          initial && this.data().length ? this.data() : this.lastFetchedRows(),
+          undefined,
+          ko.unwrap(this.streaming),
+          STREAMING_MAX_ROWS
+        );
       } catch (e) {}
       const $dataTablesWrapper = $snippet.find('.dataTables_wrapper');
       this.showNormalResult();
@@ -587,7 +632,7 @@ class ResultGrid extends DisposableComponent {
   scrollToResultColumn(linkElement) {
     const $resultTable = this.getResultTableElement();
     const searchText = $.trim($(linkElement).text());
-    const foundColumn = $resultTable.find('th').filter(function() {
+    const foundColumn = $resultTable.find('th').filter(function () {
       return $.trim($(this).text()) === searchText;
     });
     $resultTable.find('.columnSelected').removeClass('columnSelected');
@@ -647,7 +692,7 @@ class ResultGrid extends DisposableComponent {
 }
 
 componentUtils.registerComponent(
-  NAME,
+  RESULT_GRID_COMPONENT,
   {
     createViewModel: (params, componentInfo) => new ResultGrid(params, componentInfo.element)
   },

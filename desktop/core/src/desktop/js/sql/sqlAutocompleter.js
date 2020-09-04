@@ -32,12 +32,12 @@ class SqlAutocompleter {
     this.editor = options.editor;
     this.fixedPrefix =
       options.fixedPrefix ||
-      function() {
+      function () {
         return '';
       };
     this.fixedPostfix =
       options.fixedPostfix ||
-      function() {
+      function () {
         return '';
       };
     this.suggestions = new AutocompleteResults(options);
@@ -75,7 +75,7 @@ class SqlAutocompleter {
               }
             }) + this.fixedPostfix();
           sqlParserRepository
-            .getAutocompleter(this.snippet.type())
+            .getAutocompleter(this.snippet.dialect())
             .then(autocompleteParser => {
               resolve(autocompleteParser.parseSql(beforeCursor, afterCursor));
             })
@@ -95,7 +95,7 @@ class SqlAutocompleter {
   async parseAll() {
     return new Promise((resolve, reject) => {
       sqlParserRepository
-        .getAutocompleter(this.snippet.type())
+        .getAutocompleter(this.snippet.dialect())
         .then(autocompleteParser => {
           resolve(
             autocompleteParser.parseSql(
@@ -129,11 +129,6 @@ class SqlAutocompleter {
       );
 
       parseResult = await this.parseActiveStatement();
-
-      if (typeof hueDebug !== 'undefined' && hueDebug.showParseResult) {
-        // eslint-disable-next-line no-restricted-syntax
-        console.log(parseResult);
-      }
     } catch (e) {
       if (typeof console.warn !== 'undefined') {
         console.warn(e);
@@ -155,6 +150,10 @@ class SqlAutocompleter {
       // This prevents Ace from inserting garbled text in case of exception
       huePubSub.publish('hue.ace.autocompleter.done');
     } else {
+      if (typeof hueDebug !== 'undefined' && hueDebug.showParseResult) {
+        // eslint-disable-next-line no-restricted-syntax
+        console.log(parseResult);
+      }
       try {
         if (this.lastContextRequest) {
           this.lastContextRequest.dispose();

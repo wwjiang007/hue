@@ -23,6 +23,7 @@ build
 env
 metastore_db
 VERSION_INFO
+npm_dist
 
 # Generated configuration
 desktop/conf/*.ini
@@ -116,3 +117,6 @@ desktop/core/src/desktop/static/desktop/js/bundles/
 
 # Hugo generated files
 docs/docs-site/public/
+
+# VSCode settings
+.vscode

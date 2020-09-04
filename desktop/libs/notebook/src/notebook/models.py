@@ -17,8 +17,7 @@
 
 from future import standard_library
 standard_library.install_aliases()
-from builtins import str
-from builtins import object
+from builtins import str, object
 import datetime
 import json
 import logging
@@ -32,8 +31,10 @@ from datetime import timedelta
 from django.contrib.sessions.models import Session
 from django.db.models import Count
 from django.db.models.functions import Trunc
+from django.urls import reverse
 from django.utils.html import escape
 from django.utils.translation import ugettext as _
+
 
 from desktop.conf import has_connectors, TASK_SERVER
 from desktop.lib.i18n import smart_unicode
@@ -41,10 +42,10 @@ from desktop.lib.paths import SAFE_CHARACTERS_URI
 from desktop.models import Document2
 from useradmin.models import User
 
+from notebook.conf import EXAMPLES, get_ordered_interpreters
 from notebook.connectors.base import Notebook, get_api as _get_api, get_interpreter
 
 if sys.version_info[0] > 2:
-  import urllib.request, urllib.error
   from urllib.parse import quote as urllib_quote
 else:
   from urllib import quote as urllib_quote
@@ -57,22 +58,26 @@ LOG = logging.getLogger(__name__)
 def escape_rows(rows, nulls_only=False, encoding=None):
   data = []
 
-  for row in rows:
-    escaped_row = []
-    for field in row:
-      if isinstance(field, numbers.Number):
-        if math.isnan(field) or math.isinf(field):
-          escaped_field = json.dumps(field)
+  try:
+    for row in rows:
+      escaped_row = []
+
+      for field in row:
+        if isinstance(field, numbers.Number):
+          if math.isnan(field) or math.isinf(field):
+            escaped_field = json.dumps(field)
+          else:
+            escaped_field = field
+        elif field is None:
+          escaped_field = 'NULL'
         else:
-          escaped_field = field
-      elif field is None:
-        escaped_field = 'NULL'
-      else:
-        escaped_field = smart_unicode(field, errors='replace', encoding=encoding) # Prevent error when getting back non utf8 like charset=iso-8859-1
-        if not nulls_only:
-          escaped_field = escape(escaped_field).replace(' ', '&nbsp;')
-      escaped_row.append(escaped_field)
-    data.append(escaped_row)
+          escaped_field = smart_unicode(field, errors='replace', encoding=encoding) # Prevent error when getting back non utf8 like charset=iso-8859-1
+          if not nulls_only:
+            escaped_field = escape(escaped_field).replace(' ', '&nbsp;')
+        escaped_row.append(escaped_field)
+      data.append(escaped_row)
+  except RuntimeError:
+    pass  # pep-0479: expected Py3.8 generator raised StopIteration
 
   return data
 
@@ -239,13 +244,13 @@ class MockedDjangoRequest(object):
     self.method = method
 
 
-def import_saved_beeswax_query(bquery):
+def import_saved_beeswax_query(bquery, interpreter=None):
   design = bquery.get_design()
 
   return make_notebook(
       name=bquery.name,
       description=bquery.desc,
-      editor_type=_convert_type(bquery.type, bquery.data),
+      editor_type=interpreter['type'] if interpreter else _convert_type(bquery.type, bquery.data),
       statement=design.hql_query,
       status='ready',
       files=design.file_resources,
@@ -492,20 +497,20 @@ def _get_editor_type(editor_id):
   return document.type.rsplit('-', 1)[-1]
 
 
-class ApiWrapper(object):
+class ApiWrapper():
   def __init__(self, request, snippet):
     self.request = request
     self.api = _get_api(request, snippet)
 
   def __getattr__(self, name):
-    from notebook import tasks as ntasks
-    if TASK_SERVER.ENABLED.get() and hasattr(ntasks, name):
-      attr = object.__getattribute__(ntasks, name)
-      def _method(*args, **kwargs):
-        return attr(*args, **dict(kwargs, postdict=self.request.POST, user_id=self.request.user.id))
-      return _method
-    else:
-      return object.__getattribute__(self.api, name)
+    if TASK_SERVER.ENABLED.get():
+      from notebook import tasks as ntasks
+      if hasattr(ntasks, name):
+        attr = getattr(ntasks, name)
+        def _method(*args, **kwargs):
+          return attr(*args, **dict(kwargs, postdict=self.request.POST, user_id=self.request.user.id))
+        return _method
+    return getattr(self.api, name)
 
 
 def get_api(request, snippet):
@@ -623,3 +628,58 @@ class Analytics(object):
     # Could count number of "forks" (but would need to start tracking parent of Saved As query cf. saveAsNotebook)
 
     return stats
+
+
+class MockRequest():
+  def __init__(self, user, ):
+    self.user = user
+    self.POST = {}
+
+
+def install_custom_examples():
+  if EXAMPLES.AUTO_LOAD.get():
+    from desktop.auth.backend import rewrite_user
+    from beeswax.management.commands import beeswax_install_examples
+    from useradmin.models import get_default_user_group, install_sample_user, User
+
+    user = rewrite_user(
+      install_sample_user()
+    )
+
+    dialects = [
+      interpreter['dialect']
+      for interpreter in get_ordered_interpreters(user)
+      if interpreter['dialect'] in ('hive', 'impala')  # Only for hive/impala currently, would also need to port to Notebook install examples.
+    ]
+
+    queries = EXAMPLES.QUERIES.get()
+    tables = EXAMPLES.TABLES.get()  # No-op. Only for the saved query samples, not the tables currently.
+
+    LOG.info('Installing custom examples queries: %(queries)s, tables: %(tables)s for dialects %(dialects)s belonging to user %(user)s' % {
+      'queries': queries,
+      'tables': tables,
+      'dialects': dialects,
+      'user': user
+    })
+
+    result = []
+
+    for dialect in dialects:
+      interpreter = {'type': dialect, 'dialect': dialect}
+
+      successes, errors = beeswax_install_examples.Command().handle(
+          dialect=dialect,
+          user=user,
+          interpreter=interpreter,
+          queries=queries,
+          tables=tables,
+          request=None
+      )
+      LOG.info('Dialect %(dialect)s installed samples: %(successes)s, %(errors)s,' % {
+        'dialect': dialect,
+        'successes': successes,
+        'errors': errors,
+      })
+      result.append((successes, errors))
+
+    return result

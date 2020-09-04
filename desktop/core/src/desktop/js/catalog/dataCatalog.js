@@ -17,12 +17,12 @@
 import $ from 'jquery';
 import localforage from 'localforage';
 
-import apiHelper from 'api/apiHelper';
 import CancellablePromise from 'api/cancellablePromise';
 import catalogUtils from 'catalog/catalogUtils';
 import DataCatalogEntry from 'catalog/dataCatalogEntry';
 import GeneralDataCatalog from 'catalog/generalDataCatalog';
 import MultiTableEntry from 'catalog/multiTableEntry';
+import { getOptimizer, LOCAL_STRATEGY } from './optimizer/optimizer';
 
 const STORAGE_POSTFIX = window.LOGGED_USERNAME;
 const DATA_CATALOG_VERSION = 5;
@@ -39,7 +39,7 @@ let cacheEnabled = true;
  * @param {string[][]} [options.paths]
  * @return {string}
  */
-const generateEntryCacheId = function(options) {
+const generateEntryCacheId = function (options) {
   let id = options.namespace.id;
   if (options.path) {
     if (typeof options.path === 'string') {
@@ -65,8 +65,8 @@ const generateEntryCacheId = function(options) {
  * @param {DataCatalogEntry} dataCatalogEntry - The entry to fill
  * @param {Object} storeEntry - The cached version
  */
-const mergeEntry = function(dataCatalogEntry, storeEntry) {
-  const mergeAttribute = function(attributeName, ttl, promiseName) {
+const mergeEntry = function (dataCatalogEntry, storeEntry) {
+  const mergeAttribute = function (attributeName, ttl, promiseName) {
     if (
       storeEntry.version === DATA_CATALOG_VERSION &&
       storeEntry[attributeName] &&
@@ -88,8 +88,10 @@ const mergeEntry = function(dataCatalogEntry, storeEntry) {
   mergeAttribute('partitions', CACHEABLE_TTL.default, 'partitionsPromise');
   mergeAttribute('sample', CACHEABLE_TTL.default, 'samplePromise');
   mergeAttribute('navigatorMeta', CACHEABLE_TTL.default, 'navigatorMetaPromise');
-  mergeAttribute('navOptMeta', CACHEABLE_TTL.optimizer, 'navOptMetaPromise');
-  mergeAttribute('navOptPopularity', CACHEABLE_TTL.optimizer);
+  if (dataCatalogEntry.getConnector().optimizer !== LOCAL_STRATEGY) {
+    mergeAttribute('optimizerMeta', CACHEABLE_TTL.optimizer, 'optimizerMetaPromise');
+    mergeAttribute('optimizerPopularity', CACHEABLE_TTL.optimizer);
+  }
 };
 
 /**
@@ -98,8 +100,11 @@ const mergeEntry = function(dataCatalogEntry, storeEntry) {
  * @param {MultiTableEntry} multiTableCatalogEntry - The entry to fill
  * @param {Object} storeEntry - The cached version
  */
-const mergeMultiTableEntry = function(multiTableCatalogEntry, storeEntry) {
-  const mergeAttribute = function(attributeName, ttl, promiseName) {
+const mergeMultiTableEntry = function (multiTableCatalogEntry, storeEntry) {
+  if (multiTableCatalogEntry.getConnector().optimizer === LOCAL_STRATEGY) {
+    return;
+  }
+  const mergeAttribute = function (attributeName, ttl, promiseName) {
     if (
       storeEntry.version === DATA_CATALOG_VERSION &&
       storeEntry[attributeName] &&
@@ -121,23 +126,27 @@ const mergeMultiTableEntry = function(multiTableCatalogEntry, storeEntry) {
   mergeAttribute('topJoins', CACHEABLE_TTL.optimizer, 'topJoinsPromise');
 };
 
-class DataCatalog {
+export class DataCatalog {
   /**
-   * @param {string} sourceType
+   * @param {Connector} connector
    *
    * @constructor
    */
-  constructor(sourceType) {
+  constructor(connector) {
     const self = this;
-    self.sourceType = sourceType;
+    if (!connector || !connector.id) {
+      throw new Error('DataCatalog created without connector or id');
+    }
+    self.connector = connector;
+
     self.entries = {};
     self.temporaryEntries = {};
     self.multiTableEntries = {};
     self.store = localforage.createInstance({
-      name: 'HueDataCatalog_' + self.sourceType + '_' + STORAGE_POSTFIX
+      name: 'HueDataCatalog_' + self.connector.id + '_' + STORAGE_POSTFIX
     });
     self.multiTableStore = localforage.createInstance({
-      name: 'HueDataCatalog_' + self.sourceType + '_multiTable_' + STORAGE_POSTFIX
+      name: 'HueDataCatalog_' + self.connector.id + '_multiTable_' + STORAGE_POSTFIX
     });
   }
 
@@ -155,14 +164,22 @@ class DataCatalog {
     cacheEnabled = true;
   }
 
+  static cacheEnabled() {
+    return cacheEnabled;
+  }
+
   /**
-   * Returns true if the catalog can have NavOpt metadata
+   * Returns true if the catalog can have Optimizer metadata
    *
    * @return {boolean}
    */
-  canHaveNavOptMetadata() {
-    const self = this;
-    return HAS_OPTIMIZER && (self.sourceType === 'hive' || self.sourceType === 'impala');
+  canHaveOptimizerMeta() {
+    return (
+      HAS_OPTIMIZER &&
+      this.connector &&
+      this.connector.optimizer &&
+      this.connector.optimizer !== 'off'
+    );
   }
 
   /**
@@ -178,10 +195,7 @@ class DataCatalog {
     if (!namespace || !compute) {
       if (rootPath.length === 0) {
         self.entries = {};
-        self.store
-          .clear()
-          .then(deferred.resolve)
-          .catch(deferred.reject);
+        self.store.clear().then(deferred.resolve).catch(deferred.reject);
         return deferred.promise();
       }
       return deferred.reject().promise();
@@ -204,10 +218,7 @@ class DataCatalog {
           if (key.indexOf(keyPrefix) === 0) {
             const deleteDeferred = $.Deferred();
             deletePromises.push(deleteDeferred.promise());
-            self.store
-              .removeItem(key)
-              .then(deleteDeferred.resolve)
-              .catch(deleteDeferred.reject);
+            self.store.removeItem(key).then(deleteDeferred.resolve).catch(deleteDeferred.reject);
           }
         });
         keysDeferred.resolve();
@@ -226,9 +237,7 @@ class DataCatalog {
   persistCatalogEntry(dataCatalogEntry) {
     const self = this;
     if (!cacheEnabled || CACHEABLE_TTL.default <= 0) {
-      return $.Deferred()
-        .resolve()
-        .promise();
+      return $.Deferred().resolve().promise();
     }
     const deferred = $.Deferred();
 
@@ -243,8 +252,12 @@ class DataCatalog {
         partitions: dataCatalogEntry.partitions,
         sample: dataCatalogEntry.sample,
         navigatorMeta: dataCatalogEntry.navigatorMeta,
-        navOptMeta: dataCatalogEntry.navOptMeta,
-        navOptPopularity: dataCatalogEntry.navOptPopularity
+        optimizerMeta:
+          this.connector.optimizer !== LOCAL_STRATEGY ? dataCatalogEntry.optimizerMeta : undefined,
+        optimizerPopularity:
+          this.connector.optimizer !== LOCAL_STRATEGY
+            ? dataCatalogEntry.optimizerPopularity
+            : undefined
       })
       .then(deferred.resolve)
       .catch(deferred.reject);
@@ -258,14 +271,14 @@ class DataCatalog {
    * @param {Object} options
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    * @param {string[][]} options.paths
    * @param {boolean} [options.silenceErrors] - Default true
    * @param {boolean} [options.cancellable] - Default false
    *
    * @return {CancellablePromise}
    */
-  loadNavOptPopularityForTables(options) {
-    const self = this;
+  loadOptimizerPopularityForTables(options) {
     const deferred = $.Deferred();
     const cancellablePromises = [];
     let popularEntries = [];
@@ -276,23 +289,22 @@ class DataCatalog {
     const existingPromises = [];
     options.paths.forEach(path => {
       const existingDeferred = $.Deferred();
-      self
-        .getEntry({ namespace: options.namespace, compute: options.compute, path: path })
+      this.getEntry({ namespace: options.namespace, compute: options.compute, path: path })
         .done(tableEntry => {
-          if (tableEntry.navOptPopularityForChildrenPromise) {
-            tableEntry.navOptPopularityForChildrenPromise
+          if (tableEntry.optimizerPopularityForChildrenPromise) {
+            tableEntry.optimizerPopularityForChildrenPromise
               .done(existingPopularEntries => {
                 popularEntries = popularEntries.concat(existingPopularEntries);
                 existingDeferred.resolve();
               })
               .fail(existingDeferred.reject);
-          } else if (tableEntry.definition && tableEntry.definition.navOptLoaded) {
+          } else if (tableEntry.definition && tableEntry.definition.optimizerLoaded) {
             cancellablePromises.push(
               tableEntry
                 .getChildren(options)
                 .done(childEntries => {
                   childEntries.forEach(childEntry => {
-                    if (childEntry.navOptPopularity) {
+                    if (childEntry.optimizerPopularity) {
                       popularEntries.push(childEntry);
                     }
                   });
@@ -313,15 +325,15 @@ class DataCatalog {
       const loadDeferred = $.Deferred();
       if (pathsToLoad.length) {
         cancellablePromises.push(
-          apiHelper
-            .fetchNavOptPopularity({
+          getOptimizer(this.connector)
+            .fetchPopularity({
               silenceErrors: options.silenceErrors,
               paths: pathsToLoad
             })
             .done(data => {
               const perTable = {};
 
-              const splitNavOptValuesPerTable = function(listName) {
+              const splitOptimizerValuesPerTable = function (listName) {
                 if (data.values[listName]) {
                   data.values[listName].forEach(column => {
                     let tableMeta = perTable[column.dbName + '.' + column.tableName];
@@ -338,25 +350,28 @@ class DataCatalog {
               };
 
               if (data.values) {
-                splitNavOptValuesPerTable('filterColumns');
-                splitNavOptValuesPerTable('groupbyColumns');
-                splitNavOptValuesPerTable('joinColumns');
-                splitNavOptValuesPerTable('orderbyColumns');
-                splitNavOptValuesPerTable('selectColumns');
+                splitOptimizerValuesPerTable('filterColumns');
+                splitOptimizerValuesPerTable('groupbyColumns');
+                splitOptimizerValuesPerTable('joinColumns');
+                splitOptimizerValuesPerTable('orderbyColumns');
+                splitOptimizerValuesPerTable('selectColumns');
               }
 
               const tablePromises = [];
 
               Object.keys(perTable).forEach(path => {
                 const tableDeferred = $.Deferred();
-                self
-                  .getEntry({ namespace: options.namespace, compute: options.compute, path: path })
+                this.getEntry({
+                  namespace: options.namespace,
+                  compute: options.compute,
+                  path: path
+                })
                   .done(entry => {
                     cancellablePromises.push(
                       entry.trackedPromise(
-                        'navOptPopularityForChildrenPromise',
+                        'optimizerPopularityForChildrenPromise',
                         entry
-                          .applyNavOptResponseToChildren(perTable[path], options)
+                          .applyOptimizerResponseToChildren(perTable[path], options)
                           .done(entries => {
                             popularEntries = popularEntries.concat(entries);
                             tableDeferred.resolve();
@@ -416,6 +431,7 @@ class DataCatalog {
    * @param {string} options.name
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    *
    * @param {Object[]} options.columns
    * @param {string} options.columns[].name
@@ -431,22 +447,16 @@ class DataCatalog {
 
     const identifiersToClean = [];
 
-    const addEntryMeta = function(entry, sourceMeta) {
+    const addEntryMeta = function (entry, sourceMeta) {
       entry.sourceMeta = sourceMeta || entry.definition;
-      entry.sourceMetaPromise = $.Deferred()
-        .resolve(entry.sourceMeta)
-        .promise();
+      entry.sourceMetaPromise = $.Deferred().resolve(entry.sourceMeta).promise();
       entry.navigatorMeta = { comment: '' };
-      entry.navigatorMetaPromise = $.Deferred()
-        .resolve(entry.navigatorMeta)
-        .promise();
+      entry.navigatorMetaPromise = $.Deferred().resolve(entry.navigatorMeta).promise();
       entry.analysis = { is_view: false };
-      entry.analysisPromise = $.Deferred()
-        .resolve(entry.analysis)
-        .promise();
+      entry.analysisPromise = $.Deferred().resolve(entry.analysis).promise();
     };
 
-    let removeTable = function() {}; // noop until actually added
+    let removeTable = function () {}; // noop until actually added
 
     const sourceIdentifier = generateEntryCacheId({
       namespace: options.namespace,
@@ -464,15 +474,13 @@ class DataCatalog {
         path: [],
         definition: {
           index: 0,
-          navOptLoaded: true,
+          optimizerLoaded: true,
           type: 'source'
         }
       });
       addEntryMeta(sourceEntry);
       identifiersToClean.push(sourceIdentifier);
-      sourceEntry.childrenPromise = $.Deferred()
-        .resolve([])
-        .promise();
+      sourceEntry.childrenPromise = $.Deferred().resolve([]).promise();
       sourceDeferred.resolve(sourceEntry);
     }
 
@@ -494,15 +502,13 @@ class DataCatalog {
             path: ['default'],
             definition: {
               index: 0,
-              navOptLoaded: true,
+              optimizerLoaded: true,
               type: 'database'
             }
           });
           addEntryMeta(databaseEntry);
           identifiersToClean.push(databaseIdentifier);
-          databaseEntry.childrenPromise = $.Deferred()
-            .resolve([])
-            .promise();
+          databaseEntry.childrenPromise = $.Deferred().resolve([]).promise();
           databaseDeferred.resolve(databaseEntry);
           existingTemporaryDatabases.push(databaseEntry);
         }
@@ -526,13 +532,13 @@ class DataCatalog {
                 comment: '',
                 index: 0,
                 name: options.name,
-                navOptLoaded: true,
+                optimizerLoaded: true,
                 type: 'table'
               }
             });
             existingTemporaryTables.push(tableEntry);
             const indexToDelete = existingTemporaryTables.length - 1;
-            removeTable = function() {
+            removeTable = function () {
               existingTemporaryTables.splice(indexToDelete, 1);
             };
 
@@ -554,9 +560,7 @@ class DataCatalog {
                 data: options.sample || [],
                 meta: tableEntry.sourceMeta.extended_columns
               };
-              tableEntry.samplePromise = $.Deferred()
-                .resolve(tableEntry.sample)
-                .promise();
+              tableEntry.samplePromise = $.Deferred().resolve(tableEntry.sample).promise();
 
               let index = 0;
               options.columns.forEach(column => {
@@ -594,9 +598,7 @@ class DataCatalog {
                     columnEntry.sample.data.push([sampleRow[index - 1]]);
                   });
                 }
-                columnEntry.samplePromise = $.Deferred()
-                  .resolve(columnEntry.sample)
-                  .promise();
+                columnEntry.samplePromise = $.Deferred().resolve(columnEntry.sample).promise();
 
                 tableEntry.sourceMeta.columns.push(column.name);
                 tableEntry.sourceMeta.extended_columns.push(columnEntry.definition);
@@ -623,7 +625,7 @@ class DataCatalog {
     });
 
     return {
-      delete: function() {
+      delete: function () {
         removeTable();
         while (identifiersToClean.length) {
           delete self.entries[identifiersToClean.pop()];
@@ -647,12 +649,7 @@ class DataCatalog {
     const self = this;
     const identifier = generateEntryCacheId(options);
     if (options.temporaryOnly) {
-      return (
-        self.temporaryEntries[identifier] ||
-        $.Deferred()
-          .reject()
-          .promise()
-      );
+      return self.temporaryEntries[identifier] || $.Deferred().reject().promise();
     }
     if (self.entries[identifier]) {
       return self.entries[identifier];
@@ -716,6 +713,7 @@ class DataCatalog {
    * @param {Object} options
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    * @param {string[][]} options.paths
    *
    * @return {Promise}
@@ -733,7 +731,11 @@ class DataCatalog {
     if (!cacheEnabled) {
       deferred
         .resolve(
-          new MultiTableEntry({ identifier: identifier, dataCatalog: self, paths: options.paths })
+          new MultiTableEntry({
+            identifier: identifier,
+            dataCatalog: self,
+            paths: options.paths
+          })
         )
         .promise();
     } else {
@@ -753,7 +755,11 @@ class DataCatalog {
         .catch(error => {
           console.warn(error);
           deferred.resolve(
-            new MultiTableEntry({ identifier: identifier, dataCatalog: self, paths: options.paths })
+            new MultiTableEntry({
+              identifier: identifier,
+              dataCatalog: self,
+              paths: options.paths
+            })
           );
         });
     }
@@ -769,10 +775,13 @@ class DataCatalog {
    */
   persistMultiTableEntry(multiTableEntry) {
     const self = this;
-    if (!cacheEnabled || CACHEABLE_TTL.default <= 0 || CACHEABLE_TTL.optimizer <= 0) {
-      return $.Deferred()
-        .resolve()
-        .promise();
+    if (
+      !cacheEnabled ||
+      CACHEABLE_TTL.default <= 0 ||
+      CACHEABLE_TTL.optimizer <= 0 ||
+      multiTableEntry.getConnector().optimizer === LOCAL_STRATEGY
+    ) {
+      return $.Deferred().resolve().promise();
     }
     const deferred = $.Deferred();
     self.multiTableStore
@@ -795,16 +804,17 @@ const sourceBoundCatalogs = {};
 /**
  * Helper function to get the DataCatalog instance for a given data source.
  *
- * @param {string} sourceType
+ * @param {Connector} connector
+ *
  * @return {DataCatalog}
  */
-const getCatalog = function(sourceType) {
-  if (!sourceType) {
-    throw new Error('getCatalog called without sourceType');
+const getCatalog = function (connector) {
+  if (!connector || !connector.id) {
+    throw new Error('getCatalog called without connector with id');
   }
   return (
-    sourceBoundCatalogs[sourceType] ||
-    (sourceBoundCatalogs[sourceType] = new DataCatalog(sourceType))
+    sourceBoundCatalogs[connector.id] ||
+    (sourceBoundCatalogs[connector.id] = new DataCatalog(connector))
   );
 };
 
@@ -816,9 +826,9 @@ export default {
    * Calling this returns a handle that allows deletion of any created entries by calling delete() on the handle.
    *
    * @param {Object} options
-   * @param {string} options.sourceType
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    * @param {string} options.name
    *
    * @param {Object[]} options.columns
@@ -828,36 +838,36 @@ export default {
    *
    * @return {Object}
    */
-  addTemporaryTable: function(options) {
-    return getCatalog(options.sourceType).addTemporaryTable(options);
+  addTemporaryTable: function (options) {
+    return getCatalog(options.connector).addTemporaryTable(options);
   },
 
   /**
    * @param {Object} options
-   * @param {string} options.sourceType
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    * @param {string|string[]} options.path
    * @param {Object} [options.definition] - Optional initial definition
    * @param {boolean} [options.temporaryOnly] - Default: false
    *
    * @return {Promise}
    */
-  getEntry: function(options) {
-    return getCatalog(options.sourceType).getEntry(options);
+  getEntry: function (options) {
+    return getCatalog(options.connector).getEntry(options);
   },
 
   /**
    * @param {Object} options
-   * @param {string} options.sourceType
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    * @param {string[][]} options.paths
    *
    * @return {Promise}
    */
-  getMultiTableEntry: function(options) {
-    return getCatalog(options.sourceType).getMultiTableEntry(options);
+  getMultiTableEntry: function (options) {
+    return getCatalog(options.connector).getMultiTableEntry(options);
   },
 
   /**
@@ -865,9 +875,9 @@ export default {
    * getEntry then getChildren.
    *
    * @param {Object} options
-   * @param {string} options.sourceType
    * @param {ContextNamespace} options.namespace - The context namespace
    * @param {ContextCompute} options.compute - The context compute
+   * @param {Connector} options.connector
    * @param {string|string[]} options.path
    * @param {Object} [options.definition] - Optional initial definition of the parent entry
    * @param {boolean} [options.silenceErrors]
@@ -877,17 +887,14 @@ export default {
    *
    * @return {CancellablePromise}
    */
-  getChildren: function(options) {
+  getChildren: function (options) {
     const deferred = $.Deferred();
     const cancellablePromises = [];
-    getCatalog(options.sourceType)
+    getCatalog(options.connector)
       .getEntry(options)
       .done(entry => {
         cancellablePromises.push(
-          entry
-            .getChildren(options)
-            .done(deferred.resolve)
-            .fail(deferred.reject)
+          entry.getChildren(options).done(deferred.resolve).fail(deferred.reject)
         );
       })
       .fail(deferred.reject);
@@ -895,7 +902,7 @@ export default {
   },
 
   /**
-   * @param {string} sourceType
+   * @param {Connector} connector
    *
    * @return {DataCatalog}
    */
@@ -916,11 +923,11 @@ export default {
    */
   updateAllNavigatorTags: generalDataCatalog.updateAllNavigatorTags.bind(generalDataCatalog),
 
-  enableCache: function() {
+  enableCache: function () {
     cacheEnabled = true;
   },
 
-  disableCache: function() {
+  disableCache: function () {
     cacheEnabled = false;
   },
 

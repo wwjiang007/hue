@@ -196,25 +196,21 @@ class AssistantUtils {
 
 class AssistEditorContextPanel {
   constructor(params) {
-    this.disposals = [];
     this.isSolr = ko.observable(false);
     this.activeTab = params.activeTab;
 
-    this.sourceType = ko.observable(params.sourceType());
+    this.connector = params.connector;
 
-    this.showRisks = ko.pureComputed(
-      () =>
-        window.HAS_OPTIMIZER &&
-        !this.isSolr() &&
-        (this.sourceType() === 'impala' || this.sourceType() === 'hive')
-    );
-
-    const typeSub = huePubSub.subscribe('active.snippet.type.changed', details => {
-      this.sourceType(details.type);
-    });
-
-    this.disposals.push(() => {
-      typeSub.remove();
+    this.showRisks = ko.pureComputed(() => {
+      if (!window.HAS_OPTIMIZER || this.isSolr()) {
+        return false;
+      }
+      if (this.connector().dialect_properties) {
+        // TODO: dialect_properties only for when ENABLE_CONNECTORS is enabled
+        return this.connector().dialect_properties.has_optimizer_risks;
+      } else {
+        return this.connector().dialect === 'impala' || this.connector().dialect === 'hive';
+      }
     });
 
     this.uploadingTableStats = ko.observable(false);
@@ -335,11 +331,7 @@ class AssistEditorContextPanel {
       return result;
     };
 
-    const activeTablesSub = this.activeTables.subscribe(loadEntries);
-    this.disposals.push(() => {
-      window.clearTimeout(loadEntriesTimeout);
-      activeTablesSub.dispose();
-    });
+    this.activeTables.subscribe(loadEntries);
 
     let updateOnVisible = false;
 
@@ -354,12 +346,13 @@ class AssistEditorContextPanel {
       }
       updateOnVisible = false;
 
-      if (!sources[activeLocations.type]) {
-        sources[activeLocations.type] = {
+      if (!sources[activeLocations.connector.id]) {
+        sources[activeLocations.connector.id] = {
           assistDbSource: new AssistDbSource({
             i18n: i18n,
             initialNamespace: activeLocations.namespace,
-            type: activeLocations.type,
+            connector: activeLocations.connector,
+            type: activeLocations.connector.id,
             name: activeLocations.type,
             navigationSettings: navigationSettings
           }),
@@ -368,9 +361,9 @@ class AssistEditorContextPanel {
         };
       }
 
-      const assistDbSource = sources[activeLocations.type].assistDbSource;
-      const databaseIndex = sources[activeLocations.type].databaseIndex;
-      const activeTableIndex = sources[activeLocations.type].activeTableIndex;
+      const assistDbSource = sources[activeLocations.connector.id].assistDbSource;
+      const databaseIndex = sources[activeLocations.connector.id].databaseIndex;
+      const activeTableIndex = sources[activeLocations.connector.id].activeTableIndex;
 
       if (!activeLocations) {
         this.activeLocations(undefined);
@@ -420,9 +413,9 @@ class AssistEditorContextPanel {
               } else {
                 dataCatalog
                   .getEntry({
-                    sourceType: activeLocations.type,
                     namespace: activeLocations.namespace,
                     compute: activeLocations.compute,
+                    connector: activeLocations.connector,
                     path: [database],
                     definition: { type: 'database' }
                   })
@@ -481,13 +474,10 @@ class AssistEditorContextPanel {
                             isTableOrView: () => true,
                             getType: () => 'table',
                             hasPossibleChildren: () => true,
-                            getSourceMeta: () =>
-                              $.Deferred()
-                                .resolve({ notFound: true })
-                                .promise(),
+                            getSourceMeta: () => $.Deferred().resolve({ notFound: true }).promise(),
                             getDisplayName: () => dbEntry.catalogEntry.name + '.' + tableName,
                             reloading: ko.observable(false),
-                            reload: function() {
+                            reload: function () {
                               const self = this;
                               if (self.reloading()) {
                                 return;
@@ -500,9 +490,9 @@ class AssistEditorContextPanel {
                               });
                               dataCatalog
                                 .getEntry({
-                                  sourceType: activeLocations.type,
                                   namespace: activeLocations.namespace,
                                   compute: activeLocations.compute,
+                                  connector: activeLocations.connector,
                                   path: []
                                 })
                                 .done(sourceEntry => {
@@ -591,20 +581,20 @@ class AssistEditorContextPanel {
       }
     };
 
-    const entryRefreshedSub = huePubSub.subscribe('data.catalog.entry.refreshed', details => {
-      const sourceType = details.entry.getSourceType();
-      if (sources[sourceType]) {
+    huePubSub.subscribe('data.catalog.entry.refreshed', details => {
+      const connectorId = details.entry.getConnector().id;
+      if (sources[connectorId]) {
         let completeRefresh = false;
         if (details.entry.isSource()) {
-          sources[sourceType].databaseIndex = {};
-          sources[sourceType].activeTableIndex = {};
+          sources[connectorId].databaseIndex = {};
+          sources[connectorId].activeTableIndex = {};
           completeRefresh = true;
         } else if (
           details.entry.isDatabase() &&
-          sources[sourceType].databaseIndex[details.entry.name]
+          sources[connectorId].databaseIndex[details.entry.name]
         ) {
-          const dbEntry = sources[sourceType].databaseIndex[details.entry.name];
-          const activeTableIndex = sources[sourceType].activeTableIndex;
+          const dbEntry = sources[connectorId].databaseIndex[details.entry.name];
+          const activeTableIndex = sources[connectorId].activeTableIndex;
           Object.keys(activeTableIndex).forEach(tableKey => {
             const tableEntry = activeTableIndex[tableKey];
             if (tableEntry.parent === dbEntry) {
@@ -613,7 +603,7 @@ class AssistEditorContextPanel {
             }
           });
         } else if (details.entry.isTableOrView()) {
-          const activeTableIndex = sources[sourceType].activeTableIndex;
+          const activeTableIndex = sources[connectorId].activeTableIndex;
           if (activeTableIndex[details.entry.getQualifiedPath()]) {
             delete activeTableIndex[details.entry.getQualifiedPath()];
             completeRefresh = true;
@@ -631,18 +621,13 @@ class AssistEditorContextPanel {
       updateOnVisible = true;
     }
 
-    const activeTabSub = this.activeTab.subscribe(activeTab => {
+    this.activeTab.subscribe(activeTab => {
       if (activeTab === 'editorAssistant' && updateOnVisible) {
         huePubSub.publish('get.active.editor.locations', handleLocationUpdate);
       }
     });
 
-    this.disposals.push(() => {
-      entryRefreshedSub.remove();
-      activeTabSub.dispose();
-    });
-
-    const activeLocationsSub = huePubSub.subscribe('editor.active.locations', activeLocations => {
+    huePubSub.subscribe('editor.active.locations', activeLocations => {
       if (this.activeTab() === 'editorAssistant') {
         handleLocationUpdate(activeLocations);
       } else {
@@ -650,7 +635,7 @@ class AssistEditorContextPanel {
       }
     });
 
-    const activeRisksSub = huePubSub.subscribe('editor.active.risks', details => {
+    huePubSub.subscribe('editor.active.risks', details => {
       if (details.risks !== this.activeRisks()) {
         this.activeRisks(details.risks);
         this.activeEditor(details.editor);
@@ -660,11 +645,6 @@ class AssistEditorContextPanel {
     huePubSub.publish('editor.get.active.risks', details => {
       this.activeRisks(details.risks);
       this.activeEditor(details.editor);
-    });
-
-    this.disposals.push(() => {
-      activeLocationsSub.remove();
-      activeRisksSub.remove();
     });
   }
 
@@ -730,12 +710,6 @@ class AssistEditorContextPanel {
       callback: () => {
         this.uploadingTableStats(false);
       }
-    });
-  }
-
-  dispose() {
-    this.disposals.forEach(dispose => {
-      dispose();
     });
   }
 }

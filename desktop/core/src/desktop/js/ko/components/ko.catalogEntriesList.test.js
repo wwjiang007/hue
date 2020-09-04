@@ -33,9 +33,9 @@ describe('ko.catalogEntriesList.js', () => {
         isDatabase: () => false,
         getChildren: () => $.Deferred().resolve([]),
         getSample: () => $.Deferred().reject(),
-        getSourceType: () => 'impala',
+        getDialect: () => 'impala',
         loadNavigatorMetaForChildren: () => $.Deferred().reject(),
-        loadNavOptPopularityForChildren: () => $.Deferred().reject(),
+        loadOptimizerPopularityForChildren: () => $.Deferred().reject(),
         isTableOrView: () => false,
         isSource: () => false
       }

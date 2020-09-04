@@ -43,24 +43,24 @@ class ParameterForm(forms.Form):
   value = forms.CharField(max_length=12288, required=False)
 
   NON_PARAMETERS = (
-      'user.name',
-      'mapreduce.job.user.name',
-      'wf_application_path',
-      'jobTracker',
-      'nameNode',
       'hue-id-w',
       'hue-id-c',
       'hue-id-b',
       'hue-id-b',
       'security_enabled',
-      'oozie.wf.rerun.failnodes',
-      'dryrun',
-      'send_email'
+      'dryrun'
   )
 
   RERUN_HIDE_PARAMETERS = (
       'security_enabled',
-      'dryrun'
+      'dryrun',
+      'user.name',
+      'mapreduce.job.user.name',
+      'wf_application_path',
+      'jobTracker',
+      'nameNode',
+      'oozie.wf.rerun.failnodes',
+      'send_email'
   )
 
   @staticmethod
@@ -68,6 +68,10 @@ class ParameterForm(forms.Form):
     params = [key for key in list(conf_dict.keys()) if key not in ParameterForm.NON_PARAMETERS]
     return [{'name': name, 'value': conf_dict[name]} for name in params]
 
+  @staticmethod
+  def get_non_parameters(conf_dict):
+    params = filter(lambda key: key in ParameterForm.NON_PARAMETERS, conf_dict.keys())
+    return [{'name': name, 'value': conf_dict[name]} for name in params]
 
 class WorkflowForm(forms.ModelForm):
   class Meta(object):

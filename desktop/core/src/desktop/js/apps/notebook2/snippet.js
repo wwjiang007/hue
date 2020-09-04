@@ -24,22 +24,37 @@ import 'apps/notebook2/components/ko.executableLogs';
 import 'apps/notebook2/components/ko.executableProgressBar';
 import 'apps/notebook2/components/ko.snippetEditorActions';
 import 'apps/notebook2/components/ko.snippetResults';
+import 'apps/notebook2/components/ko.queryHistory';
 
 import AceAutocompleteWrapper from 'apps/notebook/aceAutocompleteWrapper';
 import apiHelper from 'api/apiHelper';
 import Executor from 'apps/notebook2/execution/executor';
 import hueAnalytics from 'utils/hueAnalytics';
 import huePubSub from 'utils/huePubSub';
-import hueUtils from 'utils/hueUtils';
+import hueUtils, { defer } from 'utils/hueUtils';
 import sessionManager from 'apps/notebook2/execution/sessionManager';
 import SqlExecutable from 'apps/notebook2/execution/sqlExecutable';
-import { REDRAW_FIXED_HEADERS_EVENT } from 'apps/notebook2/events';
-import { EXECUTABLE_UPDATED_EVENT, EXECUTION_STATUS } from 'apps/notebook2/execution/executable';
+import { HIDE_FIXED_HEADERS_EVENT, REDRAW_FIXED_HEADERS_EVENT } from 'apps/notebook2/events';
+import {
+  EXECUTABLE_STATUS_TRANSITION_EVENT,
+  EXECUTABLE_UPDATED_EVENT,
+  EXECUTION_STATUS
+} from 'apps/notebook2/execution/executable';
 import {
   ACTIVE_STATEMENT_CHANGED_EVENT,
   REFRESH_STATEMENT_LOCATIONS_EVENT
 } from 'ko/bindings/ace/aceLocationHandler';
 import { EXECUTE_ACTIVE_EXECUTABLE_EVENT } from 'apps/notebook2/components/ko.executableActions';
+import { ADD_TO_HISTORY_EVENT } from 'apps/notebook2/components/ko.queryHistory';
+import { findEditorConnector, getLastKnownConfig } from 'utils/hueConfig';
+import { cancelActiveRequest } from 'api/apiUtils';
+import { getOptimizer } from 'catalog/optimizer/optimizer';
+import {
+  ASSIST_GET_DATABASE_EVENT,
+  ASSIST_GET_SOURCE_EVENT,
+  ASSIST_SET_SOURCE_EVENT
+} from 'ko/components/assist/events';
+import { POST_FROM_LOCATION_WORKER_EVENT } from 'sql/sqlWorkerHandler';
 
 // TODO: Remove for ENABLE_NOTEBOOK_2. Temporary here for debug
 window.SqlExecutable = SqlExecutable;
@@ -47,7 +62,7 @@ window.Executor = Executor;
 
 export const CURRENT_QUERY_TAB_SWITCHED_EVENT = 'current.query.tab.switched';
 
-const TYPE = {
+export const DIALECT = {
   hive: 'hive',
   impala: 'impala',
   jar: 'jar',
@@ -104,68 +119,68 @@ const COMPATIBILITY_SOURCE_PLATFORMS = {
 };
 
 const COMPATIBILITY_TARGET_PLATFORMS = {
-  hive: { name: 'Hive', value: TYPE.hive },
-  impala: { name: 'Impala', value: TYPE.impala }
+  hive: { name: 'Hive', value: DIALECT.hive },
+  impala: { name: 'Impala', value: DIALECT.impala }
 };
 
 const getDefaultSnippetProperties = snippetType => {
   const properties = {};
 
-  if (snippetType === TYPE.jar || snippetType === TYPE.py) {
+  if (snippetType === DIALECT.jar || snippetType === DIALECT.py) {
     properties['driverCores'] = '';
     properties['executorCores'] = '';
     properties['numExecutors'] = '';
     properties['queue'] = '';
     properties['archives'] = [];
     properties['files'] = [];
-  } else if (snippetType === TYPE.java) {
+  } else if (snippetType === DIALECT.java) {
     properties['archives'] = [];
     properties['files'] = [];
     properties['capture_output'] = false;
-  } else if (snippetType === TYPE.shell) {
+  } else if (snippetType === DIALECT.shell) {
     properties['archives'] = [];
     properties['files'] = [];
-  } else if (snippetType === TYPE.mapreduce) {
+  } else if (snippetType === DIALECT.mapreduce) {
     properties['app_jar'] = '';
     properties['hadoopProperties'] = [];
     properties['jars'] = [];
     properties['files'] = [];
     properties['archives'] = [];
-  } else if (snippetType === TYPE.spark2) {
+  } else if (snippetType === DIALECT.spark2) {
     properties['app_name'] = '';
     properties['class'] = '';
     properties['jars'] = [];
     properties['spark_opts'] = [];
     properties['spark_arguments'] = [];
     properties['files'] = [];
-  } else if (snippetType === TYPE.sqoop1) {
+  } else if (snippetType === DIALECT.sqoop1) {
     properties['files'] = [];
-  } else if (snippetType === TYPE.hive) {
+  } else if (snippetType === DIALECT.hive) {
     properties['settings'] = [];
     properties['files'] = [];
     properties['functions'] = [];
     properties['arguments'] = [];
-  } else if (snippetType === TYPE.impala) {
+  } else if (snippetType === DIALECT.impala) {
     properties['settings'] = [];
-  } else if (snippetType === TYPE.pig) {
+  } else if (snippetType === DIALECT.pig) {
     properties['parameters'] = [];
     properties['hadoopProperties'] = [];
     properties['resources'] = [];
-  } else if (snippetType === TYPE.distcp) {
+  } else if (snippetType === DIALECT.distcp) {
     properties['source_path'] = '';
     properties['destination_path'] = '';
-  } else if (snippetType === TYPE.shell) {
+  } else if (snippetType === DIALECT.shell) {
     properties['command_path'] = '';
     properties['arguments'] = [];
     properties['env_var'] = [];
     properties['capture_output'] = true;
   }
 
-  if (snippetType === TYPE.jar || snippetType === TYPE.java) {
+  if (snippetType === DIALECT.jar || snippetType === DIALECT.java) {
     properties['app_jar'] = '';
     properties['class'] = '';
     properties['arguments'] = [];
-  } else if (snippetType === TYPE.py) {
+  } else if (snippetType === DIALECT.py) {
     properties['py_file'] = '';
     properties['arguments'] = [];
   }
@@ -182,25 +197,31 @@ export default class Snippet {
 
     this.id = ko.observable(snippetRaw.id || hueUtils.UUID());
     this.name = ko.observable(snippetRaw.name || '');
-    this.type = ko.observable();
-    this.type.subscribe(newValue => {
-      // TODO: Add session disposal for ENABLE_NOTEBOOK_2
-      // Pre-create a session to speed up execution
-      sessionManager.getSession({ type: newValue }).then(() => {
+
+    this.connector = ko.observable();
+
+    this.connector.subscribe(connector => {
+      sessionManager.getSession({ type: connector.id }).then(() => {
         this.status(STATUS.ready);
       });
     });
-    this.type(snippetRaw.type || TYPE.hive);
-    this.isBatchable = ko.pureComputed(
-      () =>
-        this.type() === this.hive ||
-        this.type() === this.impala ||
-        this.parentVm.availableLanguages.some(
-          language =>
-            language.type === this.type() &&
-            (language.interface == 'oozie' || language.interface == 'sqlalchemy')
-        )
-    );
+
+    this.initializeConnector(snippetRaw);
+
+    this.dialect = ko.pureComputed(() => this.connector() && this.connector().dialect);
+    this.connectorType = ko.pureComputed(() => this.connector() && this.connector().id);
+
+    this.isSqlDialect = ko.pureComputed(() => this.connector() && this.connector().is_sql);
+    this.defaultLimit = ko.observable(snippetRaw.defaultLimit);
+
+    if (!this.defaultLimit()) {
+      const lastKnownConfig = getLastKnownConfig();
+      if (lastKnownConfig && lastKnownConfig.app_config && lastKnownConfig.app_config.editor) {
+        this.defaultLimit(lastKnownConfig.app_config.editor.default_limit);
+      }
+    }
+
+    this.isBatchable = ko.pureComputed(() => this.connector() && this.connector().is_batchable);
 
     this.autocompleteSettings = {
       temporaryOnly: false
@@ -227,11 +248,8 @@ export default class Snippet {
     this.inFocus = ko.observable(false);
 
     this.inFocus.subscribe(newValue => {
-      if (newValue) {
-        huePubSub.publish('active.snippet.type.changed', {
-          type: this.type(),
-          isSqlDialect: this.isSqlDialect()
-        });
+      if (newValue && this.dialect()) {
+        this.parentVm.notifyDialectChange(this.dialect(), this.isSqlDialect());
       }
     });
 
@@ -239,15 +257,11 @@ export default class Snippet {
 
     this.explanation = ko.observable();
 
-    this.getAceMode = () => this.parentVm.getSnippetViewSettings(this.type()).aceMode;
+    this.getAceMode = () => this.parentVm.getSnippetViewSettings(this.dialect()).aceMode;
 
     this.dbSelectionVisible = ko.observable(false);
 
     this.showExecutionAnalysis = ko.observable(false);
-
-    this.isSqlDialect = ko.pureComputed(
-      () => this.parentVm.getSnippetViewSettings(this.type()).sqlDialect
-    );
 
     // namespace and compute might be initialized as empty object {}
     this.namespace = ko.observable(
@@ -275,67 +289,29 @@ export default class Snippet {
 
     // History is currently in Notebook, same with saved queries by snippets, might be better in assist
     this.currentQueryTab = ko.observable(snippetRaw.currentQueryTab || 'queryHistory');
-    this.pinnedContextTabs = ko.observableArray(snippetRaw.pinnedContextTabs || []);
 
-    this.errorLoadingQueries = ko.observable(false);
-    this.loadingQueries = ko.observable(false);
-
-    this.queriesHasErrors = ko.observable(false);
-    this.queriesCurrentPage = ko.observable(
-      this.parentVm.selectedNotebook() && this.parentVm.selectedNotebook().snippets().length > 0
-        ? this.parentVm
-            .selectedNotebook()
-            .snippets()[0]
-            .queriesCurrentPage()
-        : 1
-    );
-    this.queriesTotalPages = ko.observable(
-      this.parentVm.selectedNotebook() && this.parentVm.selectedNotebook().snippets().length > 0
-        ? this.parentVm
-            .selectedNotebook()
-            .snippets()[0]
-            .queriesTotalPages()
-        : 1
-    );
-    this.queries = ko.observableArray([]);
-
-    this.queriesFilter = ko.observable('');
-    this.queriesFilterVisible = ko.observable(false);
-    this.queriesFilter.extend({ rateLimit: { method: 'notifyWhenChangesStop', timeout: 900 } });
-    this.queriesFilter.subscribe(() => {
-      this.fetchQueries();
-    });
-
-    this.lastFetchQueriesRequest = null;
-
-    this.lastQueriesPage = 1;
-    this.currentQueryTab.subscribe(newValue => {
-      huePubSub.publish(CURRENT_QUERY_TAB_SWITCHED_EVENT, newValue);
-      if (
-        newValue === 'savedQueries' &&
-        (this.queries().length === 0 || this.lastQueriesPage !== this.queriesCurrentPage())
-      ) {
-        this.fetchQueries();
+    this.currentQueryTab.subscribe(newVal => {
+      huePubSub.publish(HIDE_FIXED_HEADERS_EVENT);
+      if (newVal === 'queryResults') {
+        defer(() => {
+          huePubSub.publish(REDRAW_FIXED_HEADERS_EVENT);
+        });
       }
     });
 
-    huePubSub.subscribeOnce(
-      'assist.source.set',
-      source => {
-        if (source !== this.type()) {
-          huePubSub.publish('assist.set.source', this.type());
-        }
-      },
-      this.parentVm.huePubSubId
-    );
+    this.pinnedContextTabs = ko.observableArray(snippetRaw.pinnedContextTabs || []);
 
-    huePubSub.publish('assist.get.source');
+    huePubSub.publish(ASSIST_GET_SOURCE_EVENT, source => {
+      if (source !== this.dialect()) {
+        huePubSub.publish(ASSIST_SET_SOURCE_EVENT, this.dialect());
+      }
+    });
 
     this.ignoreNextAssistDatabaseUpdate = false;
 
     if (!this.database()) {
-      huePubSub.publish('assist.get.database.callback', {
-        source: this.type(),
+      huePubSub.publish(ASSIST_GET_DATABASE_EVENT, {
+        connector: this.connector(),
         callback: databaseDef => {
           this.handleAssistSelection(databaseDef);
         }
@@ -396,7 +372,7 @@ export default class Snippet {
             }
           }
           this.positionStatement(statementDetails.activeStatement);
-          this.activeExecutable(this.executor.update(statementDetails, beforeExecute));
+          this.activeExecutable(this.executor.update(statementDetails, beforeExecute, this));
           beforeExecute = false;
           if (statementDetails.activeStatement) {
             const statementsList = [];
@@ -434,16 +410,16 @@ export default class Snippet {
     this.statusForButtons = ko.observable(STATUS_FOR_BUTTONS.executed);
 
     this.properties = ko.observable(
-      komapping.fromJS(snippetRaw.properties || getDefaultSnippetProperties(this.type()))
+      komapping.fromJS(snippetRaw.properties || getDefaultSnippetProperties(this.dialect()))
     );
     this.hasProperties = ko.pureComputed(
       () => Object.keys(komapping.toJS(this.properties())).length > 0
     );
 
-    this.viewSettings = ko.pureComputed(() => this.parentVm.getSnippetViewSettings(this.type()));
+    this.viewSettings = ko.pureComputed(() => this.parentVm.getSnippetViewSettings(this.dialect()));
 
     const previousProperties = {};
-    this.type.subscribe(
+    this.dialect.subscribe(
       oldValue => {
         previousProperties[oldValue] = this.properties();
       },
@@ -451,7 +427,7 @@ export default class Snippet {
       'beforeChange'
     );
 
-    this.type.subscribe(newValue => {
+    this.dialect.subscribe(newValue => {
       if (typeof previousProperties[newValue] !== 'undefined') {
         this.properties(previousProperties[newValue]);
       } else {
@@ -482,13 +458,13 @@ export default class Snippet {
     this.variables.subscribe(() => {
       $(document).trigger('updateResultHeaders', this);
     });
-    this.hasCurlyBracketParameters = ko.pureComputed(() => this.type() !== TYPE.pig);
+    this.hasCurlyBracketParameters = ko.pureComputed(() => this.dialect() !== DIALECT.pig);
 
     this.variableNames = ko.pureComputed(() => {
       let match,
         matches = {},
         matchList;
-      if (this.type() === TYPE.pig) {
+      if (this.dialect() === DIALECT.pig) {
         matches = this.getPigParameters();
       } else {
         const re = /(?:^|\W)\${(\w*)=?([^{}]*)}/g;
@@ -519,11 +495,7 @@ export default class Snippet {
             option.text = option.text && option.text.trim();
             option.value =
               option.value &&
-              option.value
-                .trim()
-                .replace(',', ',')
-                .replace('(', '(')
-                .replace(')', ')');
+              option.value.trim().replace(',', ',').replace('(', '(').replace(')', ')');
 
             if (value.placeholder || matchList[2]) {
               if (!value.options) {
@@ -617,7 +589,7 @@ export default class Snippet {
     });
 
     const activeSourcePromises = [];
-    huePubSub.subscribe('ace.sql.location.worker.message', e => {
+    huePubSub.subscribe(POST_FROM_LOCATION_WORKER_EVENT, e => {
       while (activeSourcePromises.length) {
         const promise = activeSourcePromises.pop();
         if (promise.cancel) {
@@ -713,13 +685,17 @@ export default class Snippet {
     });
 
     this.statement = ko.pureComputed(() => {
-      let statement = this.isSqlDialect()
-        ? this.selectedStatement()
-          ? this.selectedStatement()
-          : this.positionStatement() !== null
-          ? this.positionStatement().statement
-          : this.statement_raw()
-        : this.statement_raw();
+      let statement = this.statement_raw();
+      if (this.isSqlDialect()) {
+        if (this.activeExecutable()) {
+          statement = this.activeExecutable().getStatement();
+        } else if (this.selectedStatement()) {
+          statement = this.selectedStatement();
+        } else if (this.positionStatement()) {
+          statement = this.positionStatement().statement;
+        }
+      }
+
       const variables = this.variables().reduce((variables, variable) => {
         variables[variable.name()] = variable;
         return variables;
@@ -777,7 +753,7 @@ export default class Snippet {
 
     this.isLoading = ko.pureComputed(() => this.status() === STATUS.loading);
 
-    this.resultsKlass = ko.pureComputed(() => 'results ' + this.type());
+    this.resultsKlass = ko.pureComputed(() => 'results ' + this.dialect());
 
     this.errorsKlass = ko.pureComputed(() => this.resultsKlass() + ' alert alert-error');
 
@@ -808,11 +784,13 @@ export default class Snippet {
       this.compatibilitySourcePlatforms.push(COMPATIBILITY_SOURCE_PLATFORMS[key]);
     });
 
-    this.compatibilitySourcePlatform = ko.observable(COMPATIBILITY_SOURCE_PLATFORMS[this.type()]);
+    this.compatibilitySourcePlatform = ko.observable(
+      COMPATIBILITY_SOURCE_PLATFORMS[this.dialect()]
+    );
     this.compatibilitySourcePlatform.subscribe(newValue => {
-      if (newValue && newValue.value !== this.type()) {
+      if (newValue && newValue.value !== this.dialect()) {
         this.hasSuggestion(null);
-        this.compatibilityTargetPlatform(COMPATIBILITY_TARGET_PLATFORMS[this.type()]);
+        this.compatibilityTargetPlatform(COMPATIBILITY_TARGET_PLATFORMS[this.dialect()]);
         this.queryCompatibility();
       }
     });
@@ -821,7 +799,9 @@ export default class Snippet {
     Object.keys(COMPATIBILITY_TARGET_PLATFORMS).forEach(key => {
       this.compatibilityTargetPlatforms.push(COMPATIBILITY_TARGET_PLATFORMS[key]);
     });
-    this.compatibilityTargetPlatform = ko.observable(COMPATIBILITY_TARGET_PLATFORMS[this.type()]);
+    this.compatibilityTargetPlatform = ko.observable(
+      COMPATIBILITY_TARGET_PLATFORMS[this.dialect()]
+    );
 
     this.showOptimizer = ko.observable(
       apiHelper.getFromTotalStorage('editor', 'show.optimizer', false)
@@ -832,7 +812,128 @@ export default class Snippet {
       }
     });
 
-    if (HAS_OPTIMIZER && !this.parentVm.isNotificationManager()) {
+    this.wasBatchExecuted = ko.observable(!!snippetRaw.wasBatchExecuted);
+    this.isReady = ko.pureComputed(
+      () =>
+        (this.statementType() === 'text' &&
+          ((this.isSqlDialect() && this.statement() !== '') ||
+            ([DIALECT.jar, DIALECT.java, DIALECT.spark2, DIALECT.distcp].indexOf(this.dialect()) ===
+              -1 &&
+              this.statement() !== '') ||
+            ([DIALECT.jar, DIALECT.java].indexOf(this.dialect()) !== -1 &&
+              this.properties().app_jar() !== '' &&
+              this.properties().class() !== '') ||
+            (DIALECT.spark2 === this.dialect() && this.properties().jars().length > 0) ||
+            (DIALECT.shell === this.dialect() && this.properties().command_path().length > 0) ||
+            (DIALECT.mapreduce === this.dialect() && this.properties().app_jar().length > 0) ||
+            (DIALECT.distcp === this.dialect() &&
+              this.properties().source_path().length > 0 &&
+              this.properties().destination_path().length > 0))) ||
+        (this.statementType() === 'file' && this.statementPath().length > 0) ||
+        (this.statementType() === 'document' &&
+          this.associatedDocumentUuid() &&
+          this.associatedDocumentUuid().length > 0)
+    );
+    this.lastExecuted = ko.observable(snippetRaw.lastExecuted || 0);
+    this.lastAceSelectionRowOffset = ko.observable(snippetRaw.lastAceSelectionRowOffset || 0);
+
+    this.executingBlockingOperation = null; // A ExecuteStatement()
+    this.showLongOperationWarning = ko.observable(false);
+    this.showLongOperationWarning.subscribe(newValue => {
+      if (newValue) {
+        hueAnalytics.convert('editor', 'showLongOperationWarning');
+      }
+    });
+
+    this.longOperationTimeout = -1;
+
+    this.lastCompatibilityRequest = undefined;
+
+    this.isFetchingData = false;
+
+    this.isCanceling = ko.observable(false);
+
+    this.autocompleter = new AceAutocompleteWrapper({
+      snippet: this,
+      user: this.parentVm.user,
+      optEnabled: false,
+      timeout: this.parentVm.autocompleteTimeout
+    });
+
+    this.activeExecutable = ko.observable();
+
+    // TODO: User connector instead of compute, namespace, sourceType, isOptimizerEnabled, isSqlEngine
+    this.executor = new Executor({
+      compute: this.compute,
+      database: this.database,
+      connector: this.connector,
+      namespace: this.namespace,
+      defaultLimit: this.defaultLimit,
+      isOptimizerEnabled: this.parentVm.isOptimizerEnabled(),
+      snippet: this,
+      isSqlEngine: this.isSqlDialect
+    });
+
+    if (snippetRaw.executor) {
+      try {
+        this.executor.executables = snippetRaw.executor.executables.map(executableRaw => {
+          switch (executableRaw.type) {
+            case 'sqlExecutable': {
+              return SqlExecutable.fromJs(this.executor, executableRaw);
+            }
+            default: {
+              throw new Error('Failed to created executable of type ' + executableRaw.type);
+            }
+          }
+        });
+
+        this.executor.executables.forEach(async executable => {
+          if (executable.status !== EXECUTION_STATUS.ready) {
+            await executable.checkStatus();
+          } else {
+            executable.notify();
+          }
+        });
+      } catch (err) {
+        console.error(err); // TODO: Move up
+      }
+    }
+
+    huePubSub.subscribe(EXECUTABLE_UPDATED_EVENT, executable => {
+      if (this.activeExecutable() === executable) {
+        this.updateFromExecutable(executable);
+      }
+    });
+
+    huePubSub.subscribe(EXECUTABLE_STATUS_TRANSITION_EVENT, transitionDetails => {
+      if (this.activeExecutable() === transitionDetails.executable) {
+        if (
+          (transitionDetails.newStatus === EXECUTION_STATUS.available ||
+            transitionDetails.newStatus === EXECUTION_STATUS.failed ||
+            transitionDetails.newStatus === EXECUTION_STATUS.success) &&
+          this.activeExecutable().history &&
+          this.activeExecutable().handle
+        ) {
+          huePubSub.publish(ADD_TO_HISTORY_EVENT, {
+            absoluteUrl: undefined,
+            statement: this.activeExecutable().handle.statement,
+            lastExecuted: this.activeExecutable().executeStarted,
+            status: this.activeExecutable().status,
+            name: this.parentNotebook.name(),
+            uuid: this.activeExecutable().history.uuid
+          });
+        }
+      }
+    });
+
+    this.activeExecutable.subscribe(this.updateFromExecutable.bind(this));
+
+    this.refreshHistory = notebook.fetchHistory;
+
+    huePubSub.publish(REFRESH_STATEMENT_LOCATIONS_EVENT, this);
+
+    // TODO: Add optimizer check per connector?
+    if (window.HAS_OPTIMIZER && !this.parentVm.isNotificationManager()) {
       let lastComplexityRequest;
       let lastCheckedComplexityStatement;
       const knownResponses = [];
@@ -901,14 +1002,14 @@ export default class Snippet {
           return;
         }
 
-        apiHelper.cancelActiveRequest(lastComplexityRequest);
+        cancelActiveRequest(lastComplexityRequest);
 
         hueAnalytics.log('notebook', 'get_query_risk');
         clearActiveRisks();
 
         const changeSubscription = this.statement.subscribe(() => {
           changeSubscription.dispose();
-          apiHelper.cancelActiveRequest(lastComplexityRequest);
+          cancelActiveRequest(lastComplexityRequest);
         });
 
         const hash = this.statement().hashCode();
@@ -921,8 +1022,8 @@ export default class Snippet {
           return true;
         });
         if (unknownResponse) {
-          lastComplexityRequest = apiHelper
-            .statementRisk({
+          lastComplexityRequest = getOptimizer(this.connector())
+            .analyzeRisk({
               notebookJson: await this.parentNotebook.toContextJson(),
               snippetJson: this.toContextJson()
             })
@@ -942,116 +1043,30 @@ export default class Snippet {
         }
       };
 
-      if (this.type() === TYPE.hive || this.type() === TYPE.impala) {
-        if (this.statement_raw()) {
-          window.setTimeout(() => {
-            this.checkComplexity();
-          }, 2000);
-        }
-        this.delayedStatement.subscribe(() => {
+      if (this.statement_raw()) {
+        window.setTimeout(() => {
           this.checkComplexity();
-        });
+        }, 2000);
       }
+
+      this.delayedStatement.subscribe(() => {
+        this.checkComplexity();
+      });
     }
+  }
 
-    this.wasBatchExecuted = ko.observable(!!snippetRaw.wasBatchExecuted);
-    this.isReady = ko.pureComputed(
-      () =>
-        (this.statementType() === 'text' &&
-          ((this.isSqlDialect() && this.statement() !== '') ||
-            ([TYPE.jar, TYPE.java, TYPE.spark2, TYPE.distcp].indexOf(this.type()) === -1 &&
-              this.statement() !== '') ||
-            ([TYPE.jar, TYPE.java].indexOf(this.type()) !== -1 &&
-              (this.properties().app_jar() !== '' && this.properties().class() !== '')) ||
-            (TYPE.spark2 === this.type() && this.properties().jars().length > 0) ||
-            (TYPE.shell === this.type() && this.properties().command_path().length > 0) ||
-            (TYPE.mapreduce === this.type() && this.properties().app_jar().length > 0) ||
-            (TYPE.distcp === this.type() &&
-              this.properties().source_path().length > 0 &&
-              this.properties().destination_path().length > 0))) ||
-        (this.statementType() === 'file' && this.statementPath().length > 0) ||
-        (this.statementType() === 'document' &&
-          this.associatedDocumentUuid() &&
-          this.associatedDocumentUuid().length > 0)
-    );
-    this.lastExecuted = ko.observable(snippetRaw.lastExecuted || 0);
-    this.lastAceSelectionRowOffset = ko.observable(snippetRaw.lastAceSelectionRowOffset || 0);
-
-    this.executingBlockingOperation = null; // A ExecuteStatement()
-    this.showLongOperationWarning = ko.observable(false);
-    this.showLongOperationWarning.subscribe(newValue => {
-      if (newValue) {
-        hueAnalytics.convert('editor', 'showLongOperationWarning');
-      }
-    });
-
-    this.longOperationTimeout = -1;
-
-    this.lastCompatibilityRequest = undefined;
-
-    this.isFetchingData = false;
-
-    this.isCanceling = ko.observable(false);
-
-    this.autocompleter = new AceAutocompleteWrapper({
-      snippet: this,
-      user: this.parentVm.user,
-      optEnabled: false,
-      timeout: this.parentVm.autocompleteTimeout
-    });
-
-    this.activeExecutable = ko.observable();
-
-    this.executor = new Executor({
-      compute: this.compute,
-      database: this.database,
-      sourceType: this.type,
-      namespace: this.namespace,
-      isOptimizerEnabled: this.parentVm.isOptimizerEnabled(),
-      snippet: this,
-      isSqlEngine: this.isSqlDialect
-    });
-
-    if (snippetRaw.executor) {
-      try {
-        this.executor.executables = snippetRaw.executor.executables.map(executableRaw => {
-          switch (executableRaw.type) {
-            case 'sqlExecutable': {
-              return SqlExecutable.fromJs(this.executor, executableRaw);
-            }
-            default: {
-              throw new Error('Failed to created executable of type ' + executableRaw.type);
-            }
-          }
-        });
-
-        this.executor.executables.forEach(async executable => {
-          if (executable.status !== EXECUTION_STATUS.ready) {
-            await executable.checkStatus();
-          } else {
-            executable.notify();
-          }
-        });
-      } catch (err) {
-        console.error(err); // TODO: Move up
-      }
+  changeDialect(dialect) {
+    const connector = findEditorConnector(connector => connector.dialect === dialect);
+    if (!connector) {
+      throw new Error('No connector found for dialect ' + dialect);
     }
-
-    huePubSub.subscribe(EXECUTABLE_UPDATED_EVENT, executable => {
-      if (this.activeExecutable() === executable) {
-        this.updateFromExecutable(executable);
-      }
-    });
-
-    this.activeExecutable.subscribe(this.updateFromExecutable.bind(this));
-
-    this.refreshHistory = notebook.fetchHistory;
-
-    huePubSub.publish(REFRESH_STATEMENT_LOCATIONS_EVENT, this);
+    // TODO: Switch changeDialect to changeType
+    this.connector(connector);
   }
 
   updateFromExecutable(executable) {
     if (executable) {
+      this.lastExecuted(executable.executeStarted);
       this.status(executable.status);
       if (executable.result) {
         this.currentQueryTab('queryResults');
@@ -1081,9 +1096,11 @@ export default class Snippet {
 
   checkCompatibility() {
     this.hasSuggestion(null);
-    this.compatibilitySourcePlatform(COMPATIBILITY_SOURCE_PLATFORMS[this.type()]);
+    this.compatibilitySourcePlatform(COMPATIBILITY_SOURCE_PLATFORMS[this.dialect()]);
     this.compatibilityTargetPlatform(
-      COMPATIBILITY_TARGET_PLATFORMS[this.type() === TYPE.hive ? TYPE.impala : TYPE.hive]
+      COMPATIBILITY_TARGET_PLATFORMS[
+        this.dialect() === DIALECT.hive ? DIALECT.impala : DIALECT.hive
+      ]
     );
     this.queryCompatibility();
   }
@@ -1095,71 +1112,13 @@ export default class Snippet {
     });
   }
 
-  // async executeNext() {
-  //   hueAnalytics.log('notebook', 'execute/' + this.type());
-  //
-  //   const now = new Date().getTime();
-  //   if (now - this.lastExecuted() < 1000) {
-  //     return; // Prevent fast clicks
-  //   }
-  //   this.lastExecuted(now);
-  //
-  //   if (this.type() === TYPE.impala) {
-  //     this.showExecutionAnalysis(false);
-  //     huePubSub.publish('editor.clear.execution.analysis');
-  //   }
-  //
-  //   // Editor based execution
-  //   if (this.ace()) {
-  //     const selectionRange = this.ace().getSelectionRange();
-  //
-  //     huePubSub.publish('ace.set.autoexpand', { autoExpand: false, snippet: this });
-  //     this.lastAceSelectionRowOffset(Math.min(selectionRange.start.row, selectionRange.end.row));
-  //   }
-  //
-  //   const $snip = $('#snippet_' + this.id());
-  //   $snip.find('.progress-snippet').animate(
-  //     {
-  //       height: '3px'
-  //     },
-  //     100
-  //   );
-  //
-  //   $('.jHueNotify').remove();
-  //   this.parentNotebook.forceHistoryInitialHeight(true);
-  //   this.errors([]);
-  //   huePubSub.publish('editor.clear.highlighted.errors', this.ace());
-  //   this.jobs([]);
-  //
-  //   this.parentNotebook.historyCurrentPage(1);
-  //
-  //   this.startLongOperationTimeout();
-  //
-  //   try {
-  //     await this.executor.executeNext();
-  //   } catch (error) {}
-  //   this.stopLongOperationTimeout();
-  // }
-
   execute() {
     // From ctrl + enter
     huePubSub.publish(EXECUTE_ACTIVE_EXECUTABLE_EVENT, this.activeExecutable());
   }
 
-  async exportHistory() {
-    const historyResponse = await apiHelper.getHistory({ type: this.type(), limit: 500 });
-
-    if (historyResponse && historyResponse.history) {
-      window.location.href =
-        window.HUE_BASE_URL +
-        '/desktop/api2/doc/export?history=true&documents=[' +
-        historyResponse.history.map(historyDoc => historyDoc.id).join(',') +
-        ']';
-    }
-  }
-
   fetchExecutionAnalysis() {
-    if (this.type() === TYPE.impala) {
+    if (this.dialect() === DIALECT.impala) {
       // TODO: Use real query ID
       huePubSub.publish('editor.update.execution.analysis', {
         analysisPossible: true,
@@ -1172,32 +1131,6 @@ export default class Snippet {
         analysisPossible: false
       });
     }
-  }
-
-  fetchQueries() {
-    apiHelper.cancelActiveRequest(this.lastFetchQueriesRequest);
-
-    const QUERIES_PER_PAGE = 50;
-    this.lastQueriesPage = this.queriesCurrentPage();
-    this.loadingQueries(true);
-    this.queriesHasErrors(false);
-    this.lastFetchQueriesRequest = apiHelper.searchDocuments({
-      successCallback: foundDocuments => {
-        this.queriesTotalPages(Math.ceil(foundDocuments.count / QUERIES_PER_PAGE));
-        this.queries(komapping.fromJS(foundDocuments.documents)());
-        this.loadingQueries(false);
-        this.queriesHasErrors(false);
-      },
-      errorCallback: () => {
-        this.loadingQueries(false);
-        this.queriesHasErrors(true);
-      },
-      page: this.queriesCurrentPage(),
-      limit: QUERIES_PER_PAGE,
-      type: 'query-' + this.type(),
-      query: this.queriesFilter(),
-      include_trashed: false
-    });
   }
 
   async getExternalStatement() {
@@ -1280,17 +1213,17 @@ export default class Snippet {
   }
 
   getPlaceHolder() {
-    return this.parentVm.getSnippetViewSettings(this.type()).placeHolder;
+    return this.parentVm.getSnippetViewSettings(this.dialect()).placeHolder;
   }
 
   async getSimilarQueries() {
     hueAnalytics.log('notebook', 'get_query_similarity');
 
-    apiHelper
-      .statementSimilarity({
+    getOptimizer(this.connector())
+      .analyzeSimilarity({
         notebookJson: await this.parentNotebook.toContextJson(),
         snippetJson: this.toContextJson(),
-        sourcePlatform: this.type()
+        sourcePlatform: this.dialect()
       })
       .then(data => {
         if (data.status === 0) {
@@ -1329,7 +1262,7 @@ export default class Snippet {
       // Auth required
       this.status(STATUS.expired);
       $(document).trigger('showAuthModal', {
-        type: this.type(),
+        type: this.dialect(),
         callback: this.execute,
         message: data.message
       });
@@ -1372,15 +1305,15 @@ export default class Snippet {
     }
   }
 
-  handleAssistSelection(databaseDef) {
+  handleAssistSelection(entry) {
     if (this.ignoreNextAssistDatabaseUpdate) {
       this.ignoreNextAssistDatabaseUpdate = false;
-    } else if (databaseDef.sourceType === this.type()) {
-      if (this.namespace() !== databaseDef.namespace) {
-        this.namespace(databaseDef.namespace);
+    } else if (entry.getConnector().id === this.connector().id) {
+      if (this.namespace() !== entry.namespace) {
+        this.namespace(entry.namespace);
       }
-      if (this.database() !== databaseDef.name) {
-        this.database(databaseDef.name);
+      if (this.database() !== entry.name) {
+        this.database(entry.name);
       }
     }
   }
@@ -1399,11 +1332,25 @@ export default class Snippet {
     }
   }
 
-  nextQueriesPage() {
-    if (this.queriesCurrentPage() !== this.queriesTotalPages()) {
-      this.queriesCurrentPage(this.queriesCurrentPage() + 1);
-      this.fetchQueries();
+  initializeConnector(snippetRaw) {
+    const connectorIdToFind = (snippetRaw.connector && snippetRaw.connector.id) || snippetRaw.type;
+    let foundConnector = findEditorConnector(connector => connector.id === connectorIdToFind);
+
+    if (!foundConnector) {
+      // If not found by type pick the first by dialect
+      const connectorDialectToFind =
+        (snippetRaw.connector && snippetRaw.connector.dialect) || snippetRaw.type;
+      foundConnector = findEditorConnector(
+        connector => connector.dialect === connectorDialectToFind
+      );
     }
+
+    if (!foundConnector && snippetRaw.connector) {
+      // This could happen when the connector has been removed completely
+      foundConnector = snippetRaw.connector;
+    }
+
+    this.connector(foundConnector);
   }
 
   onKeydownInVariable(context, e) {
@@ -1418,23 +1365,16 @@ export default class Snippet {
     return true;
   }
 
-  prevQueriesPage() {
-    if (this.queriesCurrentPage() !== 1) {
-      this.queriesCurrentPage(this.queriesCurrentPage() - 1);
-      this.fetchQueries();
-    }
-  }
-
   async queryCompatibility(targetPlatform) {
-    apiHelper.cancelActiveRequest(this.lastCompatibilityRequest);
+    cancelActiveRequest(this.lastCompatibilityRequest);
 
     hueAnalytics.log('notebook', 'compatibility');
-    this.compatibilityCheckRunning(targetPlatform !== this.type());
+    this.compatibilityCheckRunning(targetPlatform !== this.dialect());
     this.hasSuggestion(null);
     const positionStatement = this.positionStatement();
 
-    this.lastCompatibilityRequest = apiHelper
-      .statementCompatibility({
+    this.lastCompatibilityRequest = getOptimizer(this.connector())
+      .analyzeCompatibility({
         notebookJson: await this.parentNotebook.toContextJson(),
         snippetJson: this.toContextJson(),
         sourcePlatform: this.compatibilitySourcePlatform().value,
@@ -1516,18 +1456,21 @@ export default class Snippet {
   toContextJson() {
     return JSON.stringify({
       id: this.id(),
-      type: this.type(),
+      type: this.dialect(),
+      connector: this.connector(),
       status: this.status(),
       statementType: this.statementType(),
       statement: this.statement(),
       aceCursorPosition: this.aceCursorPosition(),
+      lastExecuted: this.lastExecuted(),
       statementPath: this.statementPath(),
       associatedDocumentUuid: this.associatedDocumentUuid(),
       properties: komapping.toJS(this.properties), // TODO: Drop komapping
       result: {}, // TODO: Moved to executor but backend requires it
       database: this.database(),
       compute: this.compute(),
-      wasBatchExecuted: this.wasBatchExecuted()
+      wasBatchExecuted: this.wasBatchExecuted(),
+      editorWsChannel: window.WS_CHANNEL
     });
   }
 
@@ -1538,8 +1481,10 @@ export default class Snippet {
       associatedDocumentUuid: this.associatedDocumentUuid(),
       executor: this.executor.toJs(),
       compute: this.compute(),
+      connector: this.connector(),
       currentQueryTab: this.currentQueryTab(),
       database: this.database(),
+      defaultLimit: this.defaultLimit(),
       id: this.id(),
       is_redacted: this.is_redacted(),
       lastAceSelectionRowOffset: this.lastAceSelectionRowOffset(),
@@ -1554,7 +1499,7 @@ export default class Snippet {
       statementPath: this.statementPath(),
       statementType: this.statementType(),
       status: this.status(),
-      type: this.type(),
+      type: this.dialect(), // TODO: Drop once connectors are stable
       variables: this.variables().map(variable => ({
         meta: variable.meta && {
           options: variable.meta.options && variable.meta.options(), // TODO: Map?
@@ -1576,7 +1521,7 @@ export default class Snippet {
   uploadQuery(query_id) {
     $.post('/metadata/api/optimizer/upload/query', {
       query_id: query_id,
-      sourcePlatform: this.type()
+      sourcePlatform: this.dialect()
     });
   }
 
@@ -1585,15 +1530,15 @@ export default class Snippet {
 
     $.post('/metadata/api/optimizer/upload/history', {
       n: typeof n != 'undefined' ? n : null,
-      sourcePlatform: this.type()
+      sourcePlatform: this.dialect()
     }).then(data => {
       if (data.status === 0) {
         $(document).trigger(
           'info',
-          data.upload_history[this.type()].count +
+          data.upload_history[this.dialect()].count +
             ' queries uploaded successfully. Processing them...'
         );
-        this.watchUploadStatus(data.upload_history[this.type()].status.workloadId);
+        this.watchUploadStatus(data.upload_history[this.dialect()].status.workloadId);
       } else {
         $(document).trigger('error', data.message);
       }
@@ -1612,7 +1557,7 @@ export default class Snippet {
         db_tables: JSON.stringify(
           options.activeTables.map(table => table.databaseName + '.' + table.tableName)
         ),
-        sourcePlatform: JSON.stringify(this.type()),
+        sourcePlatform: JSON.stringify(this.dialect()),
         with_ddl: JSON.stringify(true),
         with_table_stats: JSON.stringify(true),
         with_columns_stats: JSON.stringify(true)

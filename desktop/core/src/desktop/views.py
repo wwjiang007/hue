@@ -16,11 +16,13 @@
 # limitations under the License.
 
 from future import standard_library
+
 standard_library.install_aliases()
 import json
 import logging
 import os
 import re
+import six
 import socket
 import sys
 import tempfile
@@ -50,6 +52,7 @@ import desktop.log.log_buffer
 from desktop import appmanager
 from desktop.api import massaged_tags_for_json, massaged_documents_for_json, _get_docs
 from desktop.auth.backend import is_admin
+from desktop.auth.decorators import admin_required, hue_admin_required
 from desktop.conf import USE_NEW_EDITOR, HUE_LOAD_BALANCER, get_clusters, ENABLE_CONNECTORS
 from desktop.lib import django_mako, fsmanager
 from desktop.lib.conf import GLOBAL_CONFIG, BoundConfig, _configs_from_dir
@@ -61,6 +64,8 @@ from desktop.lib.thread_util import dump_traceback
 from desktop.log.access import access_log_level, access_warn, AccessInfo
 from desktop.log import set_all_debug as _set_all_debug, reset_all_debug as _reset_all_debug, get_all_debug as _get_all_debug
 from desktop.models import Settings, hue_version, _get_apps, UserPreferences
+from libsaml.conf import REQUIRED_GROUPS, REQUIRED_GROUPS_ATTRIBUTE
+from useradmin.models import get_profile
 
 if sys.version_info[0] > 2:
   from io import StringIO as string_io
@@ -74,10 +79,38 @@ LOG = logging.getLogger(__name__)
 def is_alive(request):
   return HttpResponse('')
 
+def samlgroup_check(request):
+  if 'SAML2Backend' in desktop.auth.forms.get_backend_names():
+    if REQUIRED_GROUPS.get():
+      try:
+        userprofile = get_profile(request.user)
+      except:
+        return False
+
+      json_data = json.loads(userprofile.json_data)
+      if not json_data:
+        LOG.info("Empty userprofile data for %s user" % (request.user.username))
+        return False
+
+      if json_data.get('saml_attributes', False) and \
+         json_data['saml_attributes'].get(REQUIRED_GROUPS_ATTRIBUTE.get(), False):
+        success = set(REQUIRED_GROUPS.get()).issubset(
+                 set(json_data['saml_attributes'].get(REQUIRED_GROUPS_ATTRIBUTE.get())))
+        if not success:
+          LOG.info("User %s not found in required SAML groups, %s" % (request.user.username, REQUIRED_GROUPS.get()))
+          return False
+  return True
 
 def hue(request):
   current_app, other_apps, apps_list = _get_apps(request.user, '')
   clusters = list(get_clusters(request.user).values())
+
+  user_permitted = request.session.get('samlgroup_permitted_flag')
+
+  if (not user_permitted) and (not samlgroup_check(request)):
+    return render('403.mako', request, {
+      'is_embeddable': True
+    })
 
   return render('hue.mako', request, {
     'apps': apps_list,
@@ -180,6 +213,7 @@ def log_analytics(request):
   return JsonResponse({'status': 0})
 
 
+@hue_admin_required
 @access_log_level(logging.WARN)
 def log_view(request):
   """
@@ -187,26 +221,31 @@ def log_view(request):
   If it is attached to the root logger, this view will display that history,
   otherwise it will report that it can't be found.
   """
-  if not is_admin(request.user):
-    return HttpResponse(_("You must be a superuser."))
-
   hostname = socket.gethostname()
   l = logging.getLogger()
+
   for h in l.handlers:
     if isinstance(h, desktop.log.log_buffer.FixedBufferHandler):
-      return render('logs.mako', request, dict(log=[l for l in h.buf], query=request.GET.get("q", ""), hostname=hostname, is_embeddable=request.GET.get('is_embeddable', False)))
+      return render('logs.mako', request,
+        dict(
+          log=[l for l in h.buf],
+          query=request.GET.get("q", ""),
+          hostname=hostname, is_embeddable=request.GET.get('is_embeddable', False)
+        )
+      )
 
-  return render('logs.mako', request, dict(log=[_("No logs found!")], query='', hostname=hostname, is_embeddable=request.GET.get('is_embeddable', False)))
+  return render('logs.mako', request, dict(
+      log=[_("No logs found!")], query='', hostname=hostname, is_embeddable=request.GET.get('is_embeddable', False)
+    )
+  )
 
 
+@hue_admin_required
 @access_log_level(logging.WARN)
 def download_log_view(request):
   """
   Zip up the log buffer and then return as a file attachment.
   """
-  if not is_admin(request.user):
-    return HttpResponse(_("You must be a superuser."))
-
   l = logging.getLogger()
   for h in l.handlers:
     if isinstance(h, desktop.log.log_buffer.FixedBufferHandler):
@@ -215,7 +254,7 @@ def download_log_view(request):
         # in case it is rather big. So we write it to a file line by line
         # and pass that file to zipfile, which might follow a more efficient path.
         tmp = tempfile.NamedTemporaryFile()
-        log_tmp = tempfile.NamedTemporaryFile("w+t")
+        log_tmp = tempfile.NamedTemporaryFile("w+t") if sys.version_info[0] == 2 else tempfile.NamedTemporaryFile("w+t", encoding='utf-8')
         for l in h.buf:
           log_tmp.write(smart_str(l, errors='replace') + '\n')
         # This is not just for show - w/out flush, we often get truncated logs
@@ -245,7 +284,9 @@ def bootstrap(request):
   """Concatenates bootstrap.js files from all installed Hue apps."""
 
   # Has some None's for apps that don't have bootsraps.
-  all_bootstraps = [(app, app.get_bootstrap_file()) for app in appmanager.DESKTOP_APPS if request.user.has_hue_permission(action="access", app=app.name)]
+  all_bootstraps = [
+    (app, app.get_bootstrap_file()) for app in appmanager.DESKTOP_APPS if request.user.has_hue_permission(action="access", app=app.name)
+  ]
 
   # Iterator over the streams.
   concatenated = ["\n/* %s */\n%s" % (app.name, b.read()) for app, b in all_bootstraps if b is not None]
@@ -267,7 +308,7 @@ def status_bar(request):
   Concatenates multiple views together to build up a "status bar"/"status_bar".
   These views are registered using register_status_bar_view above.
   """
-  resp = ""
+  resp = b""
   for view in _status_bar_views:
     try:
       r = view(request)
@@ -280,44 +321,20 @@ def status_bar(request):
   return HttpResponse(resp)
 
 
+@hue_admin_required
 def dump_config(request):
-  show_private = False
-  conf_dir = os.path.realpath(os.getenv("HUE_CONF_DIR", get_desktop_root("conf")))
-
   if not is_admin(request.user):
     return HttpResponse(_("You must be a superuser."))
 
-  if request.GET.get("private"):
-    show_private = True
-
-  app_modules = appmanager.DESKTOP_MODULES
-  config_modules = GLOBAL_CONFIG.get().values()
-  if ENABLE_CONNECTORS.get():
-    app_modules = [app_module for app_module in app_modules if app_module.name == 'desktop']
-    config_modules = [config_module for config_module in config_modules if config_module.config.key == 'desktop']
-
-  apps = sorted(app_modules, key=lambda app: app.name)
-  apps_names = [app.name for app in apps]
-  top_level = sorted(config_modules, key=lambda obj: apps_names.index(obj.config.key))
-
-  return render("dump_config.mako", request, {
-      'show_private': show_private,
-      'top_level': top_level,
-      'conf_dir': conf_dir,
-      'is_embeddable': request.GET.get('is_embeddable', False),
-      'apps': apps
-    }
-  )
+  return render("dump_config.mako", request, {})
 
 
+@hue_admin_required
 @access_log_level(logging.WARN)
 def threads(request):
   """Dumps out server threads. Useful for debugging."""
   out = string_io()
   dump_traceback(file=out)
-
-  if not is_admin(request.user):
-    return HttpResponse(_("You must be a superuser."))
 
   if request.is_ajax():
     return HttpResponse(out.getvalue(), content_type="text/plain")
@@ -325,11 +342,10 @@ def threads(request):
     return render("threads.mako", request, {'text': out.getvalue(), 'is_embeddable': request.GET.get('is_embeddable', False)})
 
 
+@hue_admin_required
 @access_log_level(logging.WARN)
 def memory(request):
   """Dumps out server threads. Useful for debugging."""
-  if not is_admin(request.user):
-    return HttpResponse(_("You must be a superuser."))
 
   if not hasattr(settings, 'MEMORY_PROFILER'):
     return HttpResponse(_("You must enable the memory profiler via the memory_profiler config in the hue.ini."))
@@ -376,6 +392,7 @@ def global_js_constants(request):
     }
   }), content_type="application/javascript")
 
+
 def ace_sql_location_worker(request):
   return HttpResponse(render('ace_sql_location_worker.mako', request, None), content_type="application/javascript")
 
@@ -406,6 +423,7 @@ def csrf_failure(request, reason=None):
   access_warn(request, reason)
   return render("403_csrf.mako", request, dict(uri=request.build_absolute_uri()), status=403)
 
+@login_notrequired
 def serve_403_error(request, *args, **kwargs):
   """Registered handler for 403. We just return a simple error"""
   access_warn(request, "403 access forbidden")
@@ -450,6 +468,7 @@ _MAX_LOG_FRONTEND_EVENT_LENGTH = 1024
 
 _LOG_FRONTEND_LOGGER = logging.getLogger("desktop.views.log_frontend_event")
 
+
 @login_notrequired
 def log_frontend_event(request):
   """
@@ -470,8 +489,10 @@ def log_frontend_event(request):
   _LOG_FRONTEND_LOGGER.log(level, msg)
   return HttpResponse("")
 
+
 def commonheader_m(title, section, user, request=None, padding="90px", skip_topbar=False, skip_idle_timeout=False):
   return commonheader(title, section, user, request, padding, skip_topbar, skip_idle_timeout, True)
+
 
 def commonheader(title, section, user, request=None, padding="90px", skip_topbar=False, skip_idle_timeout=False, is_mobile=False):
   """
@@ -591,7 +612,7 @@ def _get_config_errors(request, cache=True):
   global _CONFIG_ERROR_LIST
 
   if not cache or _CONFIG_ERROR_LIST is None:
-    error_list = [ ]
+    error_list = []
     for module in appmanager.DESKTOP_MODULES:
       # Get the config_validator() function
       try:
@@ -600,14 +621,13 @@ def _get_config_errors(request, cache=True):
         continue
 
       if not callable(validator):
-        LOG.warn("Auto config validation: %s.%s is not a function" %
-                 (module.conf.__name__, CONFIG_VALIDATOR))
+        LOG.warn("Auto config validation: %s.%s is not a function" % (module.conf.__name__, CONFIG_VALIDATOR))
         continue
 
       try:
         for confvar, error in validator(request.user):
           error = {
-            'name': confvar if isinstance(confvar, str) else confvar.get_fully_qualifying_key(),
+            'name': confvar if isinstance(confvar, six.string_types) else confvar.get_fully_qualifying_key(),
             'message': error,
           }
 
@@ -627,6 +647,7 @@ def _get_config_errors(request, cache=True):
 
   return _CONFIG_ERROR_LIST
 
+
 def validate_by_spec(error_list):
   configspec = None
   try:
@@ -645,14 +666,13 @@ def load_confs(configspecpath, conf_source=None):
   """Loads and merges all of the configurations passed in,
   returning a ConfigObj for the result.
 
-  @param conf_source if not specified, reads conf/ from
-                     desktop/conf/. Otherwise should be a generator
-                     of ConfigObjs
+  @param conf_source if not specified, reads conf/ from desktop/conf/. Otherwise should be a generator of ConfigObjs
   """
   if conf_source is None:
     conf_source = _configs_from_dir(get_desktop_root("conf"))
 
   conf = ConfigObj(configspec=configspecpath)
+
   for in_conf in conf_source:
     conf.merge(in_conf)
   return conf
@@ -676,13 +696,19 @@ def collect_validation_messages(conf, error_list):
     'hadoop_conf_dir': [('hadoop', 'yarn_clusters', 'default'), ('hadoop', 'yarn_clusters', 'ha')],
     'ssl_cacerts': [('beeswax', 'ssl'), ('impala', 'ssl')],
     'remote_data_dir': [('liboozie', )],
-    'shell': [()]
+    'shell': [()],
   }
-  whitelist_extras = ((sections, name) for sections, name in get_extra_values(conf) if not (name in desktop.conf.APP_BLACKLIST.get() or (name in list(cm_extras.keys()) and sections in cm_extras[name])))
+
+  whitelist_extras = (
+      (sections, name)
+      for sections, name in get_extra_values(conf)
+      if not (name in desktop.conf.APP_BLACKLIST.get() or (name in list(cm_extras.keys()) and sections in cm_extras[name]))
+  )
 
   for sections, name in whitelist_extras:
     the_section = conf
     hierarchy_sections_string = ''
+
     try:
       parent = conf
       for section in sections:
@@ -706,6 +732,7 @@ def collect_validation_messages(conf, error_list):
 
     section_string = hierarchy_sections_string or "top level"
     message.append('Extra %s, %s in the section: %s' % (section_or_value, name, section_string))
+
   if message:
     error = {
       'name': 'ini configuration',
@@ -714,10 +741,9 @@ def collect_validation_messages(conf, error_list):
     error_list.append(error)
 
 
+@admin_required
 def check_config(request):
   """Check config and view for the list of errors"""
-  if not is_admin(request.user):
-    return HttpResponse(_("You must be a superuser."))
 
   context = {
     'conf_dir': os.path.realpath(os.getenv("HUE_CONF_DIR", get_desktop_root("conf"))),
@@ -730,19 +756,20 @@ def check_config(request):
     return render('check_config.mako', request, context, force_template=True)
 
 
+@admin_required
 def check_config_ajax(request):
   """Alert administrators about configuration problems."""
-  if not is_admin(request.user):
-    return HttpResponse('')
 
   error_list = _get_config_errors(request)
   if not error_list:
     # Return an empty response, rather than using the mako template, for performance.
     return HttpResponse('')
-  return render('config_alert_dock.mako',
-                request,
-                dict(error_list=error_list),
-                force_template=True)
+  else:
+    return render('config_alert_dock.mako',
+        request,
+        dict(error_list=error_list),
+        force_template=True
+    )
 
 
 def get_debug_level(request):
@@ -750,20 +777,16 @@ def get_debug_level(request):
 
 
 @require_POST
+@admin_required
 def set_all_debug(request):
-  if not is_admin(request.user):
-    return JsonResponse({'status': 1, 'message': _('You must be a superuser.')})
-
   _set_all_debug()
 
   return JsonResponse({'status': 0, 'debug_all': True})
 
 
 @require_POST
+@admin_required
 def reset_all_debug(request):
-  if not is_admin(request.user):
-    return JsonResponse({'status': 1, 'message': _('You must be a superuser.')})
-
   _reset_all_debug()
 
   return JsonResponse({'status': 0, 'debug_all': False})

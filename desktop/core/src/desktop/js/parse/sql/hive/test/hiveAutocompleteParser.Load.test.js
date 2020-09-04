@@ -17,7 +17,7 @@
 import hiveAutocompleteParser from '../hiveAutocompleteParser';
 describe('hiveAutocompleteParser.js LOAD statements', () => {
   beforeAll(() => {
-    hiveAutocompleteParser.yy.parseError = function(msg) {
+    hiveAutocompleteParser.yy.parseError = function (msg) {
       throw Error(msg);
     };
   });
@@ -46,6 +46,23 @@ describe('hiveAutocompleteParser.js LOAD statements', () => {
       }
     });
   });
+
+  it(
+    "should handle \"LOAD DATA LOCAL INPATH '/filepath' OVERWRITE INTO TABLE db.tablename PARTITION (partcol1='baa', partcol2=1) " +
+      "INPUTFORMAT 'foo' SERDE 'bar';|\"",
+    () => {
+      assertAutoComplete({
+        beforeCursor:
+          "LOAD DATA LOCAL INPATH '/filepath' OVERWRITE INTO TABLE db.tablename PARTITION (partcol1='baa', partcol2=1) INPUTFORMAT 'foo' SERDE 'bar';",
+        afterCursor: '',
+        noErrors: true,
+        containsKeywords: ['SELECT'],
+        expectedResult: {
+          lowerCase: false
+        }
+      });
+    }
+  );
 
   it('should suggest keywords for "|"', () => {
     assertAutoComplete({
@@ -164,7 +181,7 @@ describe('hiveAutocompleteParser.js LOAD statements', () => {
       afterCursor: '',
       expectedResult: {
         lowerCase: false,
-        suggestKeywords: ['PARTITION']
+        suggestKeywords: ['INPUTFORMAT', 'PARTITION']
       }
     });
   });
@@ -176,6 +193,17 @@ describe('hiveAutocompleteParser.js LOAD statements', () => {
       expectedResult: {
         lowerCase: false,
         suggestColumns: { tables: [{ identifierChain: [{ name: 'boo' }, { name: 'baa' }] }] }
+      }
+    });
+  });
+
+  it("should suggest keywords for \"LOAD DATA INPATH 'baa' INTO TABLE baa INPUTORMAT 'foo' |\"", () => {
+    assertAutoComplete({
+      beforeCursor: "LOAD DATA INPATH 'baa' INTO TABLE baa INPUTFORMAT '\foo' ",
+      afterCursor: '',
+      expectedResult: {
+        lowerCase: false,
+        suggestKeywords: ['SERDE']
       }
     });
   });

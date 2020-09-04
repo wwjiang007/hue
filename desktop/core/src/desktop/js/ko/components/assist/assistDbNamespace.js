@@ -21,12 +21,14 @@ import apiHelper from 'api/apiHelper';
 import AssistDbEntry from 'ko/components/assist/assistDbEntry';
 import dataCatalog from 'catalog/dataCatalog';
 import huePubSub from 'utils/huePubSub';
+import { ASSIST_ACTIVE_DB_CHANGED_EVENT } from './events';
 
 class AssistDbNamespace {
   /**
    * @param {Object} options
    * @param {Object} options.i18n
    * @param {string} options.sourceType
+   * @param {Connector} options.connector
    * @param {ContextNamespace} options.namespace
    * @param {boolean} options.nonSqlType - Optional, default false
    * @param {Object} options.navigationSettings
@@ -38,6 +40,7 @@ class AssistDbNamespace {
     self.i18n = options.i18n;
     self.navigationSettings = options.navigationSettings;
     self.sourceType = options.sourceType;
+    self.connector = options.connector;
     self.nonSqlType = options.nonSqlType;
 
     self.namespace = options.namespace;
@@ -61,7 +64,6 @@ class AssistDbNamespace {
     self.loading = ko.observable(false);
     self.reloading = ko.observable(false);
     self.hasErrors = ko.observable(false);
-    self.invalidateOnRefresh = ko.observable('cache');
 
     self.loadingTables = ko.pureComputed(
       () =>
@@ -107,15 +109,23 @@ class AssistDbNamespace {
 
     self.selectedDatabase.subscribe(() => {
       const db = self.selectedDatabase();
+      if (db) {
+        huePubSub.publish(ASSIST_ACTIVE_DB_CHANGED_EVENT, {
+          connector: this.connector,
+          namespace: this.namespace,
+          database: db.name
+        });
+      }
+
       if (window.HAS_OPTIMIZER && db && !db.popularityIndexSet && !self.nonSqlType) {
-        db.catalogEntry.loadNavOptPopularityForChildren({ silenceErrors: true }).done(() => {
+        db.catalogEntry.loadOptimizerPopularityForChildren({ silenceErrors: true }).done(() => {
           const applyPopularity = () => {
             db.entries().forEach(entry => {
               if (
-                entry.catalogEntry.navOptPopularity &&
-                entry.catalogEntry.navOptPopularity.popularity >= 5
+                entry.catalogEntry.optimizerPopularity &&
+                entry.catalogEntry.optimizerPopularity.popularity >= 5
               ) {
-                entry.popularity(entry.catalogEntry.navOptPopularity.popularity);
+                entry.popularity(entry.catalogEntry.optimizerPopularity.popularity);
               }
             });
           };
@@ -145,17 +155,20 @@ class AssistDbNamespace {
           self.selectedDatabase().loadEntries();
         }
         if (!self.navigationSettings.rightAssist) {
+          const entry = self.selectedDatabase().catalogEntry;
           apiHelper.setInTotalStorage(
-            'assist_' + self.sourceType + '_' + self.namespace.id,
+            'assist_' + entry.getConnector().id + '_' + entry.namespace.id,
             'lastSelectedDb',
-            self.selectedDatabase().catalogEntry.name
+            entry.name
           );
-          huePubSub.publish('assist.database.set', {
-            sourceType: self.sourceType,
-            namespace: self.namespace,
-            name: self.selectedDatabase().catalogEntry.name
-          });
+          huePubSub.publish('assist.database.set', entry);
         }
+      } else {
+        apiHelper.setInTotalStorage(
+          'assist_' + self.connector.id + '_' + self.namespace.id,
+          'lastSelectedDb',
+          ''
+        );
       }
     };
 
@@ -176,15 +189,18 @@ class AssistDbNamespace {
         self.selectedDatabaseChanged();
         return;
       }
-      const lastSelectedDb = apiHelper.getFromTotalStorage(
+      let lastSelectedDb = apiHelper.getFromTotalStorage(
         'assist_' + self.sourceType + '_' + self.namespace.id,
-        'lastSelectedDb',
-        'default'
+        'lastSelectedDb'
       );
+
+      if (!lastSelectedDb && lastSelectedDb !== '') {
+        lastSelectedDb = 'default';
+      }
       if (lastSelectedDb && self.dbIndex[lastSelectedDb]) {
         self.selectedDatabase(self.dbIndex[lastSelectedDb]);
         self.selectedDatabaseChanged();
-      } else if (self.databases().length > 0) {
+      } else if (lastSelectedDb && self.databases().length > 0) {
         self.selectedDatabase(self.databases()[0]);
         self.selectedDatabaseChanged();
       }
@@ -206,9 +222,9 @@ class AssistDbNamespace {
 
       dataCatalog
         .getEntry({
-          sourceType: self.sourceType,
           namespace: self.namespace,
           compute: self.compute(),
+          connector: self.connector,
           path: [],
           definition: { type: 'source' }
         })
@@ -266,16 +282,17 @@ class AssistDbNamespace {
       huePubSub.subscribe('data.catalog.entry.refreshed', details => {
         if (
           self.namespace.id !== details.entry.namespace.id ||
-          details.entry.getSourceType() !== self.sourceType
+          details.entry.getConnector().id !== self.sourceType
         ) {
           return;
         }
         if (self.catalogEntry === details.entry) {
           self.initDatabases();
         } else {
+          const targetPath = details.entry.path.join('.');
           const findAndReloadInside = entries => {
             return entries.some(entry => {
-              if (entry.catalogEntry.path.join('.') === details.entry.path.join('.')) {
+              if (entry.catalogEntry.path.join('.') === targetPath) {
                 entry.catalogEntry = details.entry;
                 entry.loadEntries();
                 return true;
@@ -348,7 +365,7 @@ class AssistDbNamespace {
   triggerRefresh() {
     const self = this;
     if (self.catalogEntry) {
-      self.catalogEntry.clearCache({ invalidate: self.invalidateOnRefresh() });
+      self.catalogEntry.clearCache();
     }
   }
 }

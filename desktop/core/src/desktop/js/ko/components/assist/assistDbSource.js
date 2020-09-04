@@ -19,7 +19,7 @@ import * as ko from 'knockout';
 
 import apiHelper from 'api/apiHelper';
 import AssistDbNamespace from 'ko/components/assist/assistDbNamespace';
-import contextCatalog from 'catalog/contextCatalog';
+import contextCatalog, { NAMESPACES_REFRESHED_EVENT } from 'catalog/contextCatalog';
 import huePubSub from 'utils/huePubSub';
 
 class AssistDbSource {
@@ -29,6 +29,7 @@ class AssistDbSource {
    * @param {string} options.type
    * @param {ContextNamespace} [options.initialNamespace] - Optional initial namespace to use
    * @param {ContextCompute} [options.initialCompute] - Optional initial compute to use
+   * @param {Connector} options.connector
    * @param {string} options.name
    * @param {boolean} options.nonSqlType - Optional, default false
    * @param {Object} options.navigationSettings
@@ -37,7 +38,9 @@ class AssistDbSource {
   constructor(options) {
     const self = this;
 
+    // TODO: Get rid of sourceType
     self.sourceType = options.type;
+    self.connector = options.connector;
     self.name = options.name;
     self.i18n = options.i18n;
     self.nonSqlType = options.nonSqlType;
@@ -106,14 +109,14 @@ class AssistDbSource {
 
     self.hasNamespaces = ko.pureComputed(() => self.namespaces().length > 0);
 
-    huePubSub.subscribe('context.catalog.namespaces.refreshed', sourceType => {
-      if (self.sourceType !== sourceType) {
+    huePubSub.subscribe(NAMESPACES_REFRESHED_EVENT, connectorId => {
+      if (self.connector.id !== connectorId) {
         return;
       }
 
       self.loading(true);
       contextCatalog
-        .getNamespaces({ sourceType: self.sourceType })
+        .getNamespaces({ connector: self.connector })
         .done(context => {
           const newNamespaces = [];
           const existingNamespaceIndex = {};
@@ -130,6 +133,7 @@ class AssistDbSource {
               newNamespaces.push(
                 new AssistDbNamespace({
                   sourceType: self.sourceType,
+                  connector: self.connector,
                   namespace: newNamespace,
                   i18n: self.i18n,
                   nonSqlType: self.nonSqlType,
@@ -156,11 +160,11 @@ class AssistDbSource {
     self.loading(true);
 
     if (refresh) {
-      contextCatalog.getComputes({ sourceType: self.sourceType, clearCache: true });
+      contextCatalog.getComputes({ connector: self.connector, clearCache: true });
     }
 
     return contextCatalog
-      .getNamespaces({ sourceType: self.sourceType, clearCache: refresh })
+      .getNamespaces({ connector: self.connector, clearCache: refresh })
       .done(context => {
         const assistNamespaces = [];
         let activeNamespace;
@@ -169,6 +173,7 @@ class AssistDbSource {
           const assistNamespace = new AssistDbNamespace({
             sourceType: self.sourceType,
             namespace: namespace,
+            connector: self.connector,
             i18n: self.i18n,
             nonSqlType: self.nonSqlType,
             navigationSettings: self.navigationSettings

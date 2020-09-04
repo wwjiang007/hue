@@ -13,51 +13,70 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+import * as ko from 'knockout';
 
-import huePubSub from 'utils/huePubSub';
+import * as apiUtils from 'api/apiUtils';
+import * as refApiUtils from 'sql/reference/apiUtils';
 import AssistFunctionsPanel from './ko.assistFunctionsPanel';
+import { refreshConfig } from 'utils/hueConfig';
+import { sleep } from 'utils/hueUtils';
 
 describe('ko.assistFunctionsPanel.js', () => {
-  it('should handle cluster config updates', () => {
-    let clusterConfigGetCalled = false;
-    const configSub = huePubSub.subscribe('cluster.config.get.config', () => {
-      clusterConfigGetCalled = true;
-      huePubSub.publish('cluster.config.set.config', {
+  jest.spyOn(refApiUtils, 'fetchUdfs').mockImplementation(() => Promise.resolve([]));
+
+  it('should handle cluster config updates', async () => {
+    const spy = jest.spyOn(apiUtils, 'simplePostAsync').mockImplementation(async () =>
+      Promise.resolve({
+        status: 0,
         app_config: {
           editor: {
-            interpreters: [{ type: 'pig' }, { type: 'pig' }, { type: 'impala' }, { type: 'banana' }]
+            interpreters: [
+              { type: 'pig', dialect: 'pig', displayName: 'Pig' },
+              { type: 'impala', dialect: 'impala', displayName: 'Impala' },
+              { type: 'banana', dialect: 'banana', displayName: 'Banana' }
+            ]
           }
         }
-      });
-    });
-    const subject = new AssistFunctionsPanel();
+      })
+    );
 
-    expect(clusterConfigGetCalled).toBeTruthy();
-    expect(subject.availableTypes()).toEqual(['impala', 'pig']);
+    await refreshConfig();
+    const connector = ko.observable({ dialect: 'impala' });
+    const subject = new AssistFunctionsPanel({ activeConnector: connector });
+    await sleep(0);
 
-    huePubSub.publish('cluster.config.set.config', {
-      app_config: {
-        editor: {
-          interpreters: [{ type: 'pig' }]
+    expect(spy).toHaveBeenCalled();
+    expect(subject.availableConnectorUdfs().length).toEqual(2);
+    expect(
+      subject
+        .availableConnectorUdfs()
+        .every(
+          connectorUdfs =>
+            connectorUdfs.connector.type === 'pig' || connectorUdfs.connector.type === 'impala'
+        )
+    ).toBeTruthy();
+
+    spy.mockRestore();
+
+    const changeSpy = jest.spyOn(apiUtils, 'simplePostAsync').mockImplementation(async () =>
+      Promise.resolve({
+        status: 0,
+        app_config: {
+          editor: {
+            interpreters: [{ type: 'pig', dialect: 'pig', displayName: 'Pig' }]
+          }
         }
-      }
-    });
+      })
+    );
 
-    expect(subject.availableTypes()).toEqual(['pig']);
-    expect(subject.activeType()).toEqual('pig');
+    await refreshConfig();
+    expect(changeSpy).toHaveBeenCalled();
+    changeSpy.mockRestore();
 
-    huePubSub.publish('cluster.config.set.config', {
-      app_config: {
-        editor: {
-          interpreters: [{ type: 'banana' }]
-        }
-      }
-    });
+    await sleep(0);
 
-    expect(subject.availableTypes()).toEqual([]);
-    expect(subject.activeType()).toBeFalsy();
-
-    configSub.remove();
-    subject.dispose();
+    expect(subject.availableConnectorUdfs().length).toEqual(1);
+    expect(subject.availableConnectorUdfs()[0].connector.type).toEqual('pig');
+    expect(subject.activeConnectorUdfs()).toEqual(subject.availableConnectorUdfs()[0]);
   });
 });

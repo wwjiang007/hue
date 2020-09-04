@@ -18,11 +18,11 @@ import $ from 'jquery';
 import * as ko from 'knockout';
 
 ko.bindingHandlers.ellipsis = {
-  update: function(element, valueAccessor) {
+  update: function (element, valueAccessor) {
     const value = ko.unwrap(valueAccessor());
     const $element = $(element);
     const chopLength = value.length ? value.length : 30;
-    const text = typeof value === 'object' ? value.data : value;
+    const text = typeof value === 'object' ? ko.unwrap(value.data) : value;
     if (text.length > chopLength) {
       $element.attr('title', text);
       $element.text(text.substr(0, chopLength) + '...');

@@ -31,9 +31,9 @@ describe('ko.navTags.js', () => {
         getChildren: () => $.Deferred().resolve([]),
         getSample: () => $.Deferred().reject(),
         loadNavigatorMetaForChildren: () => $.Deferred().reject(),
-        loadNavOptPopularityForChildren: () => $.Deferred().reject(),
+        loadOptimizerPopularityForChildren: () => $.Deferred().reject(),
         isTableOrView: () => false,
-        getSourceType: () => 'impala',
+        getDialect: () => 'impala',
         getNavigatorMeta: () =>
           $.Deferred().resolve({
             tags: ['testTag']

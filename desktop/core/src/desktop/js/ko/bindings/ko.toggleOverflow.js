@@ -20,7 +20,7 @@ import * as ko from 'knockout';
 import hueUtils from 'utils/hueUtils';
 
 ko.bindingHandlers.toggleOverflow = {
-  render: function($element, options) {
+  render: function ($element, options) {
     if (hueUtils.isOverflowing($element.find('.toggle-overflow'))) {
       $('<div>')
         .addClass('toggle-overflow-toggle')
@@ -28,7 +28,7 @@ ko.bindingHandlers.toggleOverflow = {
         .appendTo($element);
       $element.on('click', () => {
         if ($element.find('.toggle-overflow-toggle i').hasClass('fa-caret-down')) {
-          $element.find('.toggle-overflow').css('height', '');
+          $element.find('.toggle-overflow').css('max-height', '');
           $element.css('cursor', 'n-resize');
           $element
             .find('.toggle-overflow-toggle')
@@ -56,19 +56,16 @@ ko.bindingHandlers.toggleOverflow = {
     }
   },
 
-  init: function(element, valueAccessor) {
+  init: function (element, valueAccessor) {
     const $element = $(element);
     const options = valueAccessor() || {};
     $element.wrapInner('<div class="toggle-overflow"></div>');
     if (options.height) {
-      $element.find('.toggle-overflow').height(options.height);
-    }
-    if (options.width) {
-      $element.find('.toggle-overflow').width(options.width);
+      $element.find('.toggle-overflow').css('max-height', options.height + 'px');
     }
   },
 
-  update: function(element, valueAccessor) {
+  update: function (element, valueAccessor) {
     const $element = $(element);
     const options = valueAccessor() || {};
     window.setTimeout(() => {

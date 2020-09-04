@@ -49,6 +49,7 @@ if sys.version_info[0] > 2:
 else:
   from mock import patch, Mock
 
+
 LOG = logging.getLogger(__name__)
 
 
@@ -76,11 +77,11 @@ class TestMockedImpala(object):
 
   def test_basic_flow(self):
     response = self.client.get("/impala/")
-    assert_true(re.search('Impala', response.content), response.content)
-    assert_true('Query Editor' in response.content)
+    assert_true(re.search(b'Impala', response.content), response.content)
+    assert_true(b'Query Editor' in response.content)
 
     response = self.client.get("/impala/execute/")
-    assert_true('Query Editor' in response.content)
+    assert_true(b'Query Editor' in response.content)
 
   def test_saved_queries(self):
     user = User.objects.get(username='test')
@@ -123,7 +124,7 @@ class TestMockedImpala(object):
         ddms.client.query.assert_called_once_with(ddms.client.query.call_args[0][0])
         assert_true('customers' in ddms.client.query.call_args[0][0].hql_query) # diff of 1 table
 
-        get_different_tables.return_value = ['customers','','','','','','','','','','']
+        get_different_tables.return_value = ['customers', '', '', '', '', '', '', '', '', '', '']
         assert_raises(PopupException, ddms.invalidate, 'default') # diff of 11 tables. Limit is 10.
 
         ddms.invalidate('default', 'customers')
@@ -151,13 +152,11 @@ class TestImpalaIntegration(object):
     cls.db = dbms.get(cls.user, get_query_server_config(name='impala'))
     cls.DATABASE = get_db_prefix(name='impala')
 
-    queries = ["""
-      DROP TABLE IF EXISTS %(db)s.tweets;
-    """ % {'db': cls.DATABASE}, """
-      DROP DATABASE IF EXISTS %(db)s CASCADE;
-    """ % {'db': cls.DATABASE}, """
-      CREATE DATABASE %(db)s;
-    """ % {'db': cls.DATABASE}]
+    queries = [
+      'DROP TABLE IF EXISTS %(db)s.tweets;' % {'db': cls.DATABASE},
+      'DROP DATABASE IF EXISTS %(db)s CASCADE;' % {'db': cls.DATABASE},
+      'CREATE DATABASE %(db)s;' % {'db': cls.DATABASE}
+    ]
 
     for query in queries:
        resp = _make_query(cls.client, query, database='default', local=False, server_name='impala')
@@ -499,6 +498,24 @@ def test_ssl_validate():
     try:
       assert_equal(conf.SSL.VALIDATE.get(), expected,
           'desktop:%s conf:%s expected:%s got:%s' % (desktop_kwargs, conf_kwargs, expected, conf.SSL.VALIDATE.get()))
+    finally:
+      for reset in resets:
+        reset()
+
+
+def test_thrift_over_http_config():
+  resets = [
+      conf.SERVER_HOST.set_for_testing('impalad_host'),
+      conf.SERVER_PORT.set_for_testing(21050),
+      conf.USE_THRIFT_HTTP.set_for_testing(True)
+  ]
+  with patch('impala.dbms.get_hs2_http_port') as get_hs2_http_port:
+    get_hs2_http_port.return_value = 30000
+    try:
+      query_server = get_query_server_config(name='impala')
+      assert_equal(query_server['server_port'], 30000)
+      assert_equal(query_server['transport_mode'], 'http')
+      assert_equal(query_server['http_url'], 'http://impalad_host:30000')
     finally:
       for reset in resets:
         reset()

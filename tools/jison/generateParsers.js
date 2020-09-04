@@ -17,7 +17,7 @@
 /* eslint-disable no-restricted-syntax */
 
 const fs = require('fs');
-const exec = require('child_process').exec;
+const cli = require('jison/lib/cli');
 
 const LICENSE =
   '// Licensed to Cloudera, Inc. under one\n' +
@@ -43,9 +43,11 @@ const SQL_STATEMENTS_PARSER_JSDOC =
   ' * @return {SqlStatementsParserResult}\n' +
   ' */\n';
 
-const PARSER_FOLDER = 'desktop/core/src/desktop/js/parse/sql/';
-const JISON_FOLDER = 'desktop/core/src/desktop/js/parse/jison/';
-const SQL_PARSER_REPOSITORY_PATH = 'desktop/core/src/desktop/js/parse/sql/sqlParserRepository.js';
+const PARSER_FOLDER = '../../desktop/core/src/desktop/js/parse/sql/';
+const OUTPUT_FOLDER = '../../desktop/core/src/desktop/js/parse/';
+const JISON_FOLDER = '../../desktop/core/src/desktop/js/parse/jison/';
+const SQL_PARSER_REPOSITORY_PATH =
+  '../../desktop/core/src/desktop/js/parse/sql/sqlParserRepository.js';
 const SYNTAX_PARSER_IMPORT_TEMPLATE =
   '  KEY: () => import(/* webpackChunkName: "KEY-parser" */ \'parse/sql/KEY/KEYSyntaxParser\')';
 const AUTOCOMPLETE_PARSER_IMPORT_TEMPLATE =
@@ -55,7 +57,7 @@ const parserDefinitions = {
   globalSearchParser: {
     sources: ['globalSearchParser.jison'],
     target: 'globalSearchParser.jison',
-    outputFolder: 'desktop/core/src/desktop/js/parse/',
+    outputFolder: OUTPUT_FOLDER,
     afterParse: contents =>
       new Promise(resolve => {
         resolve(
@@ -71,7 +73,7 @@ const parserDefinitions = {
   solrFormulaParser: {
     sources: ['solrFormulaParser.jison'],
     target: 'solrFormulaParser.jison',
-    outputFolder: 'desktop/core/src/desktop/js/parse/',
+    outputFolder: OUTPUT_FOLDER,
     afterParse: contents =>
       new Promise(resolve => {
         resolve(LICENSE + contents + 'export default solrFormulaParser;\n');
@@ -80,7 +82,7 @@ const parserDefinitions = {
   solrQueryParser: {
     sources: ['solrQueryParser.jison'],
     target: 'solrQueryParser.jison',
-    outputFolder: 'desktop/core/src/desktop/js/parse/',
+    outputFolder: OUTPUT_FOLDER,
     afterParse: contents =>
       new Promise(resolve => {
         resolve(LICENSE + contents + 'export default solrQueryParser;\n');
@@ -89,7 +91,7 @@ const parserDefinitions = {
   sqlStatementsParser: {
     sources: ['sqlStatementsParser.jison'],
     target: 'sqlStatementsParser.jison',
-    outputFolder: 'desktop/core/src/desktop/js/parse/',
+    outputFolder: OUTPUT_FOLDER,
     afterParse: contents =>
       new Promise(resolve => {
         resolve(
@@ -153,16 +155,6 @@ const deleteFile = path => {
   fs.unlinkSync(path);
 };
 
-const execCmd = cmd =>
-  new Promise((resolve, reject) => {
-    exec(cmd, (err, stdout, stderr) => {
-      if (err) {
-        reject('stderr:\n' + stderr + '\n\nstdout:\n' + stdout);
-      }
-      resolve(stdout);
-    });
-  });
-
 const generateParser = parserName =>
   new Promise((resolve, reject) => {
     const parserConfig = parserDefinitions[parserName];
@@ -188,36 +180,38 @@ const generateParser = parserName =>
 
     concatPromise
       .then(targetPath => {
-        let jisonCommand = 'jison ' + targetPath;
+        const options = {
+          file: targetPath,
+          'module-type': 'js'
+        };
         if (parserConfig.lexer) {
-          jisonCommand += ' ' + JISON_FOLDER + parserConfig.lexer;
+          options['lexfile'] = JISON_FOLDER + parserConfig.lexer;
         }
-        jisonCommand += ' -m js';
+
         console.log('Generating parser...');
-        execCmd(jisonCommand)
-          .then(stdout => {
-            if (/\S/.test(stdout)) {
-              console.log('got output for: ' + jisonCommand);
-              console.log(stdout);
-            }
-            if (parserConfig.sources.length > 1) {
-              deleteFile(targetPath); // Remove concatenated file
-            }
-            console.log('Adjusting JS...');
-            const generatedJsFileName = parserConfig.target
-              .replace('.jison', '.js')
-              .replace(/^.*\/([^/]+)$/, '$1');
-            readFile(generatedJsFileName)
-              .then(contents => {
-                parserConfig
-                  .afterParse(contents)
-                  .then(finalContents => {
-                    writeFile(parserConfig.outputFolder + generatedJsFileName, finalContents)
-                      .then(() => {
-                        deleteFile(generatedJsFileName);
-                        resolve();
-                      })
-                      .catch(reject);
+        try {
+          cli.main(options);
+        } catch (err) {
+          console.error('Failed calling jison cli');
+          throw err;
+        }
+        if (parserConfig.sources.length > 1) {
+          deleteFile(targetPath); // Remove concatenated file
+        }
+        console.log('Adjusting JS...');
+        const generatedJsFileName = parserConfig.target
+          .replace('.jison', '.js')
+          .replace(/^.*\/([^/]+)$/, '$1');
+        console.log(generatedJsFileName);
+        readFile(generatedJsFileName)
+          .then(contents => {
+            parserConfig
+              .afterParse(contents)
+              .then(finalContents => {
+                writeFile(parserConfig.outputFolder + generatedJsFileName, finalContents)
+                  .then(() => {
+                    deleteFile(generatedJsFileName);
+                    resolve();
                   })
                   .catch(reject);
               })
@@ -240,55 +234,55 @@ const listDir = folder =>
     });
   });
 
-const findParser = (fileIndex, folder, sharedFiles, autocomplete) => {
-  const prefix = autocomplete ? 'autocomplete' : 'syntax';
-  if (fileIndex[prefix + '_header.jison'] && fileIndex[prefix + '_footer.jison']) {
-    const parserName = folder + (autocomplete ? 'AutocompleteParser' : 'SyntaxParser');
-    const parserDefinition = {
-      sources: ['sql/' + folder + '/' + prefix + '_header.jison'].concat(sharedFiles),
-      lexer: 'sql/' + folder + '/sql.jisonlex',
-      target: 'sql/' + folder + '/' + parserName + '.jison',
-      sqlParser: autocomplete ? 'AUTOCOMPLETE' : 'SYNTAX',
-      outputFolder: 'desktop/core/src/desktop/js/parse/sql/' + folder + '/',
-      afterParse: contents =>
-        new Promise(resolve => {
-          resolve(
-            LICENSE +
-              contents
-                .replace(
-                  'var ' + parserName + ' = ',
-                  "import SqlParseSupport from 'parse/sql/" +
-                    folder +
-                    "/sqlParseSupport';\n\nvar " +
-                    parserName +
-                    ' = '
-                )
-                .replace(
-                  'loc: yyloc,',
-                  "loc: lexer.yylloc, ruleId: stack.slice(stack.length - 2, stack.length).join(''),"
-                ) +
-              '\nexport default ' +
-              parserName +
-              ';\n'
-          );
-        })
-    };
+const addParserDefinition = (sources, dialect, autocomplete, lexer) => {
+  const parserName = dialect + (autocomplete ? 'AutocompleteParser' : 'SyntaxParser');
 
-    parserDefinition.sources.push('sql/' + folder + '/' + prefix + '_footer.jison');
-    parserDefinitions[parserName] = parserDefinition;
-  } else {
-    console.log(
-      "Warn: Could not find '" +
-        prefix +
-        "_header.jison' or '" +
-        prefix +
-        "_footer.jison' in " +
-        JISON_FOLDER +
-        'sql/' +
-        folder +
-        '/'
-    );
-  }
+  const parserDefinition = {
+    sources: sources,
+    lexer: 'sql/' + dialect + '/' + lexer,
+    target: 'sql/' + dialect + '/' + parserName + '.jison',
+    sqlParser: autocomplete ? 'AUTOCOMPLETE' : 'SYNTAX',
+    outputFolder: OUTPUT_FOLDER + 'sql/' + dialect + '/',
+    afterParse: contents =>
+      new Promise(resolve => {
+        resolve(
+          LICENSE +
+            contents
+              .replace(
+                'var ' + parserName + ' = ',
+                "import SqlParseSupport from 'parse/sql/" +
+                  dialect +
+                  "/sqlParseSupport';\n\nvar " +
+                  parserName +
+                  ' = '
+              )
+              .replace(
+                'loc: yyloc,',
+                "loc: lexer.yylloc, ruleId: stack.slice(stack.length - 2, stack.length).join(''),"
+              ) +
+            '\nexport default ' +
+            parserName +
+            ';\n'
+        );
+      })
+  };
+
+  parserDefinitions[parserName] = parserDefinition;
+};
+
+const addParsersFromStructure = (structure, dialect) => {
+  addParserDefinition(
+    structure.autocomplete.map(source => 'sql/' + dialect + '/' + source),
+    dialect,
+    true,
+    structure.lexer
+  );
+  addParserDefinition(
+    structure.syntax.map(source => 'sql/' + dialect + '/' + source),
+    dialect,
+    false,
+    structure.lexer
+  );
 };
 
 const identifySqlParsers = () =>
@@ -297,27 +291,19 @@ const identifySqlParsers = () =>
       const promises = [];
       files.forEach(folder => {
         promises.push(
-          listDir(JISON_FOLDER + 'sql/' + folder).then(jisonFiles => {
-            const fileIndex = {};
-            jisonFiles.forEach(jisonFile => {
-              fileIndex[jisonFile] = true;
-            });
-
-            const sharedFiles = jisonFiles
-              .filter(jisonFile => jisonFile.indexOf('sql_') !== -1)
-              .map(jisonFile => 'sql/' + folder + '/' + jisonFile);
-
-            if (fileIndex['sql.jisonlex']) {
-              findParser(fileIndex, folder, sharedFiles, true);
-              findParser(
-                fileIndex,
-                folder,
-                sharedFiles.filter(path => path.indexOf('_error.jison') === -1),
-                false
+          listDir(JISON_FOLDER + 'sql/' + folder).then(async jisonFiles => {
+            if (jisonFiles.find(fileName => fileName === 'structure.json')) {
+              const structure = JSON.parse(
+                await readFile(JISON_FOLDER + 'sql/' + folder + '/structure.json')
               );
+              addParsersFromStructure(structure, folder);
             } else {
               console.log(
-                "Warn: Could not find 'sql.jisonlex' in " + JISON_FOLDER + 'sql/' + folder + '/'
+                "Warn: Could not find 'structure.jisonlex' in " +
+                  JISON_FOLDER +
+                  'sql/' +
+                  folder +
+                  '/'
               );
             }
           })
@@ -346,9 +332,7 @@ const copyTests = (source, target) =>
                     )
                   );
                 });
-                Promise.all(copyPromises)
-                  .then(resolve)
-                  .catch(reject);
+                Promise.all(copyPromises).then(resolve).catch(reject);
               })
               .catch(reject);
           })
@@ -397,23 +381,17 @@ const prepareForNewParser = () =>
                         });
                         autocompleteSources.push('sql/' + target + '/autocomplete_footer.jison');
                         syntaxSources.push('sql/' + target + '/syntax_footer.jison');
-                        mkdir('desktop/core/src/desktop/js/parse/sql/' + target).then(() => {
+                        mkdir(PARSER_FOLDER + target).then(() => {
                           copyFile(
-                            'desktop/core/src/desktop/js/parse/sql/' +
-                              source +
-                              '/sqlParseSupport.js',
-                            'desktop/core/src/desktop/js/parse/sql/' +
-                              target +
-                              '/sqlParseSupport.js',
+                            PARSER_FOLDER + source + '/sqlParseSupport.js',
+                            PARSER_FOLDER + target + '/sqlParseSupport.js',
                             contents =>
                               contents.replace(
                                 /parser\.yy\.activeDialect = '[^']+';'/g,
                                 "parser.yy.activeDialect = '" + target + "';"
                               )
                           ).then(() => {
-                            identifySqlParsers()
-                              .then(resolve)
-                              .catch(reject);
+                            identifySqlParsers().then(resolve).catch(reject);
                           });
                         });
                       });

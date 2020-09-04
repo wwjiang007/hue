@@ -24,8 +24,7 @@ DEVTOOLS += \
 	nose[1.3.7] \
 	coverage[4.4.2] \
 	nosetty[0.4] \
-	werkzeug[0.14.1] \
-	windmill[1.6]
+	werkzeug[0.14.1]
 
 PYPI_MIRROR ?= https://pypi.python.org/simple/
 
@@ -33,8 +32,8 @@ PYPI_MIRROR ?= https://pypi.python.org/simple/
 .PHONY: $(DEVTOOLS)
 $(DEVTOOLS):
 	@echo "--- Installing development tool: $@"
-	$(ENV_EASY_INSTALL) -i $(PYPI_MIRROR) \
-	   -H *.cloudera.com,pypi.python.org,files.pythonhosted.org $(SETUPTOOLS_OPTS) $(subst ],,$(subst [,==,$@))
+	$(ENV_PIP)  \
+	   install $(subst ],,$(subst [,==,$@))
 
 $(BLD_DIR):
 	@mkdir -p $@

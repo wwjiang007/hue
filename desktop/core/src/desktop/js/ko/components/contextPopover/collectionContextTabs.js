@@ -20,6 +20,7 @@ import * as ko from 'knockout';
 import apiHelper from 'api/apiHelper';
 import huePubSub from 'utils/huePubSub';
 import I18n from 'utils/i18n';
+import { ASSIST_DB_HIGHLIGHT_EVENT } from 'ko/components/assist/events';
 
 class CollectionContextTabs {
   constructor(data) {
@@ -68,7 +69,7 @@ class CollectionContextTabs {
     self.activeTab = ko.observable('terms');
 
     const showInAssistPubSub = huePubSub.subscribe('context.popover.show.in.assist', () => {
-      huePubSub.publish('assist.db.highlight', self.catalogEntry);
+      huePubSub.publish(ASSIST_DB_HIGHLIGHT_EVENT, self.catalogEntry);
     });
     self.disposals.push(() => {
       showInAssistPubSub.remove();
@@ -84,14 +85,14 @@ class CollectionContextTabs {
       fieldName: self.catalogEntry.path[2],
       prefix: self.data().terms.prefix(),
       engine: 'solr',
-      successCallback: function(data) {
+      successCallback: function (data) {
         if (data.terms != null) {
           $.each(data.terms, (key, val) => {
             self.data().terms.data.push({ key: key, val: val });
           });
         }
       },
-      alwaysCallback: function() {
+      alwaysCallback: function () {
         self.data().loadingTerms(false);
       }
     });
@@ -107,17 +108,17 @@ class CollectionContextTabs {
       collectionName: self.catalogEntry.path[1],
       fieldName: fieldName,
       engine: 'solr',
-      successCallback: function(data) {
+      successCallback: function (data) {
         if (data.stats.stats.stats_fields[fieldName] != null) {
           $.each(data.stats.stats.stats_fields[fieldName], (key, val) => {
             self.data().stats.data.push({ key: key, val: val });
           });
         }
       },
-      notSupportedCallback: function() {
+      notSupportedCallback: function () {
         self.data().statsSupported(false);
       },
-      alwaysCallback: function() {
+      alwaysCallback: function () {
         self.data().loadingStats(false);
       }
     });

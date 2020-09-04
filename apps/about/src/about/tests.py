@@ -19,7 +19,6 @@ from builtins import object
 import json
 
 from django.urls import reverse
-
 from nose.tools import assert_true, assert_false, assert_equal
 
 from desktop.lib.django_test_util import make_logged_in_client
@@ -42,10 +41,10 @@ class TestAbout(TestAboutBase, OozieBase):
 
   def test_admin_wizard_permissions(self):
     response = self.client_admin.get(reverse('about:index'))
-    assert_true('Check Configuration' in response.content, response.content)
+    assert_true('Step 1: <i class="fa fa-check"></i> Checks' in response.content, response.content)
 
     response = self.client.get(reverse('about:index'))
-    assert_false('Check Configuration' in response.content, response.content)
+    assert_false('Step 1: <i class="fa fa-check"></i> Checks' in response.content, response.content)
 
 
 class TestAboutWithNoCluster(TestAboutBase):
@@ -58,12 +57,12 @@ class TestAboutWithNoCluster(TestAboutBase):
     collect_usage = Settings.get_settings().collect_usage
 
     try:
-      response = self.client.post(reverse('about:update_preferences'), {'collect_usage': False})
+      response = self.client_admin.post(reverse('about:update_preferences'), {'collect_usage': False})
       data = json.loads(response.content)
       assert_equal(data['status'], 0)
-      assert_false(data['collect_usage'] == True) # Weird but works
+      assert_false(data['collect_usage'])
 
-      response = self.client.post(reverse('about:update_preferences'), {'collect_usage': True})
+      response = self.client_admin.post(reverse('about:update_preferences'), {'collect_usage': True})
       data = json.loads(response.content)
       assert_equal(data['status'], 0)
       assert_true(data['collect_usage'])

@@ -22,6 +22,7 @@ import dataCatalog from 'catalog/dataCatalog';
 import componentUtils from './componentUtils';
 import huePubSub from 'utils/huePubSub';
 import I18n from 'utils/i18n';
+import { ASSIST_SHOW_SQL_EVENT } from './assist/events';
 
 export const NAME = 'hue-global-search';
 
@@ -147,7 +148,7 @@ class GlobalSearch {
           window.HAS_CATALOG ? 'Search data and saved documents...' : 'Search saved documents...'
         ),
         querySpec: self.querySpec,
-        onClear: function() {
+        onClear: function () {
           self.selectedIndex(null);
           self.searchResultVisible(false);
         },
@@ -170,7 +171,7 @@ class GlobalSearch {
       })
       .extend({ deferred: true });
 
-    const deferredCloseIfVisible = function() {
+    const deferredCloseIfVisible = function () {
       window.setTimeout(() => {
         if (self.searchResultVisible()) {
           self.close();
@@ -197,7 +198,7 @@ class GlobalSearch {
       }
     });
 
-    self.autocompleteFromEntries = function(lastNonPartial, partial) {
+    self.autocompleteFromEntries = function (lastNonPartial, partial) {
       let result = undefined;
       const partialLower = partial.toLowerCase();
       self.searchResultCategories().every(category => {
@@ -401,7 +402,7 @@ class GlobalSearch {
     if (entry.data && entry.data.link) {
       huePubSub.publish('open.link', entry.data.link);
     } else if (!/:\s*$/.test(entry.value)) {
-      huePubSub.publish('assist.show.sql');
+      huePubSub.publish(ASSIST_SHOW_SQL_EVENT);
       huePubSub.publish('assist.db.search', entry.value);
     }
   }

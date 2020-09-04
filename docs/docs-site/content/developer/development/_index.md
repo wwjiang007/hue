@@ -16,26 +16,37 @@ This section goes into greater detail on how to build and reuse the components o
 * Python 2.7+ (Python 3 support tracked in [HUE-8737](https://issues.cloudera.org/browse/HUE-8737))
 * Django (1.11 already included in the distribution)
 * Java (Java 1.8) (should go away after [HUE-8740](https://issues.cloudera.org/browse/HUE-8740))
-* npm ([10.0+](https://deb.nodesource.com/setup_10.x))
+* Node.js ([10.0+](https://deb.nodesource.com/setup_10.x))
 
 ### Build & Start
 
 Build once:
 
+    # If you are using Python 3.5+, set PYTHON_VER before the build, like
+    export PYTHON_VER=python3.8
+
+    # Mac user might need to set
+    export SKIP_PYTHONDEV_CHECK=true
+
     make apps
 
-Then start the dev server (which will auto reload):
+The [dependencies documentation](/administrator/installation/dependencies/) is here to help for troubleshooting build issues.
+
+Then start the dev server (which will auto reload on file changes):
 
     ./build/env/bin/hue runserver
 
-If you are changing Javascript or CSS files, also start:
+If you are changing JavaScript or CSS files, also start:
 
     npm run dev
 
-Then it is recommended to use MySQL or PostGres as the database.
+Persistence: Hue needs an existing database with transactions like MySQL to support concurrent requests and also not lose the registered users, saved queries, sharing permissions… when the server gets stopped.
 
-Open the `hue.ini` file in a text editor. Directly below the `[[database]]` line, add the following options (and modify accordingly for
-your MySQL setup):
+Once build, in order to avoid the `database is locked` errors, you also need to connect Hue to a transactional database. It is recommended to use MySQL or PostGreSQL for development.
+
+Open the `desktop/conf/pseudo-distributed.ini` file in a text editor. Add the following options (and modify accordingly) for your MySQL setup:
+
+Directly below the `[[database]]` line, add the following.
 
     host=localhost
     port=3306
@@ -44,16 +55,73 @@ your MySQL setup):
     password=secretpassword
     name=hue
 
+Read more about how [configurations work](/administrator/configuration/).
+
+### First SQL queries!
+
+Here is how to point the Editor to either MySql or [Apache Hive](https://hive.apache.org/) and execute your first SQL queries. For other supported databases refer to the [connectors](/administrator/configuration/connectors/).
+
+#### MySQL
+
+In `desktop/conf/pseudo-distributed.ini`, below the `[[interpreters]]` section of of `[notebook]`.
+
+    [[[mysql]]]
+    name=MySQL
+    interface=sqlalchemy
+    options='{"url": "mysql://${USER}:${PASSWORD}@localhost:3306/hue"}'
+
+#### Apache Hive
+
+You can connect to an existing Hive instance or setup a new one locally. An easy way to setup one is with Docker. You could use this [Hive 2 container](https://github.com/big-data-europe/docker-hive.).
+
+    git clone https://github.com/big-data-europe/docker-hive
+    cd docker-hive
+    docker-compose up -d
+
+Just follow the above 3 steps and you would have a running Hive instance on `jdbc:hive2://localhost:10000`.
+
+Now under Hue open `desktop/conf/pseudo-distributed.ini` file in a text editor, and modify the following properties:
+
+1. Directly below the `[[beeswax]]` line, add the following:
+
+    # Host where HiveServer2 is running.
+    hive_server_host=localhost
+
+    # Port where HiveServer2 Thrift server runs on.
+    hive_server_port=10000
+
+    thrift_version=7
+
+2. Below the `[[interpreters]]` of `[notebook]`, add:
+
+    [[[hive]]]
+      name=Hive
+      interface=hiveserver2
+
+And restart Hue, open the Editors and start typing your first queries!
+
 ### Dev environment
+
+#### Lint configs
+
+* [.eslintrc.js](https://github.com/cloudera/hue/blob/master/.eslintrc.js)
+* [.pylintrc](https://github.com/cloudera/hue/blob/master/.pylintrc)
+* [.prettierrc](https://github.com/cloudera/hue/blob/master/.prettierrc)
+* [Git hooks](https://github.com/cloudera/hue/blob/master/tools/githooks)
+
+For checking git commit message format automatically locally:
+
+    cp tools/githooks/* .git/hooks
+    chmod +x .git/hooks/*
 
 #### Visual Code
 
-Adding 'hue' as a workspace, then:
+Adding the 'hue' directory as a workspace, then:
 
 Recommended extensions:
 
 * Python - Microsoft
-* EsLint - Dirk Baeumur https://github.com/cloudera/hue/blob/master/.eslintrc.js
+* EsLint - Dirk Baeumur
 * Mako - tommorris
 * Docker - Microsoft
 
@@ -76,6 +144,120 @@ Second step is to configure the debug configuration
 ![Eclipse debug interpreter](/images/eclipse_debug_interpreter.png)
 
 
+## Development Process
+
+**Note:**
+
+During the development process if you are facing any problem then, it is recommended to search for information on the [Forum](https://discourse.gethue.com/) and in the [bug tracker](https://github.com/cloudera/hue/issues?q=is%3Aissue+). If the solution is not found then, feel free to create an issue at https://github.com/cloudera/hue/issues.
+
+Here is a tutorial about how to use the code review tool [Review Board](https://www.reviewboard.org/) for a better productivity!
+
+### Setup
+
+Hue project uses Review Board and Pull Requests for code reviews. For more complex patches it's advisable to use RB than a plain pull request on github. The advantage of Pull Request is that the CI (syntax check, tests…) automatically runs for you (but the diff interface is not as friendly as Review Board).
+
+* Create accounts in https://review.cloudera.org, https://issues.cloudera.org/browse/HUE and https://github.com and share the usernames
+* Then, join the 'hue' group in your account https://review.cloudera.org/account/preferences/#groups
+* Then [download](https://www.reviewboard.org/downloads/rbtools/) the Review Board tools and install it.
+
+If you've never used git and github before, there are bunch of things you need to [do](https://kbroman.org/github_tutorial/pages/first_time.html) before going further.
+
+Now, clone cloudera/hue:
+
+    git clone https://github.com/cloudera/hue
+
+Then, go inside your git repository:
+
+    romain@runreal:~/projects/hue$ rbt setup-repo
+
+    Enter the Review Board server URL: https://review.cloudera.org
+    Use the Git repository 'hue' (git://github.com/cloudera/hue.git)? [Yes/No]: yes
+    Create '/home/romain/projects/hue/.reviewboardrc' with the following?
+    REVIEWBOARD_URL = "https://review.cloudera.org"
+    REPOSITORY = "hue"
+    BRANCH = "master"
+    [Yes/No]: yes
+    Config written to /home/romain/projects/hue/.reviewboardrc
+
+Create a new branch with the jira id (HUE-XXX) as the branch name:
+
+    git checkout master
+    git pull --rebase origin master
+    git checkout -b HUE-XXX
+
+Then make your changes in code:
+
+    git add <file>
+    git diff --cached
+    git commit -m "HUE-XXX <Ticket summary>"
+
+### Post a review
+
+We have wrapped up the typical submission in a dedicated [tools/scripts/hue-review](https://github.com/cloudera/hue/blob/master/tools/scripts/hue-review) script prefilled with all the details of the commits:
+
+Now we post the review:
+
+    tools/scripts/hue-review HEAD~1..HEAD <reviewers> "HUE-XXX [component] <Ticket summary>" --bugs-closed=HUE-XXX
+
+* Above command must return the review link as given in below example.
+* Go to the review link and varify details & press publish. All the reviewers will be informed with an email.
+
+eg:
+
+    tools/scripts/hue-review HEAD~1..HEAD romain,enricoberti,erickt "HUE-2123 [beeswax] Handle cancel state properly" -bugs-closed=HUE-2123
+
+    Review request #4501 posted.
+
+    https://review.cloudera.org/r/4501
+
+
+Et voila! Here is our review https://review.cloudera.org/r/4501.
+
+**Note**:
+If you have more than one diff, update `HEAD~1..HEAD` accordingly (e.g. `HEAD~2..HEAD`)
+
+Now go to the ticket and add the Review Boad review link as a comment.
+
+### Update a review
+
+Modify the previous commit diff:
+
+    git add <file>
+    git commit --amend
+
+Update the review:
+
+    rbt post -u -r <Review-board-id> HEAD~1..HEAD
+
+Again, go to the review link and varify details & press publish.
+
+### Ship It
+
+Once we get ship it from at least one reviewer, we can push the changes to master
+
+    git rebase origin/master
+    git push origin HEAD:ci-commit-master-<yourname>
+
+* The push will auto run the tests and push it to master
+* It can be seen on https://circleci.com/gh/cloudera/workflows/hue
+  * Two builds would be made - One for Python 2.7 and another for Python 3.6
+  * If successful, the change would be auto merged to master
+  * On failure, we will get a mail
+  * Runs usually take 10-20 min
+* Once merged mark the review as submitted - **Close > Submitted**
+* Add the commit link to the ticket and mark it as resolved
+
+**Note**:
+
+For lightweight issues, Github [pull requests](https://github.com/cloudera/hue/pulls) are also welcomed! To learn how pull request works please refer this [link](https://github.com/asmeurer/git-workflow).
+
+### Sump-up
+
+We hope that Review Board and these commands will make your life easier and encourage you to [contribute to Hue](https://github.com/cloudera/hue/blob/master/CONTRIBUTING.md) 😉
+
+As usual feel free to send feedback on the [hue-user](http://groups.google.com/a/cloudera.org/group/hue-user) list or [@gethue](https://twitter.com/gethue)!
+
+
 ## API Server
 
 ### From 30,000 feet
@@ -93,13 +275,13 @@ ones that you may write yourself.
 Hue is a web application built on the Django python web framework.
 Django, running on the WSGI container/web server (typically CherryPy), manages
 the url dispatch, executes application logic code, and puts together the views
-from their templates.  Django uses a database (typically sqlite)
-to manage session data, and Hue applications can use it as well
-for their "models".  (For example, the saved Editor stores
-saved queries in the database.)
+from their templates. Django uses a database (typically MySql or PostGres) to manage session data, and Hue applications can use it as well
+for their "models". (For example, the saved Editor stores saved queries in the database.)
 
 In addition to the web server, some Hue applications run
 daemon processes "on the side". Some examples are the `Celery Task Server`, `Celery Beat`.
+
+![Reference Architecture](/images/hue_architecture.png)
 
 ### Interacting with external services
 
@@ -112,20 +294,12 @@ These APIs work by making REST or Thrift calls.
 
 ![Architecture](/images/architecture.png)
 
-A Hue application may span three tiers: (1) the UI
-and user interaction in the client's browser, (2) the
-core application logic in the Hue web
-server, and (3) external services with which applications
-may interact.
+A Hue application may span three tiers: (1) the UI and user interaction in the client's browser, (2) the
+core application logic in the Hue web server, and (3) external services with which applications may interact.
 
-The absolute minimum that you must implement (besides
-boilerplate), is a
-"Django [view](https://docs.djangoproject.com/en/1.11/#the-view-layer/)"
-function that processes the request and the associated template
-to render the response into HTML.
+The absolute minimum that you must implement (besides boilerplate), is a "Django [view](https://docs.djangoproject.com/en/1.11/#the-view-layer/)" function that processes the request and the associated template to render the response into HTML.
 
-Many apps will evolve to have a bit of custom JavaScript and
-CSS styles. Apps that need to talk to an external service
+Many apps will evolve to have a bit of custom JavaScript and CSS styles. Apps that need to talk to an external service
 will pull in the code necessary to talk to that service.
 
 ### File Layout
@@ -297,14 +471,11 @@ would say finicky); Django templates are simpler, but are less expressive.
 
 ### Authentication Backends
 
-Hue exposes a configuration flag ("auth") to configure
-a custom authentication backend.
-See http://docs.djangoproject.com/en/dev/topics/auth/#writing-an-authentication-backend
-for writing such a backend.
+Hue exposes a configuration flag ("auth") to configure a custom authentication [backend](https://github.com/cloudera/hue/blob/master/desktop/core/src/desktop/auth/backend.py).
+See [writing an authentication backend](http://docs.djangoproject.com/en/dev/topics/auth/#writing-an-authentication-backend)
+for more details.
 
-In addition to that, backends may support a `manages_passwords_externally()` method, returning
-True or False, to tell the user manager application whether or not changing
-passwords within Hue is possible.
+In addition to that, backends may support a `manages_passwords_externally()` method, returning True or False, to tell the user manager application whether or not changing passwords within Hue is possible.
 
 ### Authorization
 
@@ -337,10 +508,8 @@ for regenerating the code from the interfaces.
 
 ### Upgrades
 
-After upgrading the version of Hue, running these two commands will make sure the
-database has the correct tables and fields.
+After upgrading the version of Hue, running these two commands will make sure the database has the correct tables and fields.
 
-    ./build/env/bin/hue syncdb
     ./build/env/bin/hue migrate
 
 
@@ -382,7 +551,7 @@ database has the correct tables and fields.
     TEST_IMPALAD_HOST=impalad-01.gethue.com
       Point to an Impalad and trigger the Impala tests.
 
-## User interface
+## User Interface (UI)
 
 Developing applications for Hue requires a minimal amount of CSS
 (and potentially JavaScript) to use existing functionality.
@@ -396,7 +565,7 @@ In a nutshell, front-end development is using:
 
 ### Javascript
 
-The javascript files are currently being migrated to webpack bundles, during this process some files will live under src/desktop/static/ and some will live under src/dekstop/js
+The javascript files are currently being migrated to webpack bundles, during this process some files will live under src/desktop/static/ and some will live under src/desktop/js
 
 For changes to the files under src/desktop/js the following applies:
 
@@ -472,11 +641,11 @@ development mode.
 
 ### The short story
 
-Run the unit tests
+Run the API unit tests
 
     ./build/env/bin/hue test unit
 
-Open a pull request which will automaticlly trigger a [CircleCi](https://circleci.com/gh/cloudera/hue) unit test run.
+Open a pull request which will automatically trigger a [CircleCi](https://circleci.com/gh/cloudera/hue) unit test run.
 
 How to run just some parts of the tests, e.g.:
 
@@ -484,26 +653,16 @@ How to run just some parts of the tests, e.g.:
     build/env/bin/hue test specific impala.tests:TestMockedImpala
     build/env/bin/hue test specific impala.tests:TestMockedImpala.test_basic_flow
 
-Jest tests:
+Run the user interface tests:
 
     npm run test
 
+### Running the API tests
 
-### Longer story
+The ``test`` management command prepares the arguments (test app names) and passes them to nose (django_nose.nose_runner). Nose will then magically find all the tests to run.
 
-The ``test`` management command prepares the arguments (test app names)
-and passes them to nose (django_nose.nose_runner). Nose will then magically
-find all the tests to run.
-
-Tests themselves should be named *_test.py.  These will be found
-as long as they're in packages covered by django.  You can use the
-unittest frameworks, or you can just name your method with
-the word "test" at a word boundary, and nose will find it.
-
-See apps/hello/src/hello/hello_test.py for an example.
-
-
-#### Running only specific tests
+Tests themselves should be named `*_test.py`.  These will be found as long as they're in packages covered by django.  You can use the
+unittest frameworks, or you can just name your method with the word "test" at a word boundary, and nose will find it. See `apps/hello/src/hello/hello_test.py` for an example.
 
 To run the unit tests (should take 5-10 minutes):
 
@@ -535,15 +694,113 @@ To run a specific test in a class, use:
 
     build/env/bin/hue test specific <app><module>:<class><test_func>
 
+Note:
+
+When running the tests and seeing an error similar to:
+
+    ...
+    ValueError: The file 'desktop/js/bundles/hue/vendors~hue~notebook~tableBrowser-chunk-f7c8562ecf79bc8f1f16.js' could not be found with <django.contrib.staticfiles.storage.CachedStaticFilesStorage object at 0x7faf77042630>.
+
+
+Re-building the collection of static files should fix it:
+
+    ./build/env/bin/hue collectstatic
+
+### Running the UI tests
+
+The tests are next to the file under test, the filename of the test has to end with `.test.ts` or `.test.js`.
+
+    someFile.js         <- File under test
+    someFile.test.ts    <- File containing tests
+
+Run all the tests once with:
+
+    npm test
+
+Run tests from a specific file once:
+
+    npm test -- foo.test.js
+
+To run the tests in watch mode:
+
+    npm run test-dev
+
+While in watch mode Jest will detect changes to all files and re-run related tests. There are
+also options to target specific files or tests. Press 'w' in the console to see the options.
+
+Note: on certain OS like Ubuntu, running the tests via a global jest seems to not hang your system
+
+    npm install jest --global
+
 e.g.
 
-    build/env/bin/hue test specific useradmin.tests:AdminTest.test_login
+    jest calciteAutocompleteParser.Select.stream.test.js --testPathIgnorePatterns=[]
+    jest calciteAutocompleteParser --testPathIgnorePatterns=[]
 
-Start up pdb on test failures:
+How to update snapshot tests:
 
-    build/env/bin/hue test <args> --pdb --pdb-failure -s
+    jest --updateSnapshot
 
-#### Coverage
+#### Testing KO Js components
+
+koSetup provides utilities to test Knockout components and bindings using `jsdom` from `jest`.
+
+An example of component test:
+
+    import { koSetup } from 'jest/koTestUtils';
+
+    import 'ko/someComponent';
+
+    describe('ko.someComponent.js', () => {
+      const setup = koSetup(); // Adds the necessary setup and teardown
+
+      it('should render component', async () => {
+        const someParams = {}
+
+        const element = await setup.renderComponent('someComponent', someParams);
+
+        expect(element.innerHTML).toMatchSnapshot();
+      });
+
+      it('should change after observable update', async () => {
+        const someParams = { visible: ko.observable(false) };
+        const wrapper = await setup.renderComponent('someComponent', someParams);
+        expect(wrapper.querySelector('[data-test="some-test-id"]').style['display']).toEqual('none');
+
+        someParams.visible(true); // Or trigger some event on an elmement etc.
+        await setup.waitForKoUpdate(); // Waits for re-render
+
+        expect(wrapper.querySelector('[data-test="some-test-id"]').style['display']).toEqual('inline-block');
+      });
+    });
+
+An example of a binding test:
+
+    import ko from 'knockout';
+    import { koSetup } from 'jest/koTestUtils';
+    import './ko.myBinding';
+
+    describe('ko.myBinding.js', () => {
+      const setup = koSetup();
+
+      it('should toggle observable', async () => {
+        const viewModel = { testObservable: ko.observable(false) };
+        const wrapper = await setup.renderKo(
+          '<div class="click-test" data-bind="myBinding: testObservable"></div>',
+          viewModel
+        );
+
+        expect(viewModel.testObservable()).toBeFalsy();
+
+        wrapper.querySelector('.click-test').click();
+        await setup.waitForKoUpdate();
+
+        expect(viewModel.testObservable()).toBeTruthy();
+      });
+    });
+
+
+### Coverage
 
 Add the following options:
 
@@ -553,87 +810,7 @@ For js run:
 
     npm run test-coverage
 
-#### Create and run the Jest tests
-
-Add them next to the file under test, the filename of the test has to end with ".test.js".
-
-    someFile.js         <- File under test
-    someFile.test.js    <- File containing tests
-
-Run all the tests once with:
-
-    npm run test
-
-To run the tests in watch mode:
-
-    npm run test-dev
-
-While in watch mode Jest will detect changes to all files and re-run related tests. There are
-also options to target specific files or tests. Press 'w' in the console to see the options.
-
-#### Testing KO components and bindings
-
-koSetup provides utilities to test knockout components and bindings using jsdom from jest.
-
-An example of component test:
-
-```
-import { koSetup } from 'jest/koTestUtils';
-
-import 'ko/someComponent';
-
-describe('ko.someComponent.js', () => {
-  const setup = koSetup(); // Adds the necessary setup and teardown
-
-  it('should render component', async () => {
-    const someParams = {}
-
-    const element = await setup.renderComponent('someComponent', someParams);
-
-    expect(element.innerHTML).toMatchSnapshot();
-  });
-
-  it('should change after observable update', async () => {
-    const someParams = { visible: ko.observable(false) };
-    const wrapper = await setup.renderComponent('someComponent', someParams);
-    expect(wrapper.querySelector('[data-test="some-test-id"]').style['display']).toEqual('none');
-
-    someParams.visible(true); // Or trigger some event on an elmement etc.
-    await setup.waitForKoUpdate(); // Waits for re-render
-
-    expect(wrapper.querySelector('[data-test="some-test-id"]').style['display']).toEqual('inline-block');
-  });
-});
-```
-
-An example of a binding test:
-
-```
-import ko from 'knockout';
-import { koSetup } from 'jest/koTestUtils';
-import './ko.myBinding';
-
-describe('ko.myBinding.js', () => {
-  const setup = koSetup();
-
-  it('should toggle observable', async () => {
-    const viewModel = { testObservable: ko.observable(false) };
-    const wrapper = await setup.renderKo(
-      '<div class="click-test" data-bind="myBinding: testObservable"></div>',
-      viewModel
-    );
-
-    expect(viewModel.testObservable()).toBeFalsy();
-
-    wrapper.querySelector('.click-test').click();
-    await setup.waitForKoUpdate();
-
-    expect(viewModel.testObservable()).toBeTruthy();
-  });
-});
-```
-
-#### Continuous Integration (CI)
+### Continuous Integration (CI)
 
 [CircleCi](https://circleci.com/gh/cloudera/hue) automatically run the unit tests (Python, Javascript, linting) on branch updates and pull requests. Branches containing `ci-commit-master` will try to be auto pushed to master if the run is green and the Github permissions match.
 This logic is described in the [config.yml](https://github.com/cloudera/hue/tree/master/.circleci).
@@ -642,7 +819,7 @@ The runs happen in an image based on [latest Hue's image](https://hub.docker.com
 
 Note: until the `desktop/ext-py` dependencies are moved to a `requirement.txt`, adding new Python modules will require adding them first to the Docker image by building a Hue branch which has them.
 
-#### Integration tests
+### Integration tests
 
 To not fail on integration tests, Hue would need to be configured to point to a live cluster, or you could install the mini cluster (only once) with:
 
@@ -672,6 +849,10 @@ Historically, the same thing used to be done with the `requires_hadoop` tag:
 
 ## Releasing
 
+The checklist below details the steps. Then send the release notes to the [Forum](https://discourse.gethue.com/), [hue-user](https://groups.google.com/a/cloudera.org/forum/#!forum/hue-user), https://twitter.com/gethue !
+
+### Version
+
 Update the versions to the next release (current release +1):
 
     :100644 100644 4db6d5f... f907d04... M	VERSION
@@ -692,22 +873,24 @@ And add them and the authors to the release notes:
 
 Pushing the release branch:
 
-    git push origin HEAD:branch-4.6.0
+    git push origin HEAD:branch-4.7.0
 
 Tagging the release:
 
-    git tag -a release-4.6.0 -m "release-4.6.0"
-    git push origin release-4.6.0
+    git tag -a release-4.7.0 -m "release-4.7.0"
+    git push origin release-4.7.0
 
 Building the tarball release:
 
     make prod
 
-Source of the release: https://github.com/cloudera/hue/archive/release-4.6.0.zip
+Source of the release: https://github.com/cloudera/hue/archive/release-4.7.0.zip
 
 Push to the CDN:
 
-    scp hue-4.6.0.tgz root@cdn.gethue.com:/var/www/cdn.gethue.com/downloads
+    scp hue-4.7.0.tgz root@cdn.gethue.com:/var/www/cdn.gethue.com/downloads
+
+### Websites
 
 Other things to update:
 
@@ -718,47 +901,52 @@ Other things to update:
 
 Instructions:
 
-    docker build https://github.com/cloudera/hue.git#release-4.6.0 -t gethue/hue:4.6.0 -f tools/docker/hue/Dockerfile
-    docker tag gethue/hue:4.6.0 gethue/hue:latest
+    docker build https://github.com/cloudera/hue.git#release-4.7.0 -t gethue/hue:4.7.0 -f tools/docker/hue/Dockerfile
+    docker tag gethue/hue:4.7.0 gethue/hue:latest
     docker images
     docker login
     docker push gethue/hue
-    docker push gethue/hue:4.6.0
+    docker push gethue/hue:4.7.0
 
-    docker build . -t gethue/nginx:4.6.0 -f tools/docker/nginx/Dockerfile;
-    docker tag gethue/nginx:4.6.0 gethue/nginx:latest
+    docker build . -t gethue/nginx:4.7.0 -f tools/docker/nginx/Dockerfile;
+    docker tag gethue/nginx:4.7.0 gethue/nginx:latest
     docker push gethue/nginx
-    docker push gethue/nginx:4.6.0
+    docker push gethue/nginx:4.7.0
 
-Documentation
+### Documentation
 
-[Build it](#Documentation) and push it to the docs host.
+Documentation is currently being auto refreshed every morning of the week and run as a container.
 
-Build the doc website:
+The manual process otherwise would be to [build it](#Documentation) and push it to the docs host.
 
-    cd docs/docs-site
-
-    hugo
-
-Release:
+### Release
 
     ssh root@docs.gethue.com
     cd /var/www/docs.gethue.com
-    mkdir 4.6.0
-    rm latest; ln -s 4.6.0 latest
+    mkdir 4.7.0
+    rm latest; ln -s 4.7.0 latest
 
-    scp -r docs/docs-site/public/* root@docs.gethue.com:/var/www/docs.gethue.com/4.6.0
+    scp -r docs/docs-site/public/* root@docs.gethue.com:/var/www/docs.gethue.com/4.7.0
 
-    scp -r hue-4.6/build/release/prod/hue-4.6.0.tgz root@104.248.178.223:/var/www/cdn.gethue.com/downloads/
+    scp -r hue-4.6/build/release/prod/hue-4.7.0.tgz root@cdn.gethue.com:/var/www/cdn.gethue.com/downloads/
 
+### NPM registry
 
-Then send release notes to the [Forum](https://discourse.gethue.com/), [hue-user](https://groups.google.com/a/cloudera.org/forum/#!forum/hue-user), https://twitter.com/gethue !
+To publish gethue to NPM registry, the following command would have to be run. Kindly refrain from using `npm publish`.
+
+    npm run publish-gethue
 
 ## Building
 
+### Custom Webpack Config
+
+You can make webpack build with custom configuration files by setting HUE_WEBPACK_CONFIG environment variable.
+
+    HUE_WEBPACK_CONFIG="webpack.config.custom.js" make apps
+
 ### Dev Docker
 
-Try basic changes in Hue without compiling it locally:
+Try basic changes [in 3 minutes](https://gethue.com/quick-start-a-hue-development-environment-in-3-minutes-with-docker/) without compiling Hue locally hence avoiding the setting up of [dependencies](/developer/):
 
     git clone https://github.com/cloudera/hue.git
     cd hue
@@ -766,7 +954,7 @@ Try basic changes in Hue without compiling it locally:
 
 Then edit the `[[database]]` section to specify a proper database, here MySql:
 
-    host=127.0.0.1 # Not localhost if Docker
+    host=127.0.0.1 # Don't use 'localhost' if Docker
     engine=mysql
     user=hue
     password=hue
@@ -780,26 +968,42 @@ Note: code updates won’t be seen after the Docker container runs. For this Hue
 
     ./build/env/bin/hue runserver 0.0.0.0:8888
 
-and recompiling the Docker image. It will then auto-restart on Python code changes. For JavaScript, those would need to be [compiled](//developer/development/#javascript).
+and recompiling the Docker image. It will then auto-restart on Python code changes. For JavaScript, those would need to be [compiled](/developer/development/#javascript).
 
 
 ### Documentation
 
-Install [Hugo](https://gohugo.io/getting-started/quick-start/).
+Install [Hugo](https://gohugo.io/getting-started/quick-start/). Each page has a link to its own source file in the top right corner.
 
-Build it and see live changes:
+Build the [source](https://github.com/cloudera/hue/tree/master/docs/docs-site) and see live changes:
 
     cd docs/docs-site
 
     hugo serve
 
-Check for links not working (returning a 404) with muffet, a fast link checker crawler:
+Check for links not working (e.g. returning a 404) with muffet, a fast link checker crawler. It recommended to use the [check links script](https://github.com/cloudera/hue/blob/master/tools/ci/check_for_website_dead_links.sh).
 
-    sudo snap install muffet
+The posts [manual](https://gethue.com/easily-checking-for-deadlinks-on-docs-gethue-com/) and [continuous integration](https://gethue.com/easily-checking-for-deadlinks-on-docs-gethue-com/) contain more information about it.
 
-Then after booting the hugo documentation server, we point to its url. We also blacklist certain urls to avoid some noisy false positives:
+And then to build the static site just do:
 
-    muffet http://localhost:35741/ --exclude ".*releases.*" -f
+    hugo
+
+and grab the `public` directory.
+
+### Blog & Website
+
+Like for the [Documentation](#Documentation) install hugo. The content for each language is in its [own directory](https://github.com/cloudera/hue/tree/master/docs/gethue/content).
+
+Blog posts are located in [docs/gethue/content/en/posts](https://github.com/cloudera/hue/tree/master/docs/gethue/content/en/posts).
+
+Build it and see live changes:
+
+    cd docs/gethue
+
+    hugo serve
+
+Will automatically start one server for each language domain.
 
 ### SQL Autocomplete
 
@@ -820,7 +1024,7 @@ After modifying files under tools/ace-editor run the following to build ace.js
     npm install
     make ace
 
-### Embedded language references
+### Language references
 
 The tools for generating the embedded language reference manuals can be found under `hue/tools/sql-docs/`
 

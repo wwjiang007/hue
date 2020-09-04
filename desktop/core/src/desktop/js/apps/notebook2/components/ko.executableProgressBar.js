@@ -46,7 +46,9 @@ class ExecutableProgressBar extends DisposableComponent {
       }
       if (
         this.progress() === 0 &&
-        (this.status() === EXECUTION_STATUS.running || this.status() === EXECUTION_STATUS.starting)
+        (this.status() === EXECUTION_STATUS.running ||
+          this.status() === EXECUTION_STATUS.streaming ||
+          this.status() === EXECUTION_STATUS.starting)
       ) {
         return 'progress-starting';
       }
@@ -71,20 +73,14 @@ class ExecutableProgressBar extends DisposableComponent {
         this.progress(executable.progress);
         if (executable.progress === 100) {
           await sleep(2000);
-          $(element)
-            .parent()
-            .find('.progress-snippet')
-            .animate(
-              {
-                height: '0'
-              },
-              100
-            );
+          $(element).parent().find('.progress-snippet').animate(
+            {
+              height: '0'
+            },
+            100
+          );
         } else {
-          $(element)
-            .parent()
-            .find('.progress-snippet')
-            .css('height', '');
+          $(element).parent().find('.progress-snippet').css('height', '');
         }
       }
     });

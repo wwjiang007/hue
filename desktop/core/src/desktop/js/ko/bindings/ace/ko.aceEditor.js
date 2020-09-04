@@ -20,13 +20,16 @@ import * as ko from 'knockout';
 import apiHelper from 'api/apiHelper';
 import AceLocationHandler from 'ko/bindings/ace/aceLocationHandler';
 import huePubSub from 'utils/huePubSub';
-import sqlUtils from 'sql/sqlUtils';
 import AceGutterHandler from 'ko/bindings/ace/aceGutterHandler';
+import { registerBinding } from 'ko/bindings/bindingUtils';
 
 // TODO: Depends on Ace
 
-ko.bindingHandlers.aceEditor = {
-  init: function(element, valueAccessor) {
+export const NAME = 'aceEditor';
+export const INSERT_AT_CURSOR_EVENT = 'editor.insert.at.cursor';
+
+registerBinding(NAME, {
+  init: function (element, valueAccessor) {
     const $el = $(element);
     const options = ko.unwrap(valueAccessor());
     const snippet = options.snippet;
@@ -34,7 +37,7 @@ ko.bindingHandlers.aceEditor = {
 
     const disposeFunctions = [];
 
-    const dispose = function() {
+    const dispose = function () {
       disposeFunctions.forEach(dispose => {
         dispose();
       });
@@ -44,10 +47,10 @@ ko.bindingHandlers.aceEditor = {
 
     $el.text(snippet.statement_raw());
 
-    const editor = ace.edit($el.attr('id'));
+    const editor = ace.edit(snippet.id());
     const AceRange = ace.require('ace/range').Range;
 
-    const resizeAce = function() {
+    const resizeAce = function () {
       window.setTimeout(() => {
         try {
           editor.resize(true);
@@ -160,15 +163,15 @@ ko.bindingHandlers.aceEditor = {
     };
 
     editor.customMenuOptions = {
-      setEnableDarkTheme: function(enabled) {
+      setEnableDarkTheme: function (enabled) {
         darkThemeEnabled = enabled;
         apiHelper.setInTotalStorage('ace', 'dark.theme.enabled', darkThemeEnabled);
         editor.setTheme(darkThemeEnabled ? 'ace/theme/hue_dark' : 'ace/theme/hue');
       },
-      getEnableDarkTheme: function() {
+      getEnableDarkTheme: function () {
         return darkThemeEnabled;
       },
-      setEnableAutocompleter: function(enabled) {
+      setEnableAutocompleter: function (enabled) {
         editor.setOption('enableBasicAutocompletion', enabled);
         apiHelper.setInTotalStorage('hue.ace', 'enableBasicAutocompletion', enabled);
         const $enableLiveAutocompletionChecked = $('#setEnableLiveAutocompletion:checked');
@@ -179,27 +182,27 @@ ko.bindingHandlers.aceEditor = {
           $setEnableLiveAutocompletion.trigger('click');
         }
       },
-      getEnableAutocompleter: function() {
+      getEnableAutocompleter: function () {
         return editor.getOption('enableBasicAutocompletion');
       },
-      setEnableLiveAutocompletion: function(enabled) {
+      setEnableLiveAutocompletion: function (enabled) {
         editor.setOption('enableLiveAutocompletion', enabled);
         apiHelper.setInTotalStorage('hue.ace', 'enableLiveAutocompletion', enabled);
         if (enabled && $('#setEnableAutocompleter:checked').length === 0) {
           $('#setEnableAutocompleter').trigger('click');
         }
       },
-      getEnableLiveAutocompletion: function() {
+      getEnableLiveAutocompletion: function () {
         return editor.getOption('enableLiveAutocompletion');
       },
-      setFontSize: function(size) {
+      setFontSize: function (size) {
         if (size.toLowerCase().indexOf('px') === -1 && size.toLowerCase().indexOf('em') === -1) {
           size += 'px';
         }
         editor.setOption('fontSize', size);
         apiHelper.setInTotalStorage('hue.ace', 'fontSize', size);
       },
-      getFontSize: function() {
+      getFontSize: function () {
         let size = editor.getOption('fontSize');
         if (size.toLowerCase().indexOf('px') === -1 && size.toLowerCase().indexOf('em') === -1) {
           size += 'px';
@@ -219,7 +222,7 @@ ko.bindingHandlers.aceEditor = {
         aceLocationHandler.attachSqlSyntaxWorker();
       }
 
-      editor.customMenuOptions.setErrorHighlighting = function(enabled) {
+      editor.customMenuOptions.setErrorHighlighting = function (enabled) {
         errorHighlightingEnabled = enabled;
         apiHelper.setInTotalStorage('hue.ace', 'errorHighlightingEnabled', enabled);
         if (enabled) {
@@ -228,16 +231,16 @@ ko.bindingHandlers.aceEditor = {
           aceLocationHandler.detachSqlSyntaxWorker();
         }
       };
-      editor.customMenuOptions.getErrorHighlighting = function() {
+      editor.customMenuOptions.getErrorHighlighting = function () {
         return errorHighlightingEnabled;
       };
-      editor.customMenuOptions.setClearIgnoredSyntaxChecks = function() {
+      editor.customMenuOptions.setClearIgnoredSyntaxChecks = function () {
         apiHelper.setInTotalStorage('hue.syntax.checker', 'suppressedRules', {});
         $('#setClearIgnoredSyntaxChecks')
           .hide()
           .before('<div style="margin-top:5px;float:right;">done</div>');
       };
-      editor.customMenuOptions.getClearIgnoredSyntaxChecks = function() {
+      editor.customMenuOptions.getClearIgnoredSyntaxChecks = function () {
         return false;
       };
     }
@@ -256,6 +259,8 @@ ko.bindingHandlers.aceEditor = {
         true
       );
     }
+    editorOptions['tabSize'] = 2;
+    editorOptions['useSoftTabs'] = true;
 
     editor.setOptions(editorOptions);
 
@@ -266,7 +271,7 @@ ko.bindingHandlers.aceEditor = {
     }
     editor.completer.exactMatch = !snippet.isSqlDialect();
 
-    const initAutocompleters = function() {
+    const initAutocompleters = function () {
       if (editor.completers) {
         editor.completers.length = 0;
         if (snippet.isSqlDialect()) {
@@ -287,7 +292,7 @@ ko.bindingHandlers.aceEditor = {
 
     const UNICODES_TO_REMOVE = /[\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u200B\u202F\u205F\u3000\uFEFF]/gi; //taken from https://www.cs.tut.fi/~jkorpela/chars/spaces.html
 
-    const removeUnicodes = function(value) {
+    const removeUnicodes = function (value) {
       return value.replace(UNICODES_TO_REMOVE, ' ');
     };
 
@@ -418,10 +423,7 @@ ko.bindingHandlers.aceEditor = {
         data.location.last_line - 1,
         data.location.last_column - 1
       );
-      editor
-        .getSession()
-        .getDocument()
-        .replace(range, data.text);
+      editor.getSession().getDocument().replace(range, data.text);
     });
 
     disposeFunctions.push(() => {
@@ -449,8 +451,13 @@ ko.bindingHandlers.aceEditor = {
         $(document).trigger('editorSizeChanged');
       }
       // automagically change snippet type
+      // TODO: Remove completely, check if used in code, '% dialect'
       const firstLine = editor.session.getLine(0);
-      if (firstLine.indexOf('%') === 0 && firstLine.charAt(firstLine.length - 1) === ' ') {
+      if (
+        !window.ENABLE_NOTEBOOK_2 &&
+        firstLine.indexOf('%') === 0 &&
+        firstLine.charAt(firstLine.length - 1) === ' '
+      ) {
         const availableSnippets = snippet.availableSnippets;
         let removeFirstLine = false;
         for (let i = 0; i < availableSnippets.length; i++) {
@@ -473,7 +480,7 @@ ko.bindingHandlers.aceEditor = {
     editor.commands.addCommand({
       name: 'execute',
       bindKey: { win: 'Ctrl-Enter', mac: 'Command-Enter|Ctrl-Enter' },
-      exec: function() {
+      exec: function () {
         snippet.statement_raw(removeUnicodes(editor.getValue()));
         snippet.execute();
       }
@@ -482,7 +489,7 @@ ko.bindingHandlers.aceEditor = {
     editor.commands.addCommand({
       name: 'switchTheme',
       bindKey: { win: 'Ctrl-Alt-t', mac: 'Command-Alt-t' },
-      exec: function() {
+      exec: function () {
         darkThemeEnabled = !darkThemeEnabled;
         apiHelper.setInTotalStorage('ace', 'dark.theme.enabled', darkThemeEnabled);
         editor.setTheme(darkThemeEnabled ? 'ace/theme/hue_dark' : 'ace/theme/hue');
@@ -492,7 +499,7 @@ ko.bindingHandlers.aceEditor = {
     editor.commands.addCommand({
       name: 'new',
       bindKey: { win: 'Ctrl-e', mac: 'Command-e' },
-      exec: function() {
+      exec: function () {
         huePubSub.publish('editor.create.new');
       }
     });
@@ -500,7 +507,7 @@ ko.bindingHandlers.aceEditor = {
     editor.commands.addCommand({
       name: 'save',
       bindKey: { win: 'Ctrl-s', mac: 'Command-s|Ctrl-s' },
-      exec: function() {
+      exec: function () {
         huePubSub.publish('editor.save');
       }
     });
@@ -508,7 +515,7 @@ ko.bindingHandlers.aceEditor = {
     editor.commands.addCommand({
       name: 'esc',
       bindKey: { win: 'Ctrl-Shift-p', mac: 'Ctrl-Shift-p|Command-Shift-p' },
-      exec: function() {
+      exec: function () {
         huePubSub.publish('editor.presentation.toggle');
       }
     });
@@ -521,7 +528,7 @@ ko.bindingHandlers.aceEditor = {
         win: 'Ctrl-i|Ctrl-Shift-f|Ctrl-Alt-l',
         mac: 'Command-i|Ctrl-i|Ctrl-Shift-f|Command-Shift-f|Ctrl-Shift-l|Cmd-Shift-l'
       },
-      exec: function() {
+      exec: function () {
         if (
           [
             'ace/mode/hive',
@@ -563,11 +570,11 @@ ko.bindingHandlers.aceEditor = {
       exec: editor.commands.commands['gotoline'].exec
     });
 
-    const isNewStatement = function() {
+    const isNewStatement = function () {
       return /^\s*$/.test(editor.getValue()) || /^.*;\s*$/.test(editor.getTextBeforeCursor());
     };
 
-    const insertSqlAtCursor = function(text, cursorEndAdjust, menu) {
+    const insertSqlAtCursor = function (text, cursorEndAdjust, menu) {
       const before = editor.getTextBeforeCursor();
       if (/\S+$/.test(before)) {
         text = ' ' + text;
@@ -618,9 +625,12 @@ ko.bindingHandlers.aceEditor = {
       }
     );
 
-    const insertAtCursorSub = huePubSub.subscribe('editor.insert.at.cursor', text => {
-      if ($el.data('last-active-editor')) {
-        insertSqlAtCursor(text + ' ', 0);
+    const insertAtCursorSub = huePubSub.subscribe(INSERT_AT_CURSOR_EVENT, details => {
+      if (
+        (details.targetEditor && details.targetEditor === editor) ||
+        $el.data('last-active-editor')
+      ) {
+        insertSqlAtCursor(details.text + ' ', details.cursorEndAdjust || 0);
       }
     });
 
@@ -690,164 +700,6 @@ ko.bindingHandlers.aceEditor = {
       sampleErrorInsertSub.remove();
     });
 
-    const $tableDropMenu = $el.next('.table-drop-menu');
-    const $identifierDropMenu = $tableDropMenu.find('.editor-drop-identifier');
-
-    const hideDropMenu = function() {
-      $tableDropMenu.css('opacity', 0);
-      window.setTimeout(() => {
-        $tableDropMenu.hide();
-      }, 300);
-    };
-
-    const documentClickListener = function(event) {
-      if ($tableDropMenu.find($(event.target)).length === 0) {
-        hideDropMenu();
-      }
-    };
-
-    $(document).on('click', documentClickListener);
-
-    disposeFunctions.push(() => {
-      $(document).off('click', documentClickListener);
-    });
-
-    let lastMeta = {};
-    const draggableTextSub = huePubSub.subscribe('draggable.text.meta', meta => {
-      lastMeta = meta;
-      if (meta.isView) {
-        $tableDropMenu.find('.editor-drop-update').hide();
-        $tableDropMenu.find('.editor-drop-insert').hide();
-        $tableDropMenu.find('.editor-drop-drop').hide();
-        $tableDropMenu.find('.editor-drop-view').show();
-      } else {
-        $tableDropMenu.find('.editor-drop-update').show();
-        $tableDropMenu.find('.editor-drop-insert').show();
-        $tableDropMenu.find('.editor-drop-drop').show();
-        $tableDropMenu.find('.editor-drop-view').hide();
-      }
-      if (
-        typeof meta !== 'undefined' &&
-        typeof meta.database !== 'undefined' &&
-        typeof meta.table !== 'undefined'
-      ) {
-        $identifierDropMenu.text(meta.database + '.' + meta.table);
-      }
-    });
-
-    disposeFunctions.push(() => {
-      draggableTextSub.remove();
-    });
-
-    const menu = ko.bindingHandlers.contextMenu.initContextMenu(
-      $tableDropMenu,
-      $('.content-panel')
-    );
-
-    $tableDropMenu.find('.editor-drop-value').click(() => {
-      insertSqlAtCursor(
-        sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) +
-          '.' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) +
-          ' ',
-        0,
-        menu
-      );
-    });
-
-    $tableDropMenu.find('.editor-drop-select').click(() => {
-      insertSqlAtCursor(
-        'SELECT * FROM ' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) +
-          '.' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) +
-          ' LIMIT 100;',
-        -1,
-        menu
-      );
-      $tableDropMenu.hide();
-    });
-
-    $tableDropMenu.find('.editor-drop-insert').click(() => {
-      insertSqlAtCursor(
-        'INSERT INTO ' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) +
-          '.' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) +
-          ' VALUES ();',
-        -2,
-        menu
-      );
-    });
-
-    $tableDropMenu.find('.editor-drop-update').click(() => {
-      insertSqlAtCursor(
-        'UPDATE ' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) +
-          '.' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) +
-          ' SET ',
-        0,
-        menu
-      );
-    });
-
-    $tableDropMenu.find('.editor-drop-view').click(() => {
-      insertSqlAtCursor(
-        'DROP VIEW ' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) +
-          '.' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) +
-          ';',
-        -1,
-        menu
-      );
-    });
-
-    $tableDropMenu.find('.editor-drop-drop').click(() => {
-      insertSqlAtCursor(
-        'DROP TABLE ' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.database) +
-          '.' +
-          sqlUtils.backTickIfNeeded(lastMeta.type, lastMeta.table) +
-          ';',
-        -1,
-        menu
-      );
-    });
-
-    $el.droppable({
-      accept: '.draggableText',
-      drop: function(e, ui) {
-        const position = editor.renderer.screenToTextCoordinates(e.clientX, e.clientY);
-        let text = ui.helper.text();
-        if (
-          lastMeta.type === 's3' ||
-          lastMeta.type === 'hdfs' ||
-          lastMeta.type === 'adls' ||
-          lastMeta.type === 'abfs'
-        ) {
-          text = "'" + lastMeta.definition.path + "'";
-        }
-        editor.moveCursorToPosition(position);
-        const before = editor.getTextBeforeCursor();
-        if (lastMeta.database && lastMeta.table && !lastMeta.column && /.*;|^\s*$/.test(before)) {
-          menu.show(e);
-        } else {
-          if (/\S+$/.test(before) && before.charAt(before.length - 1) !== '.') {
-            text = ' ' + text;
-          }
-          const after = editor.getTextAfterCursor();
-          if (after.length > 0 && after.charAt(0) !== ' ' && text.charAt(text.length - 1) !== ' ') {
-            text += ' ';
-          }
-          editor.session.insert(position, text);
-          position.column += text.length;
-          editor.clearSelection();
-        }
-      }
-    });
-
     let autocompleteTemporarilyDisabled = false;
     let autocompleteThrottle = -1;
     const afterExecListener = editor.commands.on('afterExec', e => {
@@ -908,7 +760,7 @@ ko.bindingHandlers.aceEditor = {
                 $aceFileChooseContent.html($aceFileChooseContent.data('spinner'));
               }
               $aceFileChooseContent.jHueFileChooser({
-                onFileChoose: function(filePath) {
+                onFileChoose: function (filePath) {
                   editor.session.insert(editor.getCursorPosition(), filePath + "'");
                   editor.hideFileButton();
                   if (autocompleteTemporarilyDisabled) {
@@ -956,7 +808,7 @@ ko.bindingHandlers.aceEditor = {
     snippet.ace(editor);
   },
 
-  update: function(element, valueAccessor) {
+  update: function (element, valueAccessor) {
     const options = ko.unwrap(valueAccessor());
     const snippet = options.snippet;
     const AceRange = ace.require('ace/range').Range;
@@ -1012,4 +864,4 @@ ko.bindingHandlers.aceEditor = {
       } catch (e) {}
     }
   }
-};
+});

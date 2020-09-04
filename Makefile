@@ -119,7 +119,9 @@ docs:
 # Install parent POM
 ###################################
 parent-pom:
+ifneq (,$(BUILD_DB_PROXY))
 	cd $(ROOT)/maven && mvn install $(MAVEN_OPTIONS)
+endif
 
 .PHONY: parent-pom
 
@@ -213,6 +215,7 @@ install-env:
 	cp $(ROOT)/package.json $(INSTALL_DIR)
 	cp $(ROOT)/webpack.config*.js $(INSTALL_DIR)
 	cp $(ROOT)/.babelrc $(INSTALL_DIR)
+	cp $(ROOT)/tsconfig.json $(INSTALL_DIR)
 	$(MAKE) -C $(INSTALL_DIR) npm-install
 	@if [ "$(MAKECMDGOALS)" = "install" ]; then \
 	  $(MAKE) -C $(INSTALL_DIR) create-static; \
@@ -225,6 +228,8 @@ install-env:
 
 .PHONY: npm-install
 npm-install:
+	npm --version
+	node --version
 	npm install
 	npm run webpack
 	npm run webpack-login
@@ -275,35 +280,35 @@ ace:
 # <<<< DEV ONLY
 .PHONY: global-search-parser
 global-search-parser:
-	@node tools/jison/generateParsers.js globalSearchParser
+	@pushd tools/jison/ && npm install && node generateParsers.js globalSearchParser && popd
 
 .PHONY: solr-all-parsers
 solr-all-parsers:
-	@node tools/jison/generateParsers.js solrQueryParser solrFormulaParser
+	@pushd tools/jison/ && npm install  && node generateParsers.js solrQueryParser solrFormulaParser && popd
 
 .PHONY: solr-query-parser
 solr-query-parser:
-	@node tools/jison/generateParsers.js solrQueryParser
+	@pushd tools/jison/ && npm install  && node generateParsers.js solrQueryParser && popd
 
 .PHONY: solr-formula-parser
 solr-formula-parser:
-	@node tools/jison/generateParsers.js solrFormulaParser
+	@pushd tools/jison/ && npm install  && node generateParsers.js solrFormulaParser && popd
 
 .PHONY: sql-all-parsers
 sql-all-parsers:
-	@node tools/jison/generateParsers.js generic hive impala
+	@pushd tools/jison/ && npm install  && node generateParsers.js generic hive impala && popd
 
 .PHONY: sql-autocomplete-parser
 sql-autocomplete-parser:
-	@node tools/jison/generateParsers.js genericAutocomp hiveAutocomp impalaAutocomp
+	@pushd tools/jison/ && npm install  && node generateParsers.js genericAutocomp hiveAutocomp impalaAutocomp && popd
 
 .PHONY: sql-statement-parser
 sql-statement-parser:
-	@node tools/jison/generateParsers.js sqlStatementsParser
+	@pushd tools/jison/ && npm install  && node generateParsers.js sqlStatementsParser && popd
 
 .PHONY: sql-syntax-parser
 sql-syntax-parser:
-	@node tools/jison/generateParsers.js genericSyntax hiveSyntax impalaSyntax
+	@pushd tools/jison/ && npm install  && node generateParsers.js genericSyntax hiveSyntax impalaSyntax && popd
 # END DEV ONLY >>>>
 
 ###################################

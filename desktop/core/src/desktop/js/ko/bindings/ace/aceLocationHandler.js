@@ -24,7 +24,13 @@ import I18n from 'utils/i18n';
 import sqlStatementsParser from 'parse/sqlStatementsParser';
 import sqlUtils from 'sql/sqlUtils';
 import stringDistance from 'sql/stringDistance';
-import { EXECUTABLE_UPDATED_EVENT } from 'apps/notebook2/execution/executable';
+import { DIALECT } from 'apps/notebook2/snippet';
+import {
+  POST_FROM_LOCATION_WORKER_EVENT,
+  POST_FROM_SYNTAX_WORKER_EVENT,
+  POST_TO_LOCATION_WORKER_EVENT,
+  POST_TO_SYNTAX_WORKER_EVENT
+} from 'sql/sqlWorkerHandler';
 
 // TODO: depends on Ace, sqlStatementsParser
 
@@ -56,9 +62,11 @@ class AceLocationHandler {
     self.attachSqlWorker();
     self.attachMouseListeners();
 
+    self.dialect = () => (window.ENABLE_NOTEBOOK_2 ? self.snippet.dialect() : self.snippet.type());
+
     self.verifyThrottle = -1;
 
-    const updateDatabaseIndex = function(databaseList) {
+    const updateDatabaseIndex = function (databaseList) {
       self.databaseIndex = {};
       databaseList.forEach(database => {
         self.databaseIndex[database.toLowerCase()] = true;
@@ -87,19 +95,19 @@ class AceLocationHandler {
     const activeMarkers = [];
     let keepLastMarker = false;
 
-    const hideContextTooltip = function() {
+    const hideContextTooltip = function () {
       clearTimeout(tooltipTimeout);
       contextTooltip.hide();
     };
 
-    const clearActiveMarkers = function() {
+    const clearActiveMarkers = function () {
       hideContextTooltip();
       while (activeMarkers.length > keepLastMarker ? 1 : 0) {
         self.editor.session.removeMarker(activeMarkers.shift());
       }
     };
 
-    const markLocation = function(parseLocation) {
+    const markLocation = function (parseLocation) {
       let range;
       if (parseLocation.type === 'function') {
         // Todo: Figure out why functions need an extra char at the end
@@ -180,9 +188,9 @@ class AceLocationHandler {
                     // Note, as cachedOnly is set to true it will call the successCallback right away (or not at all)
                     dataCatalog
                       .getEntry({
-                        sourceType: self.snippet.type(),
                         namespace: self.snippet.namespace(),
                         compute: self.snippet.compute(),
+                        connector: self.snippet.connector(),
                         temporaryOnly: self.snippet.autocompleteSettings.temporaryOnly,
                         path: $.map(tableChain, identifier => {
                           return identifier.name;
@@ -309,7 +317,7 @@ class AceLocationHandler {
       self.editor.off('input', inputListener);
     });
 
-    const mouseoutListener = function() {
+    const mouseoutListener = function () {
       clearActiveMarkers();
       clearTimeout(tooltipTimeout);
       contextTooltip.hide();
@@ -322,7 +330,7 @@ class AceLocationHandler {
       self.editor.container.removeEventListener('mouseout', mouseoutListener);
     });
 
-    const onContextMenu = function(e) {
+    const onContextMenu = function (e) {
       const selectionRange = self.editor.selection.getRange();
       huePubSub.publish('context.popover.hide');
       huePubSub.publish('sql.syntax.dropdown.hide');
@@ -376,6 +384,7 @@ class AceLocationHandler {
                     catalogEntry: entry
                   },
                   pinEnabled: true,
+                  connector: self.snippet.connector(),
                   source: source
                 });
               })
@@ -393,6 +402,7 @@ class AceLocationHandler {
                     storageEntry: entry,
                     editorLocation: token.parseLocation.location
                   },
+                  connector: self.snippet.connector(),
                   pinEnabled: true,
                   source: source
                 });
@@ -400,7 +410,8 @@ class AceLocationHandler {
             } else {
               huePubSub.publish('context.popover.show', {
                 data: token.parseLocation,
-                sourceType: self.snippet.type(),
+                connector: self.snippet.connector(),
+                sourceType: self.dialect(),
                 namespace: self.snippet.namespace(),
                 compute: self.snippet.compute(),
                 defaultDatabase: self.snippet.database(),
@@ -414,7 +425,7 @@ class AceLocationHandler {
               data: token.syntaxError,
               editor: self.editor,
               range: range,
-              sourceType: self.snippet.type(),
+              sourceType: self.dialect(),
               defaultDatabase: self.snippet.database(),
               source: source
             });
@@ -440,7 +451,7 @@ class AceLocationHandler {
     let lastKnownStatements = [];
     let activeStatement;
 
-    const isPointInside = function(parseLocation, editorPosition) {
+    const isPointInside = function (parseLocation, editorPosition) {
       const row = editorPosition.row + 1; // ace positioning has 0 based rows while the parser has 1
       const column = editorPosition.column;
       return (
@@ -475,7 +486,7 @@ class AceLocationHandler {
     };
 
     let lastExecutingStatement = null;
-    const updateActiveStatement = function(cursorChange) {
+    const updateActiveStatement = function (cursorChange) {
       if (!self.snippet.isSqlDialect()) {
         return;
       }
@@ -586,7 +597,7 @@ class AceLocationHandler {
       }
     };
 
-    const parseForStatements = function() {
+    const parseForStatements = function () {
       if (self.snippet.isSqlDialect()) {
         try {
           const lastChangeTime = self.editor.lastChangeTime;
@@ -693,7 +704,7 @@ class AceLocationHandler {
     const self = this;
     if (
       self.sqlSyntaxWorkerSub !== null &&
-      (self.snippet.type() === 'impala' || self.snippet.type() === 'hive')
+      (self.dialect() === DIALECT.impala || self.dialect() === DIALECT.hive)
     ) {
       const AceRange = ace.require('ace/range').Range;
       const editorChangeTime = self.editor.lastChangeTime;
@@ -717,13 +728,13 @@ class AceLocationHandler {
             statementLocation.last_column
           )
         );
-      huePubSub.publish('ace.sql.syntax.worker.post', {
+      huePubSub.publish(POST_TO_SYNTAX_WORKER_EVENT, {
         id: self.snippet.id(),
         editorChangeTime: editorChangeTime,
         beforeCursor: beforeCursor,
         afterCursor: afterCursor,
         statementLocation: statementLocation,
-        type: self.snippet.type()
+        connector: self.snippet.connector()
       });
     }
   }
@@ -735,7 +746,7 @@ class AceLocationHandler {
     const markerId = self.editor.getSession().addMarker(range, clazz);
     const marker = self.editor.getSession().$backMarkers[markerId];
     marker.token = token;
-    marker.dispose = function() {
+    marker.dispose = function () {
       range.start.detach();
       range.end.detach();
       delete marker.token.syntaxError;
@@ -751,7 +762,7 @@ class AceLocationHandler {
       return;
     }
 
-    self.sqlSyntaxWorkerSub = huePubSub.subscribe('ace.sql.syntax.worker.message', e => {
+    self.sqlSyntaxWorkerSub = huePubSub.subscribe(POST_FROM_SYNTAX_WORKER_EVENT, e => {
       if (
         e.data.id !== self.snippet.id() ||
         e.data.editorChangeTime !== self.editor.lastChangeTime
@@ -848,7 +859,7 @@ class AceLocationHandler {
     const deferred = $.Deferred();
     dataCatalog
       .getChildren({
-        sourceType: self.snippet.type(),
+        connector: self.snippet.connector(),
         namespace: self.snippet.namespace(),
         compute: self.snippet.compute(),
         temporaryOnly: self.snippet.autocompleteSettings.temporaryOnly,
@@ -877,7 +888,7 @@ class AceLocationHandler {
       });
       $.when
         .apply($, tablePromises)
-        .done(function() {
+        .done(function () {
           let joined = [];
           for (let i = 0; i < arguments.length; i++) {
             joined = joined.concat(arguments[i]);
@@ -954,19 +965,19 @@ class AceLocationHandler {
       }
     });
 
-    const resolvePathFromTables = function(location) {
+    const resolvePathFromTables = function (location) {
       const promise = $.Deferred();
       if (
         location.type === 'column' &&
         typeof location.tables !== 'undefined' &&
         location.identifierChain.length === 1
       ) {
-        const findIdentifierChainInTable = function(tablesToGo) {
+        const findIdentifierChainInTable = function (tablesToGo) {
           const nextTable = tablesToGo.shift();
           if (typeof nextTable.subQuery === 'undefined') {
             dataCatalog
               .getChildren({
-                sourceType: self.snippet.type(),
+                connector: self.snippet.connector(),
                 namespace: self.snippet.namespace(),
                 compute: self.snippet.compute(),
                 temporaryOnly: self.snippet.autocompleteSettings.temporaryOnly,
@@ -1015,7 +1026,7 @@ class AceLocationHandler {
       return promise;
     };
 
-    const verify = function() {
+    const verify = function () {
       if (tokensToVerify.length === 0) {
         return;
       }
@@ -1085,7 +1096,7 @@ class AceLocationHandler {
               const uniqueValues = [];
               for (let i = 0; i < possibleValues.length; i++) {
                 possibleValues[i].name = sqlUtils.backTickIfNeeded(
-                  self.snippet.type(),
+                  self.snippet.connector(),
                   possibleValues[i].name
                 );
                 const nameLower = possibleValues[i].name.toLowerCase();
@@ -1189,7 +1200,7 @@ class AceLocationHandler {
       getLocationsSub.remove();
     });
 
-    const locationWorkerSub = huePubSub.subscribe('ace.sql.location.worker.message', e => {
+    const locationWorkerSub = huePubSub.subscribe(POST_FROM_LOCATION_WORKER_EVENT, e => {
       if (
         e.data.id !== self.snippet.id() ||
         e.data.editorChangeTime !== self.editor.lastChangeTime ||
@@ -1200,7 +1211,7 @@ class AceLocationHandler {
 
       lastKnownLocations = {
         id: self.editorId,
-        type: self.snippet.type(),
+        connector: self.snippet.connector(),
         namespace: self.snippet.namespace(),
         compute: self.snippet.compute(),
         defaultDatabase: self.snippet.database(),
@@ -1219,7 +1230,7 @@ class AceLocationHandler {
       const tokensToVerify = [];
 
       e.data.locations.forEach(location => {
-        if (location.type === 'statementType' && self.snippet.type() !== 'impala') {
+        if (location.type === 'statementType' && self.dialect() !== DIALECT.impala) {
           // We currently only have a good mapping from statement types to impala topics.
           // TODO: Extract links between Hive topic IDs and statement types
           return;
@@ -1240,7 +1251,7 @@ class AceLocationHandler {
           // The parser isn't aware of the DDL so sometimes it marks complex columns as tables
           // I.e. "Impala SELECT a FROM b.c" Is 'b' a database or a table? If table then 'c' is complex
           if (
-            self.snippet.type() === 'impala' &&
+            self.dialect() === DIALECT.impala &&
             location.identifierChain.length > 2 &&
             (location.type === 'table' || location.type === 'column') &&
             self.isDatabase(location.identifierChain[0].name)
@@ -1313,7 +1324,7 @@ class AceLocationHandler {
         }
       });
 
-      if (self.snippet.type() === 'impala' || self.snippet.type() === 'hive') {
+      if (self.dialect() === DIALECT.impala || self.dialect() === DIALECT.hive) {
         self.verifyExists(tokensToVerify, e.data.activeStatementLocations);
       }
       huePubSub.publish('editor.active.locations', lastKnownLocations);
@@ -1335,10 +1346,10 @@ class AceLocationHandler {
             lastContextRequest.dispose();
           }
           lastContextRequest = self.snippet.whenContextSet().done(() => {
-            huePubSub.publish('ace.sql.location.worker.post', {
+            huePubSub.publish(POST_TO_LOCATION_WORKER_EVENT, {
               id: self.snippet.id(),
               statementDetails: statementDetails,
-              type: self.snippet.type(),
+              connector: self.snippet.connector(),
               namespace: self.snippet.namespace(),
               compute: self.snippet.compute(),
               defaultDatabase: self.snippet.database()

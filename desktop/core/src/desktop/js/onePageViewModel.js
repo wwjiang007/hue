@@ -22,6 +22,7 @@ import page from 'page';
 import hueUtils from 'utils/hueUtils';
 import huePubSub from 'utils/huePubSub';
 import I18n from 'utils/i18n';
+import { CONFIG_REFRESHED_EVENT, GET_KNOWN_CONFIG_EVENT } from 'utils/hueConfig';
 
 class OnePageViewModel {
   constructor() {
@@ -34,7 +35,7 @@ class OnePageViewModel {
     self.isLoadingEmbeddable = ko.observable(false);
     self.extraEmbeddableURLParams = ko.observable('');
 
-    self.getActiveAppViewModel = function(callback) {
+    self.getActiveAppViewModel = function (callback) {
       const checkInterval = window.setInterval(() => {
         const $koElement = $('#' + self.currentApp() + 'Components');
         if (
@@ -48,13 +49,15 @@ class OnePageViewModel {
       }, 25);
     };
 
-    self.changeEditorType = function(type) {
+    self.changeEditorType = function (type) {
       self.getActiveAppViewModel(viewModel => {
         if (viewModel && viewModel.selectedNotebook) {
           hueUtils.waitForObservable(viewModel.selectedNotebook, () => {
             if (viewModel.editorType() !== type) {
               viewModel.selectedNotebook().selectedSnippet(type);
-              viewModel.editorType(type);
+              if (!window.ENABLE_NOTEBOOK_2) {
+                viewModel.editorType(type);
+              }
               viewModel.newNotebook(type);
             }
           });
@@ -75,14 +78,23 @@ class OnePageViewModel {
       });
     });
 
-    huePubSub.subscribe('get.current.app.name', () => {
-      huePubSub.publish('set.current.app.name', self.currentApp());
+    huePubSub.subscribe('get.current.app.name', callback => {
+      callback(self.currentApp());
     });
 
-    huePubSub.subscribe('open.editor.query', uuid => {
+    huePubSub.subscribe('open.editor.query', resp => {
       self.loadApp('editor');
+      const data = { uuid: resp.history_uuid };
+      if (resp.handle && resp.handle.session_id) {
+        data['session'] = {
+          type: resp.handle.session_type,
+          id: resp.handle.session_id,
+          session_id: resp.handle.session_guid,
+          properties: []
+        };
+      }
       self.getActiveAppViewModel(viewModel => {
-        viewModel.openNotebook(uuid);
+        viewModel.openNotebook(data.uuid, null, null, null, data.session);
       });
     });
 
@@ -152,20 +164,20 @@ class OnePageViewModel {
     const loadedCss = [];
     const loadedApps = [];
 
-    $('script[src]').each(function() {
+    $('script[src]').each(function () {
       loadedJs.push($(this).attr('src'));
     });
 
-    $('link[href]').each(function() {
+    $('link[href]').each(function () {
       loadedCss.push($(this).attr('href'));
     });
 
-    const loadScript = function(scriptUrl) {
+    const loadScript = function (scriptUrl) {
       const deferred = $.Deferred();
       $.ajax({
         url: scriptUrl,
         converters: {
-          'text script': function(text) {
+          'text script': function (text) {
             return text;
           }
         }
@@ -180,7 +192,7 @@ class OnePageViewModel {
       return deferred.promise();
     };
 
-    const loadScripts = function(scriptUrls) {
+    const loadScripts = function (scriptUrls) {
       const promises = [];
       while (scriptUrls.length) {
         const scriptUrl = scriptUrls.shift();
@@ -192,7 +204,7 @@ class OnePageViewModel {
       return promises;
     };
 
-    const addGlobalCss = function($el) {
+    const addGlobalCss = function ($el) {
       const cssFile = $el.attr('href').split('?')[0];
       if (loadedCss.indexOf(cssFile) === -1) {
         loadedCss.push(cssFile);
@@ -207,23 +219,23 @@ class OnePageViewModel {
     };
 
     // Only load CSS and JS files that are not loaded before
-    self.processHeaders = function(response) {
+    self.processHeaders = function (response) {
       const promise = $.Deferred();
       const $rawHtml = $('<span>').html(response);
 
       const $allScripts = $rawHtml.find('script[src]');
       const scriptsToLoad = $allScripts
-        .map(function() {
+        .map(function () {
           return $(this).attr('src');
         })
         .toArray();
       $allScripts.remove();
 
-      $rawHtml.find('link[href]').each(function() {
+      $rawHtml.find('link[href]').each(function () {
         addGlobalCss($(this)); // Also removes the elements;
       });
 
-      $rawHtml.find('a[href]').each(function() {
+      $rawHtml.find('a[href]').each(function () {
         let link = $(this).attr('href');
         if (link.startsWith('/') && !link.startsWith('/hue')) {
           link = window.HUE_BASE_URL + '/hue' + link;
@@ -235,7 +247,7 @@ class OnePageViewModel {
 
       const scriptPromises = loadScripts(scriptsToLoad);
 
-      const evalScriptSync = function() {
+      const evalScriptSync = function () {
         if (scriptPromises.length) {
           // Evaluate the scripts in the order they were defined in the page
           const nextScriptPromise = scriptPromises.shift();
@@ -362,11 +374,11 @@ class OnePageViewModel {
             (baseURL.indexOf('?') > -1 ? '&' : '?') +
             'is_embeddable=true' +
             self.extraEmbeddableURLParams(),
-          beforeSend: function(xhr) {
+          beforeSend: function (xhr) {
             xhr.setRequestHeader('X-Requested-With', 'Hue');
           },
           dataType: 'html',
-          success: function(response, status, xhr) {
+          success: function (response, status, xhr) {
             const type = xhr.getResponseHeader('Content-Type');
             if (type.indexOf('text/') > -1) {
               window.clearAppIntervals(app);
@@ -394,7 +406,7 @@ class OnePageViewModel {
               window.location.href = window.HUE_BASE_URL + baseURL;
             }
           },
-          error: function(xhr) {
+          error: function (xhr) {
             console.error('Route loading problem', xhr);
             if ((xhr.status === 401 || xhr.status === 403) && app !== '403') {
               self.loadApp('403');
@@ -421,7 +433,7 @@ class OnePageViewModel {
       huePubSub.publish('resize.form.actions');
     };
 
-    self.dropzoneError = function(filename) {
+    self.dropzoneError = function (filename) {
       self.loadApp('importer');
       self.getActiveAppViewModel(vm => {
         vm.createWizard.source.path(DROPZONE_HOME_DIR + '/' + filename);
@@ -429,14 +441,14 @@ class OnePageViewModel {
       $('.dz-drag-hover').removeClass('dz-drag-hover');
     };
 
-    const openImporter = function(path) {
+    const openImporter = function (path) {
       self.loadApp('importer');
       self.getActiveAppViewModel(vm => {
         vm.createWizard.source.path(path);
       });
     };
 
-    self.dropzoneComplete = function(path) {
+    self.dropzoneComplete = function (path) {
       if (path.toLowerCase().endsWith('.csv')) {
         openImporter(path);
       } else {
@@ -450,7 +462,7 @@ class OnePageViewModel {
     huePubSub.subscribe('assist.dropzone.complete', self.dropzoneComplete);
 
     // prepend /hue to all the link on this page
-    $('a[href]').each(function() {
+    $('a[href]').each(function () {
       let link = $(this).attr('href');
       if (link.startsWith('/') && !link.startsWith('/hue')) {
         link = window.HUE_BASE_URL + '/hue' + link;
@@ -471,20 +483,20 @@ class OnePageViewModel {
       { url: '/about/admin_wizard', app: 'admin_wizard' },
       {
         url: '/accounts/logout',
-        app: function() {
+        app: function () {
           location.href = window.HUE_BASE_URL + '/accounts/logout';
         }
       },
       {
         url: '/dashboard/admin/collections',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/home/?type=search-dashboard');
         }
       },
       { url: '/dashboard/*', app: 'dashboard' },
       {
         url: '/desktop/api/desktop/api2/doc/export*',
-        app: function() {
+        app: function () {
           const documents = getUrlParameter('documents');
           location.href = window.HUE_BASE_URL + '/desktop/api2/doc/export?documents=' + documents;
         }
@@ -492,7 +504,7 @@ class OnePageViewModel {
       { url: '/desktop/dump_config', app: 'dump_config' },
       {
         url: '/desktop/debug/threads',
-        app: function() {
+        app: function () {
           self.loadApp('threads');
           self.getActiveAppViewModel(viewModel => {
             viewModel.fetchThreads();
@@ -501,14 +513,14 @@ class OnePageViewModel {
       },
       {
         url: '/gist',
-        app: function() {
+        app: function () {
           const uuid = getUrlParameter('uuid');
           location.href = '/desktop/api2/gist/open?uuid=' + uuid;
         }
       },
       {
         url: '/desktop/metrics',
-        app: function() {
+        app: function () {
           self.loadApp('metrics');
           self.getActiveAppViewModel(viewModel => {
             viewModel.fetchMetrics();
@@ -517,16 +529,13 @@ class OnePageViewModel {
       },
       {
         url: '/desktop/connectors',
-        app: function() {
+        app: function () {
           self.loadApp('connectors');
-          self.getActiveAppViewModel(viewModel => {
-            viewModel.fetchConnectors();
-          });
         }
       },
       {
         url: '/desktop/analytics',
-        app: function() {
+        app: function () {
           self.loadApp('analytics');
           self.getActiveAppViewModel(viewModel => {
             viewModel.fetchAnalytics();
@@ -535,13 +544,13 @@ class OnePageViewModel {
       },
       {
         url: '/desktop/download_logs',
-        app: function() {
+        app: function () {
           location.href = window.HUE_BASE_URL + '/desktop/download_logs';
         }
       },
       {
         url: '/editor',
-        app: function() {
+        app: function () {
           // Defer to allow window.location param update
           _.defer(() => {
             if (typeof self.embeddable_cache['editor'] === 'undefined') {
@@ -571,20 +580,20 @@ class OnePageViewModel {
       },
       {
         url: '/notebook/editor',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/editor?' + ctx.querystring);
         }
       },
       { url: '/filebrowser/view=*', app: 'filebrowser' },
       {
         url: '/filebrowser/download=*',
-        app: function(ctx) {
+        app: function (ctx) {
           location.href = window.HUE_BASE_URL + '/filebrowser/download=' + ctx.params[0];
         }
       },
       {
         url: '/filebrowser/*',
-        app: function() {
+        app: function () {
           page('/filebrowser/view=' + DROPZONE_HOME_DIR);
         }
       },
@@ -592,7 +601,7 @@ class OnePageViewModel {
       { url: '/help', app: 'help' },
       {
         url: '/home2*',
-        app: function(ctx) {
+        app: function (ctx) {
           page(ctx.path.replace(/home2/gi, 'home'));
         }
       },
@@ -606,7 +615,7 @@ class OnePageViewModel {
       { url: '/indexer/importer/', app: 'importer' },
       {
         url: '/indexer/importer/prefill/*',
-        app: function(ctx) {
+        app: function (ctx) {
           self.loadApp('importer');
           self.getActiveAppViewModel(viewModel => {
             const _params = ctx.path.match(
@@ -627,7 +636,7 @@ class OnePageViewModel {
       },
       {
         url: '/jobbrowser/jobs/job_*',
-        app: function(ctx) {
+        app: function (ctx) {
           page.redirect(
             '/jobbrowser#!id=application_' + _.trimRight(ctx.params[0], '/').split('/')[0]
           );
@@ -635,7 +644,7 @@ class OnePageViewModel {
       },
       {
         url: '/jobbrowser/jobs/application_*',
-        app: function(ctx) {
+        app: function (ctx) {
           page.redirect(
             '/jobbrowser#!id=application_' + _.trimRight(ctx.params[0], '/').split('/')[0]
           );
@@ -645,14 +654,14 @@ class OnePageViewModel {
       { url: '/logs', app: 'logs' },
       {
         url: '/metastore',
-        app: function() {
+        app: function () {
           page('/metastore/tables');
         }
       },
       { url: '/metastore/*', app: 'metastore' },
       {
         url: '/notebook',
-        app: function(ctx) {
+        app: function (ctx) {
           self.loadApp('notebook');
           const notebookId = hueUtils.getSearchParameter('?' + ctx.querystring, 'notebook');
           if (notebookId !== '') {
@@ -673,33 +682,33 @@ class OnePageViewModel {
       },
       {
         url: '/notebook/notebook',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/notebook?' + ctx.querystring);
         }
       },
       {
         url: '/notebook/notebooks',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/home/?' + ctx.querystring);
         }
       },
       {
         url: '/oozie/editor/bundle/list',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/home/?type=oozie-bundle');
         }
       },
       { url: '/oozie/editor/bundle/*', app: 'oozie_bundle' },
       {
         url: '/oozie/editor/coordinator/list',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/home/?type=oozie-coordinator');
         }
       },
       { url: '/oozie/editor/coordinator/*', app: 'oozie_coordinator' },
       {
         url: '/oozie/editor/workflow/list',
-        app: function(ctx) {
+        app: function (ctx) {
           page('/home/?type=oozie-workflow');
         }
       },
@@ -707,13 +716,13 @@ class OnePageViewModel {
       { url: '/oozie/list_oozie_info', app: 'oozie_info' },
       {
         url: '/oozie/list_oozie_sla',
-        app: function() {
+        app: function () {
           page.redirect('/jobbrowser/#!slas');
         }
       },
       {
         url: '/pig',
-        app: function() {
+        app: function () {
           self.loadApp('editor');
           self.changeEditorType('pig');
         }
@@ -721,7 +730,7 @@ class OnePageViewModel {
       { url: '/search/*', app: 'dashboard' },
       {
         url: '/security/hdfs',
-        app: function(ctx) {
+        app: function (ctx) {
           if (self.lastContext == null || ctx.path !== self.lastContext.path) {
             self.loadApp('security_hdfs');
           }
@@ -730,7 +739,7 @@ class OnePageViewModel {
       },
       {
         url: '/security/hive',
-        app: function(ctx) {
+        app: function (ctx) {
           if (self.lastContext == null || ctx.path !== self.lastContext.path) {
             self.loadApp('security_hive');
           }
@@ -739,7 +748,7 @@ class OnePageViewModel {
       },
       {
         url: '/security/hive2',
-        app: function(ctx) {
+        app: function (ctx) {
           if (self.lastContext == null || ctx.path !== self.lastContext.path) {
             self.loadApp('security_hive2');
           }
@@ -748,7 +757,7 @@ class OnePageViewModel {
       },
       {
         url: '/security/solr',
-        app: function(ctx) {
+        app: function (ctx) {
           if (self.lastContext == null || ctx.path !== self.lastContext.path) {
             self.loadApp('security_solr');
           }
@@ -757,13 +766,14 @@ class OnePageViewModel {
       },
       {
         url: '/security',
-        app: function() {
+        app: function () {
           page('/security/hive');
         }
       },
       { url: '/sqoop', app: 'sqoop' },
       { url: '/jobsub', app: 'jobsub' },
       { url: '/useradmin/configurations/', app: 'useradmin_configurations' },
+      { url: '/useradmin/organizations/', app: 'useradmin_organizations' },
       { url: '/useradmin/groups/', app: 'useradmin_groups' },
       { url: '/useradmin/groups/new', app: 'useradmin_newgroup' },
       { url: '/useradmin/groups/edit/:group', app: 'useradmin_editgroup' },
@@ -801,7 +811,7 @@ class OnePageViewModel {
       );
     });
 
-    huePubSub.subscribe('cluster.config.set.config', clusterConfig => {
+    const configUpdated = clusterConfig => {
       page('/', () => {
         page(clusterConfig['main_button_action'].page);
       });
@@ -810,7 +820,10 @@ class OnePageViewModel {
         self.loadApp('404');
       });
       page();
-    });
+    };
+
+    huePubSub.publish(GET_KNOWN_CONFIG_EVENT, configUpdated);
+    huePubSub.subscribe(CONFIG_REFRESHED_EVENT, configUpdated);
 
     huePubSub.subscribe('open.link', href => {
       if (href) {

@@ -503,6 +503,17 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
     huePubSub.publish('oozie.draggable.section.change', newVal);
   });
 
+  self.sharingEnabled = ko.observable(false);
+
+  var updateFromConfig = function (hueConfig) {
+    self.sharingEnabled(
+      hueConfig && (hueConfig.hue_config.is_admin || hueConfig.hue_config.enable_sharing)
+    );
+  };
+
+  updateFromConfig(window.getLastKnownConfig());
+  huePubSub.subscribe('cluster.config.set.config', updateFromConfig);
+
   self.canEdit = ko.mapping.fromJS(can_edit_json);
   self.isEditing = ko.observable(workflow_json.id == null);
   self.isEditing.subscribe(function (newVal) {
@@ -530,8 +541,8 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
   self.availableComputes = ko.observableArray();
   self.compute = ko.observable();
 
-  contextCatalog.getNamespaces({ sourceType: 'oozie' }).done(function (context) { self.availableNamespaces(context.namespaces) });
-  contextCatalog.getComputes({ sourceType: 'oozie' }).done(self.availableComputes);
+  contextCatalog.getNamespaces({ connector: { id: 'oozie' } }).done(function (context) { self.availableNamespaces(context.namespaces) });
+  contextCatalog.getComputes({ connector: { id: 'oozie' } }).done(self.availableComputes);
 
 
   self.previewColumns = ko.observable("");
@@ -1267,22 +1278,25 @@ var WorkflowEditorViewModel = function (layout_json, workflow_json, credentials_
       var _to = $("#wdg_" + (typeof toId == "function" ? toId() : toId));
       if (_from.length > 0 && _to.length > 0) {
         var $painter = $(document.body);
-        var correction = 0;
+        var heightCorrection = 0;
+        var widthCorrection = 0;
 
-        if ($('.oozie_workflowComponents:visible').length > 0) {
-          $painter = $('.oozie_workflowComponents:visible');
-          correction = $('.page-content').scrollTop();
+        var $workflowWidgets = $('.workflow-widgets');
+        if ($workflowWidgets.length > 0) {
+          $painter = $workflowWidgets;
+          heightCorrection = $workflowWidgets.scrollTop();
+          widthCorrection = $workflowWidgets.scrollLeft();
         }
 
         var _fromCenter = {
-          x: _from.position().left + _from.outerWidth() / 2,
-          y: _from.position().top + correction + _from.outerHeight() + 3
-        }
+          x: _from.position().left + widthCorrection + _from.outerWidth() / 2,
+          y: _from.position().top + heightCorrection + _from.outerHeight() + 3
+        };
 
         var _toCenter = {
-          x: _to.position().left + _to.outerWidth() / 2,
-          y: _to.position().top + correction - 5
-        }
+          x: _to.position().left + widthCorrection + _to.outerWidth() / 2,
+          y: _to.position().top + heightCorrection - 5
+        };
 
         var _curveCoords = {};
 

@@ -16,6 +16,7 @@
 
 import Notebook from './notebook';
 import sessionManager from 'apps/notebook2/execution/sessionManager';
+import * as hueConfig from 'utils/hueConfig';
 
 describe('snippet.js', () => {
   const viewModel = {
@@ -33,19 +34,38 @@ describe('snippet.js', () => {
     }
   };
 
+  const previousEnableNotebook2 = window.ENABLE_NOTEBOOK_2;
+
+  beforeAll(() => {
+    window.ENABLE_NOTEBOOK_2 = true;
+  });
+
+  afterAll(() => {
+    window.ENABLE_NOTEBOOK_2 = previousEnableNotebook2;
+  });
+
   beforeEach(() => {
     jest.spyOn(sessionManager, 'getSession').mockImplementation(() => Promise.resolve());
   });
 
   it('should serialize a snippet context to JSON', async () => {
+    const connectors = [{ id: 'hive', dialect: 'hive' }];
+    const spy = jest
+      .spyOn(hueConfig, 'findEditorConnector')
+      .mockImplementation(connectors.find.bind(connectors));
+
     const notebook = new Notebook(viewModel, {});
-    const snippet = notebook.addSnippet({ type: 'hive' });
+    const snippet = notebook.addSnippet({ connector: { dialect: 'hive', id: 'hive' } });
+
+    expect(spy).toHaveBeenCalled();
+
+    spy.mockRestore();
 
     const snippetContextJSON = snippet.toContextJson();
 
     const snippetContextRaw = JSON.parse(snippetContextJSON);
 
     expect(snippetContextRaw.id).toEqual(snippet.id());
-    expect(snippetContextRaw.type).toEqual('hive');
+    expect(snippetContextRaw.connector.dialect).toEqual('hive');
   });
 });

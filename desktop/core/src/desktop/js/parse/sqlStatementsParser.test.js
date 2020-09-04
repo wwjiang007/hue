@@ -17,7 +17,7 @@
 import sqlStatementsParser from './sqlStatementsParser';
 
 describe('sqlStatementsParser.js', () => {
-  const stringifySplitResult = function(result) {
+  const stringifySplitResult = function (result) {
     let s = '[';
     let first = true;
     result.forEach(entry => {
@@ -46,7 +46,7 @@ describe('sqlStatementsParser.js', () => {
     return s;
   };
 
-  const testParser = function(input, expectedOutput) {
+  const testParser = function (input, expectedOutput) {
     try {
       expectedOutput.forEach(entry => {
         entry.type = 'statement';
@@ -99,6 +99,40 @@ describe('sqlStatementsParser.js', () => {
       {
         statement: '/',
         location: { first_line: 1, first_column: 0, last_line: 1, last_column: 1 }
+      }
+    ]);
+  });
+
+  it('should split escaped \\ correctly in single quotes', () => {
+    testParser("SELECT '\\\\';\n SELECT 1;", [
+      {
+        type: 'statement',
+        statement: "SELECT '\\\\';",
+        location: { first_line: 1, first_column: 0, last_line: 1, last_column: 12 },
+        firstToken: 'SELECT'
+      },
+      {
+        type: 'statement',
+        statement: '\n SELECT 1;',
+        location: { first_line: 1, first_column: 12, last_line: 2, last_column: 10 },
+        firstToken: 'SELECT'
+      }
+    ]);
+  });
+
+  it('should split escaped \\ correctly in double quotes', () => {
+    testParser('SELECT "\\\\";\n SELECT 1;', [
+      {
+        type: 'statement',
+        statement: 'SELECT "\\\\";',
+        location: { first_line: 1, first_column: 0, last_line: 1, last_column: 12 },
+        firstToken: 'SELECT'
+      },
+      {
+        type: 'statement',
+        statement: '\n SELECT 1;',
+        location: { first_line: 1, first_column: 12, last_line: 2, last_column: 10 },
+        firstToken: 'SELECT'
       }
     ]);
   });

@@ -109,7 +109,8 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
               fixedPostfix: $root.collection.engine() !== 'solr' ? function() { return ' GROUP BY 1;' } : undefined,
               namespace: $root.collection.activeNamespace,
               compute: $root.collection.activeCompute,
-              database: function () { return $root.collection.name().split('.')[0] },
+              database: $root.collection.simpleAceDatabase,
+              disableWorkers: true,
               singleLine: true }
             }"></div>
 ##             <input data-bind="clearable: q, valueUpdate:'afterkeydown', typeahead: { target: q, nonBindableSource: queryTypeahead, multipleValues: true, multipleValuesSeparator: ':', extraKeywords: 'AND OR TO', completeSolrRanges: true }, css: {'input-small': $root.query.qs().length > 1, 'flat-left': $index() === 0, 'input-xlarge': $root.collection.supportAnalytics()}" maxlength="4096" type="text" class="search-query">
@@ -201,11 +202,13 @@ from dashboard.conf import USE_GRIDSTER, USE_NEW_ADD_METHOD, HAS_REPORT_ENABLED,
             </a>
           </li>
           <li data-bind="visible: columns().length != 0" class="divider"></li>
+          <!-- ko if: $root.sharingEnabled -->
           <li data-bind="visible: isSaved()">
             <a class="share-link" data-bind="click: prepareShareModal, css: {'isShared': isShared()}">
               <i class="fa fa-fw fa-users"></i> ${ _('Share') }
             </a>
           </li>
+          <!-- /ko -->
           %if not is_embeddable:
             <li>
               <a class="pointer" data-bind="click: function(){ hueUtils.goFullScreen(); $root.isEditing(false); $root.isPlayerMode(true); }">
@@ -800,7 +803,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <!-- /ko -->
        <!-- /ko -->
        <!-- ko ifnot: properties.facets()[0].multiselect -->
-        <select data-bind="selectize: $parent.counts, optionsText: 'text', optionsValue:'value', value: $parent.countsSelected"/>
+      <select data-bind="selectize: $parent.counts, optionsText: 'text', optionsValue:'value', value: $parent.countsSelected"></select>
        <!-- /ko -->
       <!-- /ko -->
       <!-- ko if: properties.facets()[0].type() == 'range' -->
@@ -1270,7 +1273,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
         onSelectRange: function(from, to){ $root.collection.selectTimelineFacet({from: from, to: to, cat: field, widget_id: $parent.id()}) },
         onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); $root.collection.getFacetById($parent.id()).properties.enableSelection(state.selectionEnabled); },
         onClick: function(d){ $root.query.selectRangeFacet({count: d.obj.value, widget_id: $parent.id(), from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
-        onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}"/>
+        onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}"></div>
       <div class="clearfix"></div>
       </div>
     <!-- /ko -->
@@ -1364,7 +1367,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
       onSelectRange: function(from, to){ searchViewModel.collection.selectTimelineFacet({from: from, to: to, cat: field, widget_id: $parent.id()}) },
       onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); },
       type: $root.collection.getFacetById($parent.id()).properties.timelineChartType }"
-    />
+    ></div>
     </div>
     <div class="clearfix"></div>
     <!-- /ko -->
@@ -1634,7 +1637,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
               onSelectRange: function(from, to){ searchViewModel.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
               onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); },
               type: $root.collection.getFacetById($parent.id()).properties.timelineChartType }"
-            />
+            ></div>
             <div class="clearfix"></div>
           <!-- /ko -->
 
@@ -1654,7 +1657,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
               },
               onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); },
               type: $root.collection.getFacetById($parent.id()).properties.timelineChartType }"
-            />
+            ></div>
             <div class="clearfix"></div>
           <!-- /ko -->
 
@@ -1670,7 +1673,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             onSelectRange: function(from, to){ $root.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
             onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
             onClick: function(d){ $root.query.selectRangeFacet({count: d.obj.value, widget_id: $parent.id(), from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
-            onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}" />
+            onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}" ></div>
             <div class="clearfix"></div>
           <!-- /ko -->
 
@@ -1686,7 +1689,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
               onClick: function(d) {
                 $root.query.togglePivotFacet({facet: {'fq_fields': d.fields, 'fq_values': d.value}, widget_id: id()});
               },
-              onComplete: function(){ var widget = searchViewModel.getWidgetById($parent.id()); if (widget != null) { widget.isLoading(false)}; }}" />
+              onComplete: function(){ var widget = searchViewModel.getWidgetById($parent.id()); if (widget != null) { widget.isLoading(false)}; }}"></div>
            <!-- /ko -->
         <!-- /ko -->
 
@@ -1703,7 +1706,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             onSelectRange: function(from, to){ $root.collection.selectTimelineFacet2({from: from, to: to, cat: field, widget_id: $parent.id()}) },
             onStateChange: function(state){ $root.collection.getFacetById($parent.id()).properties.stacked(state.stacked); },
             onClick: function(d){ $root.query.selectRangeFacet({count: d.obj.value, widget_id: $parent.id(), from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
-            onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}" />
+            onComplete: function(){ $root.getWidgetById($parent.id()).isLoading(false); }}"></div>
           <div class="clearfix"></div>
           <!-- /ko -->
         <!-- /ko -->
@@ -1714,7 +1717,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             transformer: rangePieChartDataTransformer,
             maxWidth: 250,
             onClick: function(d){ searchViewModel.query.selectRangeFacet({count: d.data.obj.value, widget_id: d.data.obj.widget_id, from: d.data.obj.from, to: d.data.obj.to, cat: d.data.obj.field}) },
-            onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}" />
+            onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"></div>
           <div class="clearfix"></div>
           <!-- /ko -->
 
@@ -1724,7 +1727,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             rangeUp: true,
             maxWidth: 250,
             onClick: function(d){ searchViewModel.query.selectRangeUpFacet({count: d.data.obj.value, widget_id: d.data.obj.widget_id, from: d.data.obj.from, to: d.data.obj.to, cat: d.data.obj.field, 'exclude': false, is_up: d.data.obj.is_up}) },
-            onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}" />
+            onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"></div>
           <div class="clearfix"></div>
           <!-- /ko -->
 
@@ -1733,7 +1736,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             transformer: pieChartDataTransformer,
             maxWidth: 250,
             onClick: function(d){ $parent.dimension() == 2 ? $root.query.togglePivotFacet({facet: d.data.obj, widget_id: id()}) : searchViewModel.query.toggleFacet({facet: d.data.obj, widget_id: d.data.obj.widget_id}) },
-            onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}" />
+            onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"></div>
           <div class="clearfix"></div>
           <!-- /ko -->
         <!-- /ko -->
@@ -1762,7 +1765,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <!-- /ko -->
           <!-- ko if: template.chartSettings.chartType() == window.HUE_CHARTS.TYPES.GRADIENTMAP -->
           <div data-bind="attr:{'id': 'gradientMapChart_'+id()}, mapChart: {data: {counts: $parent.results(), scope: template.chartSettings.chartScope(), snippet: $data, widget_id: $parent.id(), chartX: template.chartSettings.chartX, chartY: template.chartSettings.chartYSingle},
-              transformer: gradientMapChartDataTransformerGrid, maxWidth: 750, isScale: true}" />
+              transformer: gradientMapChartDataTransformerGrid, maxWidth: 750, isScale: true}"></div>
           <!-- /ko -->
           <div class="clearfix"></div>
         <!-- /ko -->
@@ -1790,7 +1793,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
           <!-- /ko -->
           <!-- ko if: $root.collection.template.chartSettings.chartType() == window.HUE_CHARTS.TYPES.GRADIENTMAP -->
           <div data-bind="attr:{'id': 'gradientMapChart_'+id()}, mapChart: {data: {counts: $root.results(), scope: $root.collection.template.chartSettings.chartScope(), snippet: $data},
-              transformer: gradientMapChartDataTransformerGrid, maxWidth: 750, isScale: true}" />
+              transformer: gradientMapChartDataTransformerGrid, maxWidth: 750, isScale: true}"></div>
           <div class="clearfix"></div>
           <!-- /ko -->
         <!-- /ko -->
@@ -1889,7 +1892,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
       onClick: function(d){ searchViewModel.query.selectRangeFacet({count: d.obj.value, widget_id: d.obj.widget_id, from: d.obj.from, to: d.obj.to, cat: d.obj.field}) },
       onSelectRange: function(from, to){ searchViewModel.collection.selectTimelineFacet({from: from, to: to, cat: field, widget_id: $parent.id()}) },
       onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); huePubSub.publish('gridster.autoheight'); }}"
-    />
+    ></div>
     </div>
     <div class="clearfix"></div>
   </div>
@@ -1911,7 +1914,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
         transformer: rangePieChartDataTransformer,
         maxWidth: 250,
         onClick: function(d){ searchViewModel.query.selectRangeFacet({count: d.data.obj.value, widget_id: d.data.obj.widget_id, from: d.data.obj.from, to: d.data.obj.to, cat: d.data.obj.field}) },
-        onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}" />
+        onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"></div>
       <div class="clearfix"></div>
       <!-- /ko -->
       <!-- ko if: type() == 'range-up' -->
@@ -1920,7 +1923,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
         rangeUp: true,
         maxWidth: 250,
         onClick: function(d){ searchViewModel.query.selectRangeUpFacet({count: d.data.obj.value, widget_id: d.data.obj.widget_id, from: d.data.obj.from, to: d.data.obj.to, cat: d.data.obj.field, 'exclude': false, is_up: d.data.obj.is_up}) },
-        onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}" />
+        onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"></div>
       <div class="clearfix"></div>
       <!-- /ko -->
       <!-- ko if: type().indexOf('range') == -1 -->
@@ -1928,7 +1931,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
         transformer: pieChartDataTransformer,
         maxWidth: 250,
         onClick: function(d){ searchViewModel.query.toggleFacet({facet: d.data.obj, widget_id: d.data.obj.widget_id}) },
-        onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}" />
+        onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"></div>
       <div class="clearfix"></div>
       <!-- /ko -->
     </div>
@@ -2017,7 +2020,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             $root.query.togglePivotFacet({facet: d.obj, widget_id: id()});
           },
           onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"
-        />
+        ></div>
       <div class="clearfix"></div>
       <!-- /ko -->
     </div>
@@ -2048,7 +2051,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             $root.query.togglePivotFacet({facet: d.obj, widget_id: id()});
           },
           onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"
-        />
+        ></div>
       <div class="clearfix"></div>
       <!-- /ko -->
     </div>
@@ -2121,7 +2124,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
             $root.query.togglePivotFacet({facet: d.obj, widget_id: id()});
           },
           onComplete: function(){ searchViewModel.getWidgetById($parent.id()).isLoading(false); }}"
-        />
+        ></div>
         </div>
       <div class="clearfix"></div>
       <!-- /ko -->
@@ -2182,7 +2185,8 @@ ${ dashboard.layout_skeleton(suffix='search') }
         fixedPostfix: $root.collection.engine() !== 'solr' ? function() { return ' GROUP BY 1;' } : undefined,
         namespace: $root.collection.activeNamespace,
         compute: $root.collection.activeCompute,
-        database: function () { return $root.collection.name().split('.')[0] },
+        database: $root.collection.simpleAceDatabase,
+        disableWorkers: true,
         singleLine: true }
       }"></div>
     </span>
@@ -2263,7 +2267,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
       <select data-bind="selectize: facetFieldsNames, value: $parent.field, optionsValue: 'name', optionsText: 'name', optionsCaption: '${ _ko('Field...') }'" class="hit-options input-small" style="margin-bottom: 0"></select>
         <!-- ko if: $parent.field -->
         <a class="inactive-action context-popover-icon" href="javascript:void(0);" data-bind="sqlContextPopover: { sourceType: 'solr', namespace: $root.collection.activeNamespace(), compute: $root.collection.activeCompute(), path: 'default.' + $root.collection.name() + '.' + $parent.field()  }">
-          <i class="fa fa-fw fa-info" title="${_('Show Details')}"/>
+          <i class="fa fa-fw fa-info" title="${_('Show Details')}"></i>
         </a>
         <!-- /ko -->
       <!-- /ko -->
@@ -2530,7 +2534,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
         onClick: function(d) {
           $root.query.togglePivotFacet({facet: {'fq_fields': d.fields, 'fq_values': d.value}, widget_id: id()});
         },
-        onComplete: function(){ var widget = searchViewModel.getWidgetById($parent.id()); if (widget != null) { widget.isLoading(false)}; } }" />
+        onComplete: function(){ var widget = searchViewModel.getWidgetById($parent.id()); if (widget != null) { widget.isLoading(false)}; } }"></div>
       <div class="clearfix"></div>
     </div>
   </div>
@@ -2730,7 +2734,7 @@ ${ dashboard.layout_skeleton(suffix='search') }
         <li data-bind="visibleOnHover: { 'selector': '.entity-field-picker' }">
             <span class="badge badge-info" data-bind="text: name(), attr: {'title': type()}, click: addFacetDemiModalFieldPreview"></span>
             <a class="entity-field-picker inactive-action margin-right-10" href="javascript:void(0);" data-bind="sqlContextPopover: { sourceType: 'solr', namespace: $root.collection.activeNamespace(), compute: $root.collection.activeCompute(), path: 'default.' + $root.collection.name() + '.' + name()  }" style="margin-left: 2px;">
-              <i class="fa fa-info" title="${_('Show Details')}"/>
+              <i class="fa fa-info" title="${_('Show Details')}"></i>
             </a>
         </li>
       </ul>

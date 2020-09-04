@@ -126,15 +126,9 @@ class DownloadResultModal {
     $('<input type="hidden" name="csrfmiddlewaretoken" />')
       .val(window.CSRF_TOKEN)
       .appendTo($downloadForm);
-    $('<input type="hidden" name="notebook" />')
-      .val(jsonContext.notebook)
-      .appendTo($downloadForm);
-    $('<input type="hidden" name="snippet" />')
-      .val(jsonContext.snippet)
-      .appendTo($downloadForm);
-    $('<input type="hidden" name="format" />')
-      .val(format)
-      .appendTo($downloadForm);
+    $('<input type="hidden" name="notebook" />').val(jsonContext.notebook).appendTo($downloadForm);
+    $('<input type="hidden" name="snippet" />').val(jsonContext.snippet).appendTo($downloadForm);
+    $('<input type="hidden" name="format" />').val(format).appendTo($downloadForm);
     this.$downloadProgressModal.append($downloadForm);
     $downloadForm.submit();
   }
@@ -159,7 +153,7 @@ componentUtils.registerComponent(NAME, undefined, TEMPLATE).then(() => {
     const $downloadProgressModal = $(
       '<div id="downloadProgressModal" data-bind="component: { name: \'' +
         NAME +
-        '\', params: $data }" data-keyboard="true" class="modal hide fade downloadProgressModal" tabindex="-1"/>'
+        '\', params: $data }" data-keyboard="true" class="modal hide fade downloadProgressModal" tabindex="-1"></div>'
     );
     $('body').append($downloadProgressModal);
 

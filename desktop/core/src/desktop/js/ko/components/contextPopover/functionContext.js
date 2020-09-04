@@ -17,26 +17,55 @@
 import * as ko from 'knockout';
 
 import I18n from 'utils/i18n';
-import { SqlFunctions } from 'sql/sqlFunctions';
+import { findUdf } from 'sql/reference/sqlReferenceRepository';
+
+const TEMPLATE_NAME = 'context-popover-function-details';
+
+// prettier-ignore
+export const FUNCTION_CONTEXT_TEMPLATE = `
+<script type="text/html" id="context-popover-function-details">
+  <!-- ko ifnot: details -->
+  <div class="context-popover-flex-fill">
+    <div class="alert">${ I18n('Could not find details for the function') } <span data-bind="text: $parents[2].title"></span>()</div>
+  </div>
+  <!-- /ko -->
+  <div class="context-popover-flex-fill" data-bind="with: details">
+    <div style="padding: 8px">
+      <p style="margin: 10px 10px 18px 10px;"><span style="white-space: pre;" class="monospace" data-bind="text: signature"></span></p>
+      <p><span data-bind="text: description"></span></p>
+    </div>
+  </div>
+</script>
+`;
 
 class FunctionContextTabs {
-  constructor(data, sourceType) {
-    const self = this;
-    self.func = ko.observable({
-      details: SqlFunctions.findFunction(sourceType, data.function),
-      loading: ko.observable(false),
-      hasErrors: ko.observable(false)
-    });
+  constructor(data, connector) {
+    this.details = ko.observable();
+    this.loading = ko.observable(true);
+    this.hasErrors = ko.observable(false);
 
-    self.tabs = [
+    findUdf(connector, data.function)
+      .then(udfs => {
+        // TODO: Support showing multiple UDFs with the same name but different category in the context popover.
+        // For instance, trunc appears both for dates with one description and for numbers with another description.
+        this.details = udfs.length ? udfs[0] : undefined;
+      })
+      .catch(() => {
+        this.hasErrors(true);
+      })
+      .finally(() => {
+        this.loading(false);
+      });
+
+    this.tabs = [
       {
         id: 'details',
         label: I18n('Details'),
-        template: 'context-popover-function-details',
-        templateData: self.func
+        template: TEMPLATE_NAME,
+        templateData: this
       }
     ];
-    self.activeTab = ko.observable('details');
+    this.activeTab = ko.observable('details');
   }
 }
 

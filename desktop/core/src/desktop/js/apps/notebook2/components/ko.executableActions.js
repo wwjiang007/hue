@@ -17,9 +17,11 @@
 import * as ko from 'knockout';
 
 import componentUtils from 'ko/components/componentUtils';
+import DisposableComponent from 'ko/components/DisposableComponent';
+import huePubSub from 'utils/huePubSub';
 import I18n from 'utils/i18n';
 import { EXECUTABLE_UPDATED_EVENT, EXECUTION_STATUS } from 'apps/notebook2/execution/executable';
-import DisposableComponent from 'ko/components/DisposableComponent';
+import sessionManager from 'apps/notebook2/execution/sessionManager';
 
 export const NAME = 'executable-actions';
 
@@ -29,27 +31,38 @@ export const EXECUTE_ACTIVE_EXECUTABLE_EVENT = 'executable.active.executable';
 const TEMPLATE = `
 <div class="snippet-execute-actions" data-test="${ NAME }">
   <div class="btn-group">
-    <!-- ko if: status() !== '${ EXECUTION_STATUS.running }' && !waiting() -->
-    <button class="btn btn-primary btn-mini btn-execute disable-feedback" data-test="execute" data-bind="click: execute, disable: disabled"><i class="fa fa-play fa-fw"></i> ${I18n(
-      'Execute'
-    )}</button>
+    <!-- ko if: showLoading -->
+    <button class="btn btn-primary btn-mini btn-execute disable-feedback" disabled title="${ I18n('Creating session') }">
+      <i class="fa fa-fw fa-spinner fa-spin"></i> ${ I18n('Loading') }
+    </button>
     <!-- /ko -->
-    <!-- ko if: status() === '${ EXECUTION_STATUS.running }' || waiting() -->
+    <!-- ko if: showExecute -->
+    <button class="btn btn-primary btn-mini btn-execute disable-feedback" data-test="execute" data-bind="click: execute, disable: disabled">
+      <i class="fa fa-fw fa-play"></i> ${ I18n('Execute') }
+    </button>
+    <!-- /ko -->
+    <!-- ko if: showStop -->
       <!-- ko ifnot: stopping -->
-      <button class="btn btn-danger btn-mini btn-execute disable-feedback" data-test="stop" data-bind="click: stop"><i class="fa fa-stop fa-fw"></i>
-      <!-- ko ifnot: waiting -->
-        ${ I18n('Stop') }
-      <!-- /ko --> 
-      <!-- ko if: waiting -->
-        ${ I18n('Stop batch') }
-      <!-- /ko --> 
+      <button class="btn btn-danger btn-mini btn-execute disable-feedback" data-test="stop" data-bind="click: stop">
+        <i class="fa fa-stop fa-fw"></i>
+        <!-- ko ifnot: waiting -->
+          ${ I18n('Stop') }
+        <!-- /ko -->
+        <!-- ko if: waiting -->
+          ${ I18n('Stop batch') }
+        <!-- /ko -->
       </button>
       <!-- /ko -->
       <!-- ko if: stopping -->
-      <button class="btn btn-primary btn-mini btn-execute disable-feedback disabled"><i class="fa fa-spinner fa-spin fa-fw"></i>${ I18n('Stopping') }</button>
+      <button class="btn btn-primary btn-mini btn-execute disable-feedback disabled">
+        <i class="fa fa-fw fa-spinner fa-spin"></i> ${ I18n('Stopping') }
+      </button>
       <!-- /ko -->
     <!-- /ko -->
   </div>
+  <form autocomplete="off" class="inline-block margin-left-10">
+    <input class="input-small limit-input" type="number" ${ window.PREVENT_AUTOFILL_INPUT_ATTRS } placeholder="${ I18n('Limit') }" data-bind="textInput: limit, autogrowInput: { minWidth: 50, maxWidth: 80, comfortZone: 25 }">
+  </form>
 </div>
 `;
 
@@ -64,6 +77,16 @@ class ExecutableActions extends DisposableComponent {
     this.partOfRunningExecution = ko.observable(false);
     this.beforeExecute = params.beforeExecute;
 
+    this.lastSession = ko.observable();
+
+    this.limit = ko.observable();
+
+    this.subscribe(this.limit, newVal => {
+      if (this.activeExecutable()) {
+        this.activeExecutable().executor.defaultLimit(newVal);
+      }
+    });
+
     this.waiting = ko.pureComputed(
       () =>
         this.activeExecutable() &&
@@ -71,10 +94,28 @@ class ExecutableActions extends DisposableComponent {
         this.partOfRunningExecution()
     );
 
+    this.showLoading = ko.pureComputed(() => !this.lastSession());
+
+    this.showExecute = ko.pureComputed(
+      () =>
+        !this.showLoading() &&
+        this.status() !== EXECUTION_STATUS.running &&
+        this.status() !== EXECUTION_STATUS.streaming &&
+        !this.waiting()
+    );
+
+    this.showStop = ko.pureComputed(
+      () =>
+        this.status() === EXECUTION_STATUS.running ||
+        this.status() === EXECUTION_STATUS.streaming ||
+        this.waiting()
+    );
+
     this.disabled = ko.pureComputed(() => {
       const executable = this.activeExecutable();
 
       return (
+        !this.lastSession() ||
         !executable ||
         (executable.parsedStatement && WHITE_SPACE_REGEX.test(executable.parsedStatement.statement))
       );
@@ -93,11 +134,24 @@ class ExecutableActions extends DisposableComponent {
     });
 
     this.subscribe(this.activeExecutable, this.updateFromExecutable.bind(this));
+
+    if (this.activeExecutable()) {
+      this.updateFromExecutable(this.activeExecutable());
+    }
   }
 
   updateFromExecutable(executable) {
+    const waitForSession =
+      !this.lastSession() || this.lastSession().type !== executable.executor.connector().type;
     this.status(executable.status);
     this.partOfRunningExecution(executable.isPartOfRunningExecution());
+    this.limit(executable.executor.defaultLimit());
+    if (waitForSession) {
+      this.lastSession(undefined);
+      sessionManager
+        .getSession({ type: executable.executor.connector().id })
+        .then(this.lastSession);
+    }
   }
 
   async stop() {
@@ -110,6 +164,7 @@ class ExecutableActions extends DisposableComponent {
   }
 
   async execute() {
+    huePubSub.publish('hue.ace.autocompleter.hide');
     if (this.beforeExecute) {
       await this.beforeExecute();
     }
@@ -118,13 +173,6 @@ class ExecutableActions extends DisposableComponent {
       await executable.reset();
       executable.execute();
     }
-  }
-
-  executeNext() {
-    if (this.activeExecutable() && this.activeExecutable().nextExecutable) {
-      this.activeExecutable(this.activeExecutable().nextExecutable);
-    }
-    this.execute();
   }
 }
 

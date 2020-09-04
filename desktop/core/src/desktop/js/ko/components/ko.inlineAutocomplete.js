@@ -24,6 +24,7 @@ import I18n from 'utils/i18n';
 
 export const NAME = 'inline-autocomplete';
 
+// prettier-ignore
 const TEMPLATE = `
   <div class="inline-autocomp-container">
     <div>
@@ -36,7 +37,7 @@ const TEMPLATE = `
         <!-- /ko -->
       <!-- /ko-->
       <form autocomplete="off">
-        <input class="inline-autocomp-input" autocorrect="off" autocomplete="do-not-autocomplete" autocapitalize="off" spellcheck="false" type="text" data-bind="
+        <input class="inline-autocomp-input" ${ window.PREVENT_AUTOFILL_INPUT_ATTRS } type="text" data-bind="
           attr: { 'placeHolder' : hasFocus() ? '' : placeHolder },
           textInput: searchInput,
           hasFocus: hasFocus,
@@ -81,7 +82,7 @@ class InlineAutocomplete {
     });
     self.autocompleteFromEntries =
       params.autocompleteFromEntries ||
-      function() {
+      function () {
         return [];
       };
     self.facets = params.facets || [];
@@ -101,23 +102,23 @@ class InlineAutocomplete {
     self.facetSuggestions = ko.observableArray();
     self.facetDropDownVisible = params.facetDropDownVisible || ko.observable(false);
 
-    self.facetClicked = function(facet) {
+    self.facetClicked = function (facet) {
       self.searchInput(facet.value);
       self.facetDropDownVisible(false);
     };
 
-    self.facetDropDownOnEnter = function(facet) {
+    self.facetDropDownOnEnter = function (facet) {
       if (facet) {
         self.searchInput(facet.value);
       }
       self.facetDropDownVisible(false);
     };
 
-    self.facetDropDownOnEsc = function() {
+    self.facetDropDownOnEsc = function () {
       self.facetDropDownVisible(false);
     };
 
-    self.facetDropDownOnSelected = function(facet) {
+    self.facetDropDownOnSelected = function (facet) {
       if (facet) {
         const suggestions = self.suggestions();
         for (let i = 0; i < suggestions.length; i++) {
@@ -129,7 +130,7 @@ class InlineAutocomplete {
       }
     };
 
-    self.facetDropDownMouseDown = function(data, evt) {
+    self.facetDropDownMouseDown = function (data, evt) {
       evt.preventDefault(); // Prevent focus loss on the input when an entry is clicked
       return false;
     };
@@ -155,7 +156,7 @@ class InlineAutocomplete {
       querySpecSub.dispose();
     });
 
-    self.onClear = function() {
+    self.onClear = function () {
       if (params.onClear) {
         params.onClear();
       }
@@ -199,7 +200,7 @@ class InlineAutocomplete {
       inputSub.dispose();
     });
 
-    const onKeyDown = function(event) {
+    const onKeyDown = function (event) {
       if (!self.hasFocus()) {
         return;
       }

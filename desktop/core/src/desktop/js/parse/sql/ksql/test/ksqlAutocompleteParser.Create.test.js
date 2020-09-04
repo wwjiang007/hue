@@ -18,7 +18,7 @@ import ksqlAutocompleteParser from '../ksqlAutocompleteParser';
 
 describe('ksqlAutocompleteParser.js CREATE statements', () => {
   beforeAll(() => {
-    ksqlAutocompleteParser.yy.parseError = function(msg) {
+    ksqlAutocompleteParser.yy.parseError = function (msg) {
       throw Error(msg);
     };
   });
@@ -50,7 +50,7 @@ describe('ksqlAutocompleteParser.js CREATE statements', () => {
     assertAutoComplete({
       beforeCursor: 'CREATE ',
       afterCursor: '',
-      containsKeywords: ['DATABASE', 'ROLE', 'SCHEMA', 'TABLE', 'VIEW'],
+      containsKeywords: ['DATABASE', 'SCHEMA', 'TABLE', 'VIEW'],
       expectedResult: {
         lowerCase: false
       }
@@ -98,20 +98,6 @@ describe('ksqlAutocompleteParser.js CREATE statements', () => {
         expectedResult: {
           lowerCase: false,
           suggestKeywords: ['IF NOT EXISTS']
-        }
-      });
-    });
-  });
-
-  describe('CREATE ROLE', () => {
-    it('should handle "CREATE ROLE boo; |"', () => {
-      assertAutoComplete({
-        beforeCursor: 'CREATE ROLE boo; ',
-        afterCursor: '',
-        noErrors: true,
-        containsKeywords: ['SELECT'],
-        expectedResult: {
-          lowerCase: false
         }
       });
     });

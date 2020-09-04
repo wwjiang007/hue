@@ -17,7 +17,7 @@
 import hiveAutocompleteParser from '../hiveAutocompleteParser';
 describe('hiveAutocompleteParser.js', () => {
   beforeAll(() => {
-    hiveAutocompleteParser.yy.parseError = function(msg) {
+    hiveAutocompleteParser.yy.parseError = function (msg) {
       throw Error(msg);
     };
   });
@@ -207,68 +207,6 @@ describe('hiveAutocompleteParser.js', () => {
         containsKeywords: ['SELECT'],
         expectedResult: {
           lowerCase: false
-        }
-      });
-    });
-  });
-
-  describe('EXPLAIN', () => {
-    it('should handle "EXPLAIN DEPENDENCY SELECT key, count(1) FROM srcpart WHERE ds IS NOT NULL GROUP BY key;|"', () => {
-      assertAutoComplete({
-        beforeCursor:
-          'EXPLAIN DEPENDENCY SELECT key, count(1) FROM srcpart WHERE ds IS NOT NULL GROUP BY key;',
-        afterCursor: '',
-        noErrors: true,
-        containsKeywords: ['SELECT'],
-        expectedResult: {
-          lowerCase: false
-        }
-      });
-    });
-
-    it('should suggest keywords for "|"', () => {
-      assertAutoComplete({
-        beforeCursor: '',
-        afterCursor: '',
-        containsKeywords: ['EXPLAIN'],
-        expectedResult: {
-          lowerCase: false
-        }
-      });
-    });
-
-    it('should suggest keywords for "EXPLAIN |"', () => {
-      assertAutoComplete({
-        beforeCursor: 'EXPLAIN ',
-        afterCursor: '',
-        containsKeywords: ['AUTHORIZATION', 'DEPENDENCY', 'EXTENDED', 'SELECT'],
-        doesNotContainKeywords: ['EXPLAIN'],
-        expectedResult: {
-          lowerCase: false
-        }
-      });
-    });
-
-    it('should suggest keywords for "EXPLAIN AUTHORIZATION |"', () => {
-      assertAutoComplete({
-        beforeCursor: 'EXPLAIN AUTHORIZATION ',
-        afterCursor: '',
-        containsKeywords: ['SELECT'],
-        doesNotContainKeywords: ['AUTHORIZATION', 'DEPENDENCY', 'EXTENDED', 'EXPLAIN'],
-        expectedResult: {
-          lowerCase: false
-        }
-      });
-    });
-
-    it('should suggest tables for "EXPLAIN EXTENDED SELECT * FROM |"', () => {
-      assertAutoComplete({
-        beforeCursor: 'EXPLAIN EXTENDED SELECT * FROM ',
-        afterCursor: '',
-        expectedResult: {
-          lowerCase: false,
-          suggestTables: {},
-          suggestDatabases: { appendDot: true }
         }
       });
     });

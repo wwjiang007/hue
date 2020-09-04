@@ -25,6 +25,11 @@ import hueUtils from 'utils/hueUtils';
 
 import Session from 'apps/notebook/session';
 import Snippet from 'apps/notebook/snippet';
+import {
+  ASSIST_DB_PANEL_IS_READY_EVENT,
+  ASSIST_IS_DB_PANEL_READY_EVENT,
+  ASSIST_SET_DATABASE_EVENT
+} from 'ko/components/assist/events';
 
 const NOTEBOOK_MAPPING = {
   ignore: [
@@ -147,7 +152,7 @@ class Notebook {
     self.sessions = komapping.fromJS(
       typeof notebook.sessions != 'undefined' && notebook.sessions != null ? notebook.sessions : [],
       {
-        create: function(value) {
+        create: function (value) {
           return new Session(vm, value.data);
         }
       }
@@ -227,7 +232,7 @@ class Notebook {
     });
 
     self.isExecutingAll = ko.observable(!!notebook.isExecutingAll);
-    self.cancelExecutingAll = function() {
+    self.cancelExecutingAll = function () {
       const index = self.executingAllIndex();
       if (self.isExecutingAll() && self.snippets()[index]) {
         self.snippets()[index].cancel();
@@ -242,7 +247,7 @@ class Notebook {
 
     self.canSave = vm.canSave;
 
-    self.getSession = function(session_type) {
+    self.getSession = function (session_type) {
       let _s = null;
       $.each(self.sessions(), (index, s) => {
         if (s.type() == session_type) {
@@ -253,14 +258,14 @@ class Notebook {
       return _s;
     };
 
-    self.getSnippets = function(type) {
+    self.getSnippets = function (type) {
       return $.grep(self.snippets(), snippet => {
         return snippet.type() == type;
       });
     };
 
     self.unloaded = ko.observable(false);
-    self.unload = function() {
+    self.unload = function () {
       self.unloaded(true);
       let currentQueries = null;
       self.snippets().forEach(snippet => {
@@ -275,7 +280,7 @@ class Notebook {
       return currentQueries;
     };
 
-    self.restartSession = function(session, callback) {
+    self.restartSession = function (session, callback) {
       if (session.restarting()) {
         return;
       }
@@ -305,7 +310,7 @@ class Notebook {
       });
     };
 
-    self.addSession = function(session) {
+    self.addSession = function (session) {
       const toRemove = [];
       $.each(self.sessions(), (index, s) => {
         if (s.type() == session.type()) {
@@ -320,22 +325,25 @@ class Notebook {
       self.sessions.push(session);
     };
 
-    self.addSnippet = function(snippet, skipSession) {
+    self.addSnippet = function (snippet, skipSession) {
       const _snippet = new Snippet(vm, self, snippet);
       self.snippets.push(_snippet);
 
+      const deferred = $.Deferred().done(() => {
+        _snippet.init();
+      });
       if (self.getSession(_snippet.type()) == null && typeof skipSession == 'undefined') {
-        window.setTimeout(() => {
-          _snippet.status('loading');
-          self.createSession(new Session(vm, { type: _snippet.type() }));
-        }, 200);
+        self.createSession(new Session(vm, { type: _snippet.type() }), () => {
+          deferred.resolve();
+        });
+      } else {
+        deferred.resolve();
       }
 
-      _snippet.init();
       return _snippet;
     };
 
-    self.createSession = function(session, callback, failCallback) {
+    self.createSession = function (session, callback, failCallback) {
       if (self.creatingSessionLocks().indexOf(session.type()) != -1) {
         // Create one type of session max
         return;
@@ -351,7 +359,7 @@ class Notebook {
         }
       });
 
-      const fail = function(message) {
+      const fail = function (message) {
         $.each(self.getSnippets(session.type()), (index, snippet) => {
           snippet.status('failed');
         });
@@ -400,7 +408,7 @@ class Notebook {
         });
     };
 
-    self.authSession = function() {
+    self.authSession = function () {
       self.createSession(
         new Session(vm, {
           type: vm.authSessionType(),
@@ -413,7 +421,7 @@ class Notebook {
       );
     };
 
-    self.newSnippet = function(type) {
+    self.newSnippet = function (type) {
       if (type) {
         self.selectedSnippet(type);
       }
@@ -433,7 +441,7 @@ class Notebook {
       return snippet;
     };
 
-    self.newSnippetAbove = function(id) {
+    self.newSnippetAbove = function (id) {
       self.newSnippet();
       let idx = 0;
       self.snippets().forEach((snippet, cnt) => {
@@ -444,7 +452,7 @@ class Notebook {
       self.snippets(self.snippets().move(self.snippets().length - 1, idx));
     };
 
-    self.getContext = function() {
+    self.getContext = function () {
       return {
         id: self.id,
         uuid: self.uuid,
@@ -456,7 +464,7 @@ class Notebook {
       };
     };
 
-    self.save = function(callback) {
+    self.save = function (callback) {
       hueAnalytics.log('notebook', 'save');
 
       // Remove the result data from the snippets
@@ -514,6 +522,9 @@ class Notebook {
                 self.snippets()[0].queries.unshift(komapping.fromJS(data));
               }
 
+              if (data.save_as) {
+                huePubSub.publish('assist.document.refresh');
+              }
               if (self.coordinatorUuid() && self.schedulerViewModel) {
                 self.saveScheduler();
                 self.schedulerViewModel.coordinator.refreshParameters();
@@ -524,10 +535,7 @@ class Notebook {
 
               if (
                 self.snippets()[0].downloadResultViewModel &&
-                self
-                  .snippets()[0]
-                  .downloadResultViewModel()
-                  .saveTarget() === 'dashboard'
+                self.snippets()[0].downloadResultViewModel().saveTarget() === 'dashboard'
               ) {
                 huePubSub.publish(
                   'open.link',
@@ -557,7 +565,7 @@ class Notebook {
       });
     };
 
-    self.close = function() {
+    self.close = function () {
       hueAnalytics.log('notebook', 'close');
       $.post('/notebook/api/notebook/close', {
         notebook: komapping.toJSON(self, NOTEBOOK_MAPPING),
@@ -565,14 +573,14 @@ class Notebook {
       });
     };
 
-    self.clearResults = function() {
+    self.clearResults = function () {
       $.each(self.snippets(), (index, snippet) => {
         snippet.result.clear();
         snippet.status('ready');
       });
     };
 
-    self.executeAll = function() {
+    self.executeAll = function () {
       if (self.isExecutingAll() || self.snippets().length === 0) {
         return;
       }
@@ -583,7 +591,7 @@ class Notebook {
       self.snippets()[self.executingAllIndex()].execute();
     };
 
-    self.saveDefaultUserProperties = function(session) {
+    self.saveDefaultUserProperties = function (session) {
       apiHelper.saveConfiguration({
         app: session.type(),
         properties: session.properties,
@@ -591,13 +599,13 @@ class Notebook {
       });
     };
 
-    self.closeAndRemoveSession = function(session) {
+    self.closeAndRemoveSession = function (session) {
       self.closeSession(session, false, () => {
         self.sessions.remove(session);
       });
     };
 
-    self.closeSession = function(session, silent, callback) {
+    self.closeSession = function (session, silent, callback) {
       $.post(
         '/notebook/api/close_session',
         {
@@ -619,7 +627,7 @@ class Notebook {
       });
     };
 
-    self.fetchHistory = function(callback) {
+    self.fetchHistory = function (callback) {
       const QUERIES_PER_PAGE = 50;
       self.loadingHistory(true);
 
@@ -659,20 +667,20 @@ class Notebook {
       });
     };
 
-    self.prevHistoryPage = function() {
+    self.prevHistoryPage = function () {
       if (self.historyCurrentPage() !== 1) {
         self.historyCurrentPage(self.historyCurrentPage() - 1);
       }
     };
 
-    self.nextHistoryPage = function() {
+    self.nextHistoryPage = function () {
       if (self.historyCurrentPage() < self.historyTotalPages()) {
         self.historyCurrentPage(self.historyCurrentPage() + 1);
       }
     };
 
     self.updateHistoryFailed = false;
-    self.updateHistory = function(statuses, interval) {
+    self.updateHistory = function (statuses, interval) {
       let items = $.grep(self.history(), item => {
         return statuses.indexOf(item.status()) != -1;
       }).slice(0, 25);
@@ -719,7 +727,7 @@ class Notebook {
       }
     };
 
-    self.makeHistoryRecord = function(url, statement, lastExecuted, status, name, uuid) {
+    self.makeHistoryRecord = function (url, statement, lastExecuted, status, name, uuid) {
       return komapping.fromJS({
         url: url,
         query: statement.substring(0, 1000) + (statement.length > 1000 ? '...' : ''),
@@ -730,7 +738,7 @@ class Notebook {
       });
     };
 
-    self.clearHistory = function(type) {
+    self.clearHistory = function (type) {
       hueAnalytics.log('notebook', 'clearHistory');
       $.post(
         '/notebook/api/clear_history',
@@ -755,7 +763,7 @@ class Notebook {
       $(document).trigger('hideHistoryModal');
     };
 
-    self.loadScheduler = function() {
+    self.loadScheduler = function () {
       if (typeof vm.CoordinatorEditorViewModel !== 'undefined' && self.isBatchable()) {
         let _action;
         if (self.coordinatorUuid()) {
@@ -765,7 +773,7 @@ class Notebook {
         }
         hueAnalytics.log('notebook', 'schedule/' + _action);
 
-        const getCoordinator = function() {
+        const getCoordinator = function () {
           $.get(
             '/scheduler/api/schedule/' + _action + '/',
             {
@@ -777,7 +785,7 @@ class Notebook {
               if ($('#schedulerEditor').length > 0) {
                 huePubSub.publish('hue4.process.headers', {
                   response: data.layout,
-                  callback: function(r) {
+                  callback: function (r) {
                     $('#schedulerEditor').html(r);
 
                     self.schedulerViewModel = new vm.CoordinatorEditorViewModel(
@@ -830,7 +838,7 @@ class Notebook {
       }
     };
 
-    self.saveScheduler = function() {
+    self.saveScheduler = function () {
       if (
         self.isBatchable() &&
         (!self.coordinatorUuid() || self.schedulerViewModel.coordinator.isDirty())
@@ -846,7 +854,7 @@ class Notebook {
       }
     };
 
-    self.showSubmitPopup = function() {
+    self.showSubmitPopup = function () {
       $.get(
         '/scheduler/api/schedule/submit/' + self.coordinatorUuid(),
         {
@@ -900,18 +908,23 @@ class Notebook {
     }
 
     huePubSub.subscribeOnce(
-      'assist.db.panel.ready',
+      ASSIST_DB_PANEL_IS_READY_EVENT,
       () => {
         if (self.type().indexOf('query') === 0) {
-          const whenDatabaseAvailable = function(snippet) {
-            huePubSub.publish('assist.set.database', {
-              source: snippet.type(),
+          const whenDatabaseAvailable = function (snippet) {
+            const lastSelectedDb = apiHelper.getFromTotalStorage(
+              'assist_' + snippet.type() + '_' + snippet.namespace().id,
+              'lastSelectedDb'
+            );
+
+            huePubSub.publish(ASSIST_SET_DATABASE_EVENT, {
+              connector: snippet.connector(),
               namespace: snippet.namespace(),
-              name: snippet.database()
+              name: lastSelectedDb === '' ? '' : snippet.database()
             });
           };
 
-          const whenNamespaceAvailable = function(snippet) {
+          const whenNamespaceAvailable = function (snippet) {
             if (snippet.database()) {
               whenDatabaseAvailable(snippet);
             } else {
@@ -922,7 +935,7 @@ class Notebook {
             }
           };
 
-          const whenSnippetAvailable = function(snippet) {
+          const whenSnippetAvailable = function (snippet) {
             if (snippet.namespace()) {
               whenNamespaceAvailable(snippet);
             } else {
@@ -948,7 +961,7 @@ class Notebook {
       vm.huePubSubId
     );
 
-    huePubSub.publish('assist.is.db.panel.ready');
+    huePubSub.publish(ASSIST_IS_DB_PANEL_READY_EVENT);
   }
 }
 

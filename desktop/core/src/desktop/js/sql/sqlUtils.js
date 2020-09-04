@@ -565,14 +565,8 @@ const impalaReservedKeywords = {
 const identifierEquals = (a, b) =>
   a &&
   b &&
-  a
-    .replace(/^\s*`/, '')
-    .replace(/`\s*$/, '')
-    .toLowerCase() ===
-    b
-      .replace(/^\s*`/, '')
-      .replace(/`\s*$/, '')
-      .toLowerCase();
+  a.replace(/^\s*`/, '').replace(/`\s*$/, '').toLowerCase() ===
+    b.replace(/^\s*`/, '').replace(/`\s*$/, '').toLowerCase();
 
 const autocompleteFilter = (filter, entries) => {
   const lowerCaseFilter = filter.toLowerCase();
@@ -654,7 +648,7 @@ const identifierChainToPath = identifierChain => identifierChain.map(identifier 
 /**
  *
  * @param {Object} options
- * @param {String} options.sourceType
+ * @param {String} options.connector
  * @param {ContextNamespace} options.namespace
  * @param {ContextCompute} options.compute
  * @param {boolean} [options.temporaryOnly] - Default: false
@@ -665,7 +659,7 @@ const identifierChainToPath = identifierChain => identifierChain.map(identifier 
  *
  * @return {CancellablePromise}
  */
-const resolveCatalogEntry = options => {
+export const resolveCatalogEntry = options => {
   const cancellablePromises = [];
   const deferred = $.Deferred();
   const promise = new CancellablePromise(deferred, undefined, cancellablePromises);
@@ -733,7 +727,7 @@ const resolveCatalogEntry = options => {
     cancellablePromises.push(
       dataCatalog
         .getChildren({
-          sourceType: options.sourceType,
+          connector: options.connector,
           namespace: options.namespace,
           compute: options.compute,
           path: identifierChainToPath(nextTable.identifierChain),
@@ -768,9 +762,9 @@ const resolveCatalogEntry = options => {
   } else {
     dataCatalog
       .getEntry({
-        sourceType: options.sourceType,
         namespace: options.namespace,
         compute: options.compute,
+        connector: options.connector,
         path: [],
         cachedOnly: options && options.cachedOnly,
         cancellable: options && options.cancellable,
@@ -787,31 +781,33 @@ const resolveCatalogEntry = options => {
 
 export default {
   autocompleteFilter: autocompleteFilter,
-  backTickIfNeeded: (sourceType, identifier) => {
-    if (identifier.indexOf('`') === 0) {
+  backTickIfNeeded: (connector, identifier) => {
+    const quoteChar =
+      (connector.dialect_properties && connector.dialect_properties.sql_identifier_quote) || '`';
+    if (identifier.indexOf(quoteChar) === 0) {
       return identifier;
     }
     const upperIdentifier = identifier.toUpperCase();
     if (
-      sourceType === 'hive' &&
+      connector.dialect === 'hive' &&
       (hiveReservedKeywords[upperIdentifier] || extraHiveReservedKeywords[upperIdentifier])
     ) {
-      return '`' + identifier + '`';
+      return quoteChar + identifier + quoteChar;
     }
-    if (sourceType === 'impala' && impalaReservedKeywords[upperIdentifier]) {
-      return '`' + identifier + '`';
+    if (connector.dialect === 'impala' && impalaReservedKeywords[upperIdentifier]) {
+      return quoteChar + identifier + quoteChar;
     }
     if (
-      sourceType !== 'impala' &&
-      sourceType !== 'hive' &&
+      connector.dialect !== 'impala' &&
+      connector.dialect !== 'hive' &&
       (impalaReservedKeywords[upperIdentifier] ||
         hiveReservedKeywords[upperIdentifier] ||
         extraHiveReservedKeywords[upperIdentifier])
     ) {
-      return '`' + identifier + '`';
+      return quoteChar + identifier + quoteChar;
     }
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(identifier)) {
-      return '`' + identifier + '`';
+      return quoteChar + identifier + quoteChar;
     }
     return identifier;
   },
@@ -824,6 +820,5 @@ export default {
     a.last_column === b.last_column,
   identifierEquals: identifierEquals,
   sortSuggestions: sortSuggestions,
-  resolveCatalogEntry: resolveCatalogEntry,
   identifierChainToPath: identifierChainToPath
 };

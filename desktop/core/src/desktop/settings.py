@@ -20,36 +20,39 @@
 # Local customizations are done by symlinking a file
 # as local_settings.py.
 
-from builtins import map
-from builtins import zip
+from builtins import map, zip
+import datetime
 import gc
 import json
 import logging
 import os
 import pkg_resources
 import sys
+import uuid
 
 import django_opentracing
 
 from django.utils.translation import ugettext_lazy as _
 
 import desktop.redaction
-from desktop.lib.paths import get_desktop_root
-from desktop.lib.python_util import force_dict_to_strings
+
 from desktop.conf import has_channels
+from desktop.lib.paths import get_desktop_root, get_run_root
+from desktop.lib.python_util import force_dict_to_strings
 
 from aws.conf import is_enabled as is_s3_enabled
 from azure.conf import is_abfs_enabled
 
+
 # Build paths inside the project like this: os.path.join(BASE_DIR, ...)
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), '..', '..', '..'))
-
 
 HUE_DESKTOP_VERSION = pkg_resources.get_distribution("desktop").version or "Unknown"
 NICE_NAME = "Hue"
 
 ENV_HUE_PROCESS_NAME = "HUE_PROCESS_NAME"
 ENV_DESKTOP_DEBUG = "DESKTOP_DEBUG"
+LOGGING_CONFIG = None # We're handling our own logging config. Consider upgrading our logging infra to LOGGING_CONFIG
 
 
 ############################################################
@@ -170,6 +173,7 @@ MIDDLEWARE_CLASSES = [
     #@TODO@ Prakash to check FailedLoginMiddleware working or not?
     #'axes.middleware.FailedLoginMiddleware',
     'desktop.middleware.MimeTypeJSFileFixStreamingMiddleware',
+    'crequest.middleware.CrequestMiddleware',
 ]
 
 # if os.environ.get(ENV_DESKTOP_DEBUG):
@@ -208,6 +212,7 @@ INSTALLED_APPS = [
     'axes',
     'webpack_loader',
     'django_prometheus',
+    'crequest',
     #'django_celery_results',
 ]
 
@@ -273,7 +278,7 @@ AUTH_PROFILE_MODULE = None
 LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/" # For djangosaml2 bug.
 
-PYLINTRC = get_desktop_root('.pylintrc')
+PYLINTRC = get_run_root('.pylintrc')
 
 # Custom CSRF Failure View
 CSRF_FAILURE_VIEW = 'desktop.views.csrf_failure'
@@ -328,6 +333,11 @@ if DEBUG: # For simplification, force all DEBUG when django_debug_mode is True a
 
 if desktop.conf.ENABLE_ORGANIZATIONS.get():
   AUTH_USER_MODEL = 'useradmin.OrganizationUser'
+  MIGRATION_MODULES = {
+    'beeswax': 'beeswax.org_migrations',
+    'useradmin': 'useradmin.org_migrations',
+    'desktop': 'desktop.org_migrations',
+  }
 
 # Configure allowed hosts
 ALLOWED_HOSTS = desktop.conf.ALLOWED_HOSTS.get()
@@ -385,6 +395,18 @@ else:
 DATABASES = {
   'default': default_db
 }
+
+if desktop.conf.QUERY_DATABASE.HOST.get():
+  DATABASES['query'] = {
+    'ENGINE': desktop.conf.QUERY_DATABASE.ENGINE.get(),
+    'HOST': desktop.conf.QUERY_DATABASE.HOST.get(),
+    'NAME': desktop.conf.QUERY_DATABASE.NAME.get(),
+    'USER': desktop.conf.QUERY_DATABASE.USER.get(),
+    'PASSWORD': desktop.conf.QUERY_DATABASE.PASSWORD.get(),
+    'OPTIONS': desktop.conf.QUERY_DATABASE.OPTIONS.get(),
+    'PORT': desktop.conf.QUERY_DATABASE.PORT.get(),
+    "SCHEMA" : desktop.conf.QUERY_DATABASE.SCHEMA.get(),
+  }
 
 CACHES = {
     'default': {
@@ -497,7 +519,6 @@ SECRET_KEY = desktop.conf.get_secret_key()
 if SECRET_KEY:
   SECRET_KEY += str(AUTHENTICATION_BACKENDS)
 else:
-  import uuid
   SECRET_KEY = str(uuid.uuid4())
 
 # Axes
@@ -602,6 +623,8 @@ if is_s3_enabled():
 
 if is_abfs_enabled():
   file_upload_handlers.insert(0, 'azure.abfs.upload.ABFSFileUploadHandler')
+
+
 FILE_UPLOAD_HANDLERS = tuple(file_upload_handlers)
 
 ############################################################
@@ -639,8 +662,8 @@ if not desktop.conf.DATABASE_LOGGING.get():
     from django.db.backends.utils import CursorWrapper
 
     BaseDatabaseWrapper.make_debug_cursor = lambda self, cursor: CursorWrapper(cursor, self)
-
   disable_database_logging()
+
 
 ############################################################
 # Searching saved documents in Oracle returns following error:
@@ -738,8 +761,9 @@ if desktop.conf.ENABLE_PROMETHEUS.get():
 
   if 'mysql' in DATABASES['default']['ENGINE']:
     DATABASES['default']['ENGINE'] = DATABASES['default']['ENGINE'].replace('django.db.backends', 'django_prometheus.db.backends')
-  for name, val in list(CACHES.items()):
-    val['BACKEND'] = val['BACKEND'].replace('django.core.cache.backends', 'django_prometheus.cache.backends')
+  # enable only when use these metrics: django_cache_get_total, django_cache_hits_total, django_cache_misses_total
+  # for name, val in list(CACHES.items()):
+  #   val['BACKEND'] = val['BACKEND'].replace('django.core.cache.backends', 'django_prometheus.cache.backends')
 
 
 ################################################################

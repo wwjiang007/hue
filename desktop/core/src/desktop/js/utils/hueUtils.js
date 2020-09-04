@@ -84,44 +84,45 @@ export const text2Url = selectors => {
  * @return {*|jQuery}
  */
 export const htmlEncode = value => {
-  return $('<div/>')
-    .text(value)
-    .html();
+  return $('<div></div>').text(value).html();
 };
 
 export const html2text = value => {
-  return $('<div/>')
+  return $('<div></div>')
     .html(value)
     .text()
     .replace(/\u00A0/g, ' ');
 };
 
-export const goFullScreen = () => {
-  if (
-    !document.fullscreenElement &&
-    !document.mozFullScreenElement &&
-    !document.webkitFullscreenElement &&
-    !document.msFullscreenElement
-  ) {
-    if (document.documentElement.requestFullscreen) {
-      document.documentElement.requestFullscreen();
-    } else if (document.documentElement.msRequestFullscreen) {
-      document.documentElement.msRequestFullscreen();
-    } else if (document.documentElement.mozRequestFullScreen) {
-      document.documentElement.mozRequestFullScreen();
-    } else if (document.documentElement.webkitRequestFullscreen) {
-      document.documentElement.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
+export const isFullScreen = () => {
+  return (
+    document.fullscreenElement ||
+    document.mozFullScreenElement ||
+    document.webkitFullscreenElement ||
+    document.msFullscreenElement
+  );
+};
+
+export const goFullScreen = element => {
+  if (!element) {
+    element = document.documentElement;
+  }
+
+  if (!isFullScreen()) {
+    if (element.requestFullscreen) {
+      element.requestFullscreen();
+    } else if (element.msRequestFullscreen) {
+      element.msRequestFullscreen();
+    } else if (element.mozRequestFullScreen) {
+      element.mozRequestFullScreen();
+    } else if (element.webkitRequestFullscreen) {
+      element.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
     }
   }
 };
 
 export const exitFullScreen = () => {
-  if (
-    document.fullscreenElement ||
-    document.mozFullScreenElement ||
-    document.webkitFullscreenElement ||
-    document.msFullscreenElement
-  ) {
+  if (isFullScreen()) {
     if (document.exitFullscreen) {
       document.exitFullscreen();
     } else if (document.msExitFullscreen) {
@@ -131,6 +132,14 @@ export const exitFullScreen = () => {
     } else if (document.webkitExitFullscreen) {
       document.webkitExitFullscreen();
     }
+  }
+};
+
+export const toggleFullScreen = element => {
+  if (isFullScreen()) {
+    exitFullScreen();
+  } else {
+    goFullScreen(element);
   }
 };
 
@@ -261,7 +270,7 @@ export const waitForVariable = (variable, callback, timeout) => {
 };
 
 export const scrollbarWidth = () => {
-  const $parent = $('<div style="width:50px;height:50px;overflow:auto"><div/></div>').appendTo(
+  const $parent = $('<div style="width:50px;height:50px;overflow:auto"><div></div></div>').appendTo(
     'body'
   );
   const $children = $parent.children();
@@ -281,7 +290,7 @@ export const getSearchParameter = (search, name, returnNull) => {
 };
 
 if (!window.location.getParameter) {
-  window.location.getParameter = function(name, returnNull) {
+  window.location.getParameter = function (name, returnNull) {
     return getSearchParameter(window.location.search, name, returnNull);
   };
 }
@@ -354,7 +363,7 @@ export const dfs = (node, callback) => {
 };
 
 export const deleteAllEmptyStringKey = node => {
-  const fDeleteEmptyStringKey = function(node, key) {
+  const fDeleteEmptyStringKey = function (node, key) {
     if (node[key] || typeof node[key] !== 'string') {
       return;
     }
@@ -371,11 +380,7 @@ const s4 = () =>
 export const UUID = () =>
   s4() + s4() + '-' + s4() + '-' + s4() + '-' + s4() + '-' + s4() + s4() + s4();
 
-export const escapeOutput = str =>
-  $('<span>')
-    .text(str)
-    .html()
-    .trim();
+export const escapeOutput = str => $('<span>').text(str).html().trim();
 
 export const getFileBrowseButton = (
   inputElement,
@@ -389,14 +394,9 @@ export const getFileBrowseButton = (
 ) => {
   let _btn;
   if (isAddon) {
-    _btn = $('<span>')
-      .addClass('add-on muted pointer filechooser-clickable')
-      .text('..');
+    _btn = $('<span>').addClass('add-on muted pointer filechooser-clickable').text('..');
   } else if (linkMarkup) {
-    _btn = $('<a>')
-      .addClass('btn')
-      .addClass('fileChooserBtn filechooser-clickable')
-      .text('..');
+    _btn = $('<a>').addClass('btn').addClass('fileChooserBtn filechooser-clickable').text('..');
   } else {
     _btn = $('<button>')
       .addClass('btn')
@@ -439,7 +439,7 @@ export const getFileBrowseButton = (
       $('#filechooser').jHueFileChooser({
         suppressErrors: true,
         selectFolder: supportSelectFolder,
-        onFolderChoose: function(filePath) {
+        onFolderChoose: function (filePath) {
           handleChoice(filePath, stripHdfsPrefix);
           if (selectFolder) {
             $('#chooseFile').modal('hide');
@@ -448,7 +448,7 @@ export const getFileBrowseButton = (
             }
           }
         },
-        onFileChoose: function(filePath) {
+        onFileChoose: function (filePath) {
           handleChoice(filePath, stripHdfsPrefix);
           $('#chooseFile').modal('hide');
           if (!isNestedModal) {
@@ -487,7 +487,7 @@ export const getFileBrowseButton = (
       });
       if (window.isIE11) {
         const oldFocus = $().modal.Constructor.prototype.enforceFocus;
-        $().modal.Constructor.prototype.enforceFocus = function() {};
+        $().modal.Constructor.prototype.enforceFocus = function () {};
         $('#chooseFile').modal('show');
         window.setTimeout(() => {
           $().modal.Constructor.prototype.enforceFocus = oldFocus;
@@ -584,7 +584,9 @@ export const sleep = async timeout => new Promise(resolve => setTimeout(resolve,
 
 export const defer = async callback => {
   await sleep(0);
-  callback();
+  if (callback) {
+    callback();
+  }
 };
 
 export default {
@@ -593,8 +595,10 @@ export default {
   text2Url: text2Url,
   htmlEncode: htmlEncode,
   html2text: html2text,
+  isFullScreen: isFullScreen,
   goFullScreen: goFullScreen,
   exitFullScreen: exitFullScreen,
+  toggleFullScreen: toggleFullScreen,
   changeURL: changeURL,
   replaceURL: replaceURL,
   changeURLParameter: changeURLParameter,

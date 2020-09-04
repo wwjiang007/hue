@@ -18,7 +18,7 @@ import hiveAutocompleteParser from '../hiveAutocompleteParser';
 
 describe('hiveAutocompleteParser.js ALTER statements', () => {
   beforeAll(() => {
-    hiveAutocompleteParser.yy.parseError = function(msg) {
+    hiveAutocompleteParser.yy.parseError = function (msg) {
       throw Error(msg);
     };
   });
@@ -220,6 +220,87 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
     });
   });
 
+  describe('ALTER MATERIALIZED VIEW', () => {
+    it('should handle "ALTER MATERIALIZED VIEW baa.boo ENABLE REWRITE;|"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER MATERIALIZED VIEW baa.boo ENABLE REWRITE;;',
+        afterCursor: '',
+        noErrors: true,
+        containsKeywords: ['SELECT'],
+        expectedResult: {
+          lowerCase: false
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER ',
+        afterCursor: '',
+        containsKeywords: ['MATERIALIZED VIEW'],
+        expectedResult: {
+          lowerCase: false
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER MATERIALIZED |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER MATERIALIZED ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['VIEW']
+        }
+      });
+    });
+
+    it('should suggest views for "ALTER MATERIALIZED VIEW |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER MATERIALIZED VIEW ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestTables: { onlyViews: true },
+          suggestDatabases: { appendDot: true }
+        }
+      });
+    });
+
+    it('should suggest views for "ALTER MATERIALIZED VIEW boo.|"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER MATERIALIZED VIEW boo.',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestTables: { identifierChain: [{ name: 'boo' }], onlyViews: true }
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER MATERIALIZED VIEW boo |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER MATERIALIZED VIEW boo ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['DISABLE REWRITE', 'ENABLE REWRITE']
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER MATERIALIZED VIEW boo.foo DISABLE |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER MATERIALIZED VIEW boo.foo DISABLE ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['REWRITE']
+        }
+      });
+    });
+  });
+
   describe('ALTER TABLE', () => {
     it('should suggest keywords for "ALTER |"', () => {
       assertAutoComplete({
@@ -372,7 +453,7 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['COMMENT']
+          suggestKeywords: ['CHECK', 'DEFAULT', 'NOT NULL', 'PRIMARY KEY', 'UNIQUE', 'COMMENT']
         }
       });
     });
@@ -384,6 +465,17 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         expectedResult: {
           lowerCase: false,
           suggestKeywords: ['CASCADE', 'RESTRICT']
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER TABLE bar ADD CONSTRAINT boo |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER TABLE bar ADD CONSTRAINT boo ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['CHECK', 'FOREIGN KEY', 'PRIMARY KEY', 'UNIQUE']
         }
       });
     });
@@ -410,25 +502,35 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
       });
     });
 
-    it('should suggest keywords for "ALTER TABLE bar ADD CONSTRAINT boo FOREIGN KEY (bla) REFERENCES tbl(col) DISABLE NOVALIDATE |"', () => {
-      assertAutoComplete({
-        beforeCursor:
-          'ALTER TABLE bar ADD CONSTRAINT boo FOREIGN KEY (bla) REFERENCES tbl(col) DISABLE NOVALIDATE ',
-        afterCursor: '',
-        expectedResult: {
-          lowerCase: false,
-          suggestKeywords: ['NORELY', 'RELY']
-        }
-      });
-    });
-
     it('should suggest keywords for "ALTER TABLE bar ADD CONSTRAINT boo PRIMARY KEY (id) |"', () => {
       assertAutoComplete({
         beforeCursor: 'ALTER TABLE bar ADD CONSTRAINT boo PRIMARY KEY (id) ',
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['DISABLE NOVALIDATE']
+          suggestKeywords: ['NOVALIDATE', 'DISABLE', 'NORELY', 'RELY']
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER TABLE bar ADD CONSTRAINT boo PRIMARY KEY (id) DISABLE |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER TABLE bar ADD CONSTRAINT boo PRIMARY KEY (id) DISABLE ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['NOVALIDATE', 'NORELY', 'RELY']
+        }
+      });
+    });
+
+    it('should suggest keywords for "ALTER TABLE bar ADD CONSTRAINT boo PRIMARY KEY (id) DISABLE NOVALIDATE |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'ALTER TABLE bar ADD CONSTRAINT boo PRIMARY KEY (id) DISABLE NOVALIDATE ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['NORELY', 'RELY']
         }
       });
     });
@@ -577,7 +679,18 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['COMMENT', 'AFTER', 'FIRST', 'CASCADE', 'RESTRICT']
+          suggestKeywords: [
+            'CHECK',
+            'DEFAULT',
+            'NOT NULL',
+            'PRIMARY KEY',
+            'UNIQUE',
+            'COMMENT',
+            'AFTER',
+            'FIRST',
+            'CASCADE',
+            'RESTRICT'
+          ]
         }
       });
     });
@@ -1001,7 +1114,7 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['COMMENT']
+          suggestKeywords: ['CHECK', 'DEFAULT', 'NOT NULL', 'PRIMARY KEY', 'UNIQUE', 'COMMENT']
         }
       });
     });
@@ -1057,7 +1170,18 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['COMMENT', 'AFTER', 'FIRST', 'CASCADE', 'RESTRICT']
+          suggestKeywords: [
+            'CHECK',
+            'DEFAULT',
+            'NOT NULL',
+            'PRIMARY KEY',
+            'UNIQUE',
+            'COMMENT',
+            'AFTER',
+            'FIRST',
+            'CASCADE',
+            'RESTRICT'
+          ]
         }
       });
     });
@@ -1201,7 +1325,7 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['COMMENT']
+          suggestKeywords: ['CHECK', 'DEFAULT', 'NOT NULL', 'PRIMARY KEY', 'UNIQUE', 'COMMENT']
         }
       });
     });
@@ -1300,7 +1424,7 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
         afterCursor: '',
         expectedResult: {
           lowerCase: false,
-          suggestKeywords: ['COMMENT']
+          suggestKeywords: ['CHECK', 'DEFAULT', 'NOT NULL', 'PRIMARY KEY', 'UNIQUE', 'COMMENT']
         }
       });
     });
@@ -1652,6 +1776,18 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
       });
     });
 
+    it('should handle "MSCK REPAIR TABLE boo.baa SYNC PARTITIONS;|"', () => {
+      assertAutoComplete({
+        beforeCursor: 'MSCK REPAIR TABLE boo.baa SYNC PARTITIONS;',
+        afterCursor: '',
+        noErrors: true,
+        containsKeywords: ['SELECT'],
+        expectedResult: {
+          lowerCase: false
+        }
+      });
+    });
+
     it('should suggest keywords for "|"', () => {
       assertAutoComplete({
         beforeCursor: '',
@@ -1693,6 +1829,28 @@ describe('hiveAutocompleteParser.js ALTER statements', () => {
           lowerCase: false,
           suggestTables: { onlyTables: true },
           suggestDatabases: { appendDot: true }
+        }
+      });
+    });
+
+    it('should suggest keywords for "MSCK REPAIR TABLE boo |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'MSCK REPAIR TABLE boo ',
+        afterCursor: '',
+        containsKeywords: ['DROP PARTITIONS'],
+        expectedResult: {
+          lowerCase: false
+        }
+      });
+    });
+
+    it('should suggest keywords for "MSCK REPAIR TABLE boo ADD |"', () => {
+      assertAutoComplete({
+        beforeCursor: 'MSCK REPAIR TABLE boo ADD ',
+        afterCursor: '',
+        expectedResult: {
+          lowerCase: false,
+          suggestKeywords: ['PARTITIONS']
         }
       });
     });

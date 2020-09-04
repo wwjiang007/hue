@@ -1638,7 +1638,7 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
           var statementCols = [];
           var temporaryColumns = [];
           sampleCols.forEach(function (sampleCol) {
-            statementCols.push(sqlUtils.backTickIfNeeded(self.sourceType, sampleCol.name()));
+            statementCols.push(sqlUtils.backTickIfNeeded({ id: self.sourceType, dialect: self.sourceType }, sampleCol.name()));
             var col = {
               name: sampleCol.name(),
               type: sampleCol.type()
@@ -1658,17 +1658,17 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
 
           var statement = 'SELECT ';
           statement += statementCols.join(',\n    ');
-          statement += '\n FROM ' + sqlUtils.backTickIfNeeded(self.sourceType, tableName) + ';';
+          statement += '\n FROM ' + sqlUtils.backTickIfNeeded({ id: self.sourceType, dialect: self.sourceType }, tableName) + ';';
           if (!wizard.destination.fieldEditorValue() || wizard.destination.fieldEditorValue() === lastStatement) {
             wizard.destination.fieldEditorValue(statement);
           }
           lastStatement = statement;
-          wizard.destination.fieldEditorPlaceHolder('${ _('Example: SELECT') }' + ' * FROM ' + sqlUtils.backTickIfNeeded(self.sourceType, tableName));
+          wizard.destination.fieldEditorPlaceHolder('${ _('Example: SELECT') }' + ' * FROM ' + sqlUtils.backTickIfNeeded({ id: self.sourceType, dialect: self.sourceType }, tableName));
 
           var handle = dataCatalog.addTemporaryTable({
-            sourceType: self.sourceType,
             namespace: self.namespace(),
             compute: self.compute(),
+            connector: { id: self.sourceType }, // TODO: Migrate importer to connectors
             name: tableName,
             columns: temporaryColumns,
             sample: self.sample()
@@ -1704,7 +1704,9 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
         }
       });
       self.inputFormatsAll = ko.observableArray([
+          % if request.fs:
           {'value': 'file', 'name': 'File'},
+          % endif
           % if ENABLE_SQOOP.get():
           {'value': 'rdbms', 'name': 'External Database'},
           % endif
@@ -2068,7 +2070,7 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
           "source": ko.mapping.toJSON(self)
         }, function (resp) {
           if (resp.status === 0 && resp.data) {
-            huePubSub.publish('notebook.task.submitted', resp.history_uuid);
+            huePubSub.publish('notebook.task.submitted', resp);
           } else if (resp.status === 1) {
             $(document).trigger("error", "${ _('Connection Failed: ') }" + resp.message);
             self.rdbmsDbIsValid(false);
@@ -2140,8 +2142,8 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
         var checkDbEntryExists = function () {
           wizard.computeSetDeferred.done(function () {
             dataCatalog.getEntry({
-              sourceType: self.sourceType,
               compute: wizard.compute(),
+              connector: { id: self.sourceType }, // TODO: Use connectors in the importer
               namespace: wizard.namespace(),
               path: self.outputFormat() === 'table' ? [self.databaseName(), self.tableName()] : [],
             }).done(function (catalogEntry) {
@@ -2524,7 +2526,8 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
 
       self.computeSetDeferred = $.Deferred();
 
-      contextCatalog.getNamespaces({ sourceType: vm.sourceType }).done(function (context) {
+      // TODO: Use connectors in the importer
+      contextCatalog.getNamespaces({ connector: { id: vm.sourceType } }).done(function (context) {
         self.namespaces(context.namespaces);
         if (!vm.namespaceId || !context.namespaces.some(function (namespace) {
           if (namespace.id === vm.namespaceId) {
@@ -2856,13 +2859,13 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
                       var match = snippet.statement_raw().match(/CREATE TABLE `([^`]+)`/i);
                       if (match) {
                         var db = match[1];
-                        dataCatalog.getEntry({ sourceType: snippet.type(), namespace: self.namespace(), compute: self.compute(), path: [ db ]}).done(function (dbEntry) {
-                          dbEntry.clearCache({ invalidate: 'invalidate', silenceErrors: true }).done(function () {
+                        dataCatalog.getEntry({ connector: snippet.connector(), namespace: self.namespace(), compute: self.compute(), path: [ db ]}).done(function (dbEntry) {
+                          dbEntry.clearCache({ silenceErrors: true }).done(function () {
                             huePubSub.publish('open.link', self.editorVM.selectedNotebook().onSuccessUrl());
                           })
                         });
                       } else {
-                        dataCatalog.getEntry({ sourceType: snippet.type(), namespace: self.namespace(), compute: self.compute(), path: []}).done(function (sourceEntry) {
+                        dataCatalog.getEntry({ connector: snippet.connector(), namespace: self.namespace(), compute: self.compute(), path: []}).done(function (sourceEntry) {
                           sourceEntry.clearCache({ silenceErrors: true }).done(function () {
                             huePubSub.publish('open.link', self.editorVM.selectedNotebook().onSuccessUrl());
                           })
@@ -2895,7 +2898,7 @@ ${ commonheader(_("Importer"), "indexer", user, request, "60px") | n,unicode }
           if (resp.status === 0) {
             if (resp.history_uuid) {
               $.jHueNotify.info("${ _('Task submitted') }");
-              huePubSub.publish('notebook.task.submitted', resp.history_uuid);
+              huePubSub.publish('notebook.task.submitted', resp);
             } else if (resp.on_success_url) {
               if (resp.pub_sub_url) {
                 huePubSub.publish(resp.pub_sub_url);

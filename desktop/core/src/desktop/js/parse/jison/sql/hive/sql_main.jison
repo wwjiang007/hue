@@ -68,9 +68,6 @@ SqlStatement
  : DataDefinition
  | DataManipulation
  | QuerySpecification
- | ExplainClause DataDefinition
- | ExplainClause DataManipulation
- | ExplainClause QuerySpecification
  ;
 
 SqlStatement_EDIT
@@ -82,17 +79,10 @@ SqlStatement_EDIT
    {
      parser.suggestKeywords(['INSERT', 'SELECT']);
    }
- | ExplainClause_EDIT
  | DataDefinition_EDIT
  | DataManipulation_EDIT
  | QuerySpecification_EDIT
  | SetSpecification_EDIT
- | ExplainClause DataDefinition_EDIT
- | ExplainClause DataManipulation_EDIT
- | ExplainClause QuerySpecification_EDIT
- | ExplainClause_EDIT DataDefinition
- | ExplainClause_EDIT DataManipulation
- | ExplainClause_EDIT QuerySpecification
  ;
 
 NonReservedKeyword
@@ -102,11 +92,14 @@ NonReservedKeyword
  | 'AFTER'
  | 'ANALYZE'
  | 'ARCHIVE'
+ | 'AST'
  | 'AVRO'
  | 'BUCKET'
  | 'BUCKETS'
  | 'CASCADE'
+ | 'CBO'
  | 'CHANGE'
+ | 'CHECK'
  | 'CLUSTERED'
  | 'COLLECTION'
  | 'COLUMNS'
@@ -115,22 +108,31 @@ NonReservedKeyword
  | 'COMPACTIONS'
  | 'COMPUTE'
  | 'CONCATENATE'
+ | 'COST'
+ | 'CURRENT_DATE'
+ | 'CURRENT_TIMESTAMP'
+ | 'CURRENT_USER'
  | 'DATA'
  | 'DATABASES'
  | 'DAY'
+ | 'DAYOFWEEK'
  | 'DBPROPERTIES'
+ | 'DEFAULT'
  | 'DEFERRED'
  | 'DEFINED'
  | 'DELIMITED'
  | 'DEPENDENCY'
+ | 'DETAIL'
  | 'DIRECTORY'
  | 'DISABLE'
+ | 'DISTRIBUTED'
  | 'DOUBLE_PRECISION'
  | 'ENABLE'
  | 'ESCAPED'
  | 'EXCHANGE'
  | 'EXPLAIN'
  | 'EXPORT'
+ | 'EXPRESSION'
  | 'FIELDS'
  | 'FILE'
  | 'FILEFORMAT'
@@ -143,14 +145,18 @@ NonReservedKeyword
  | 'INPUTFORMAT'
  | 'ITEMS'
  | 'JAR'
+ | 'JOINCOST'
  | 'JSONFILE'
  | 'KEY'
  | 'KEYS'
+ | 'LAST'
  | 'LINES'
+ | 'LITERAL'
  | 'LOAD'
  | 'LOCATION'
  | 'LOCKS'
  | 'MATCHED'
+ | 'MATERIALIZED'
  | 'MERGE'
  | 'METADATA'
  | 'MINUTE'
@@ -161,10 +167,13 @@ NonReservedKeyword
  | 'NOSCAN'
  | 'NOVALIDATE'
  | 'OFFLINE'
+ | 'ONLY'
+ | 'OPERATOR'
  | 'OPTION'
  | 'ORC'
  | 'OUTPUTFORMAT'
  | 'OVERWRITE'
+ | 'OVERWRITE_DIRECTORY'
  | 'OWNER'
  | 'PARQUET'
  | 'PARTITIONED'
@@ -183,6 +192,7 @@ NonReservedKeyword
  | 'REPLACE'
  | 'REPLICATION'
  | 'RESTRICT'
+ | 'REWRITE'
  | 'ROLE'
  | 'ROLES'
  | 'SCHEMAS'
@@ -192,26 +202,29 @@ NonReservedKeyword
  | 'SERDEPROPERTIES'
  | 'SETS'
  | 'SHOW'
+ | 'SKEWED_LOCATION'
  | 'SKEWED'
  | 'SORTED'
  | 'STATISTICS'
  | 'STORED'
+ | 'STORED_AS_DIRECTORIES'
  | 'STRING'
  | 'STRUCT'
+ | 'SUMMARY'
  | 'TABLES'
  | 'TBLPROPERTIES'
  | 'TEMPORARY'
  | 'TERMINATED'
  | 'TEXTFILE'
- | 'TIMESTAMP'
  | 'TINYINT'
  | 'TOUCH'
  | 'TRANSACTIONAL'
  | 'TRANSACTIONS'
  | 'UNARCHIVE'
  | 'UNIONTYPE'
+ | 'UNIQUE'
  | 'USE'
- | 'USER'
+ | 'VECTORIZATION'
  | 'VIEW'
  | 'WAIT'
  | 'WEEK'
@@ -221,41 +234,22 @@ NonReservedKeyword
 // | 'DESC'
 // | 'DISTRIBUTE'
 // | 'FORMATTED'
-// | 'FUNCTION'
 // | 'INDEX'
 // | 'INDEXES'
 // | 'LOCK'
+// | 'OVER'
 // | 'SCHEMA'
 // | 'SHOW_DATABASE'
 // | 'SORT'
+// | 'TABLESAMPLE'
+// | 'WINDOW'
+// | 'WITH'
  ;
 
 RegularIdentifier
  : 'REGULAR_IDENTIFIER'
  | 'VARIABLE_REFERENCE'
  | NonReservedKeyword
- ;
-
-ExplainClause
- : 'EXPLAIN' OptionalExplainTypes
- ;
-
-ExplainClause_EDIT
- : 'EXPLAIN' OptionalExplainTypes 'CURSOR'
-   {
-     if (!$2) {
-       parser.suggestDdlAndDmlKeywords([{ value: 'AUTHORIZATION', weight: 2 }, { value: 'DEPENDENCY', weight: 2 }, { value: 'EXTENDED', weight: 2 }]);
-     } else {
-       parser.suggestDdlAndDmlKeywords();
-     }
-   }
- ;
-
-OptionalExplainTypes
- :
- | 'AUTHORIZATION'
- | 'DEPENDENCY'
- | 'EXTENDED'
  ;
 
 // This is a work-around for error handling when a statement starts with some token that the parser can understand but
@@ -379,6 +373,7 @@ NonStartingToken
  | 'JSONFILE'
  | 'KEY'
  | 'KEYS'
+ | 'LAST'
  | 'LATERAL'
  | 'LEFT'
  | 'LIKE'
@@ -403,6 +398,7 @@ NonStartingToken
  | 'NOVALIDATE'
  | 'NTILE'
  | 'NULL'
+ | 'NULLS'
  | 'OF'
  | 'ON'
  | 'OPTION'
@@ -499,14 +495,6 @@ NonStartingToken
  | 'WINDOW'
  | 'YEAR'
  | '~'
- ;
-
-DataDefinition
- : DescribeStatement
- ;
-
-DataDefinition_EDIT
- : DescribeStatement_EDIT
  ;
 
 // ===================================== Commonly used constructs =====================================
@@ -1139,94 +1127,6 @@ OptionalTypePrecision
  :
  | '(' 'UNSIGNED_INTEGER' ')'
  | '(' 'UNSIGNED_INTEGER' ',' 'UNSIGNED_INTEGER' ')'
- ;
-
-// ===================================== DESCRIBE statement =====================================
-
-DescribeStatement
- : 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier DerivedColumnChain OptionalPartitionSpec
-   {
-     parser.addTablePrimary($3);
-     parser.addColumnLocation(@4, $4);
-   }
- | 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier OptionalPartitionSpec
-   {
-     parser.addTablePrimary($3);
-   }
- | 'DESCRIBE' DatabaseOrSchema OptionalExtended DatabaseIdentifier
-   {
-     parser.addDatabaseLocation(@4, [{ name: $4 }]);
-   }
- | 'DESCRIBE' 'FUNCTION' OptionalExtended RegularIdentifier
- ;
-
-DescribeStatement_EDIT
- : 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier_EDIT OptionalPartitionSpec
- | 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier DerivedColumnChain_EDIT OptionalPartitionSpec
-   {
-     parser.addTablePrimary($3);
-   }
- | 'DESCRIBE' OptionalExtendedOrFormatted 'CURSOR' SchemaQualifiedTableIdentifier DerivedColumnChain OptionalPartitionSpec
-   {
-     if (!$2) {
-       parser.suggestKeywords(['EXTENDED', 'FORMATTED']);
-     }
-   }
- | 'DESCRIBE' OptionalExtendedOrFormatted 'CURSOR' SchemaQualifiedTableIdentifier OptionalPartitionSpec
-   {
-     if (!$2) {
-       parser.suggestKeywords(['EXTENDED', 'FORMATTED']);
-     }
-   }
- | 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier 'CURSOR' OptionalPartitionSpec
-   {
-     parser.addTablePrimary($3);
-     parser.suggestColumns();
-     if (!$5) {
-       parser.suggestKeywords(['PARTITION']);
-     }
-   }
- | 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier DerivedColumnChain 'CURSOR' OptionalPartitionSpec
-   {
-     if (!$6) {
-       parser.suggestKeywords(['PARTITION']);
-     }
-   }
- | 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier DerivedColumnChain OptionalPartitionSpec_EDIT
- | 'DESCRIBE' OptionalExtendedOrFormatted SchemaQualifiedTableIdentifier OptionalPartitionSpec_EDIT
-
- | 'DESCRIBE' OptionalExtendedOrFormatted 'CURSOR'
-   {
-     if (!$2) {
-       parser.suggestKeywords(['DATABASE', 'EXTENDED', 'FORMATTED', 'FUNCTION', 'SCHEMA']);
-     }
-     parser.suggestTables();
-     parser.suggestDatabases({ appendDot: true });
-    }
- | 'DESCRIBE' DatabaseOrSchema OptionalExtended DatabaseIdentifier_EDIT
-   {
-     if (!$3) {
-       parser.suggestKeywords(['EXTENDED']);
-     }
-   }
- | 'DESCRIBE' DatabaseOrSchema OptionalExtended 'CURSOR' DatabaseIdentifier
-    {
-      if (!$3) {
-        parser.suggestKeywords(['EXTENDED']);
-      }
-    }
- | 'DESCRIBE' 'FUNCTION' OptionalExtended 'CURSOR'
-   {
-     if (!$3) {
-       parser.suggestKeywords(['EXTENDED']);
-     }
-   }
- | 'DESCRIBE' 'FUNCTION' OptionalExtended 'CURSOR' RegularIdentifier
-    {
-      if (!$3) {
-        parser.suggestKeywords(['EXTENDED']);
-      }
-    }
  ;
 
 // ===================================== SELECT statement =====================================
@@ -1977,30 +1877,52 @@ OrderByColumnList_EDIT
  ;
 
 OrderByIdentifier
- : ValueExpression OptionalAscOrDesc  -> parser.mergeSuggestKeywords($2)
+ : ValueExpression OptionalAscOrDesc OptionalNullsFirstOrLast
+   {
+     if ($2.suggestKeywords && $3.suggestKeywords) {
+       $$ = parser.mergeSuggestKeywords($2, $3);
+     } else {
+       $$ = parser.mergeSuggestKeywords($3);
+     }
+   }
  ;
 
 OrderByIdentifier_EDIT
- : ValueExpression_EDIT OptionalAscOrDesc
+ : ValueExpression_EDIT OptionalAscOrDesc OptionalNullsFirstOrLast
    {
      parser.suggestSelectListAliases();
    }
- | AnyCursor OptionalAscOrDesc
+ | AnyCursor OptionalAscOrDesc OptionalNullsFirstOrLast
    {
      $$ = { emptyOrderBy: true }
      parser.valueExpressionSuggest();
      parser.suggestAnalyticFunctions();
      parser.suggestSelectListAliases();
    }
+ | ValueExpression OptionalAscOrDesc NullsFirstOrLast_EDIT
  ;
 
 OptionalAscOrDesc
- :
-  {
-    $$ = { suggestKeywords: ['ASC', 'DESC'] };
-  }
+ :                          -> { suggestKeywords: ['ASC', 'DESC'] };
  | 'ASC'
  | 'DESC'
+ ;
+
+OptionalNullsFirstOrLast
+ :                          -> { suggestKeywords: ['NULLS FIRST', 'NULLS LAST'] }
+ | NullsFirstOrLast
+ ;
+
+NullsFirstOrLast
+ : 'NULLS' 'FIRST'
+ | 'NULLS' 'LAST'
+ ;
+
+NullsFirstOrLast_EDIT
+ : 'NULLS' 'CURSOR'
+   {
+     parser.suggestKeywords(['FIRST', 'LAST']);
+   }
  ;
 
 OptionalClusterOrDistributeBy
@@ -2120,6 +2042,9 @@ LimitClause
 
 LimitClause_EDIT
  : 'LIMIT' 'CURSOR'
+   {
+     parser.suggestKeywords([{ value: '10', weight: 10000 }, { value: '100', weight: 10000 }, { value: '1000', weight: 10000 }, { value: '5000', weight: 10000 }, { value: '10000', weight: 10000 }])
+   }
  ;
 
 SearchCondition
@@ -2218,42 +2143,8 @@ InValueList
 
 NonParenthesizedValueExpressionPrimary
  : UnsignedValueSpecification
- | ColumnOrArbitraryFunctionRef             -> { types: ['COLREF'], columnReference: $1.chain }
- | ColumnOrArbitraryFunctionRef ArbitraryFunctionRightPart
-   {
-     // We need to handle arbitrary UDFs here instead of inside UserDefinedFunction or there will be a conflict
-     // with columnReference for functions like: db.udf(foo)
-     var fn = $1.chain[$1.chain.length - 1].name.toLowerCase();
-     $1.lastLoc.type = 'function';
-     $1.lastLoc.function = fn;
-     $1.lastLoc.location = {
-       first_line: $1.lastLoc.location.first_line,
-       last_line: $1.lastLoc.location.last_line,
-       first_column: $1.lastLoc.location.first_column,
-       last_column: $1.lastLoc.location.last_column - 1
-     }
-     if ($1.lastLoc !== $1.firstLoc) {
-        $1.firstLoc.type = 'database';
-     } else {
-       delete $1.lastLoc.identifierChain;
-     }
-     if ($2.expression) {
-       $$ = { function: fn, expression: $2.expression, types: parser.findReturnTypes(fn) }
-     } else {
-       $$ = { function: fn, types: parser.findReturnTypes(fn) }
-     }
-   }
- | ArbitraryFunctionName ArbitraryFunctionRightPart
-  {
-    parser.addFunctionLocation(@1, $1);
-    if ($2.expression) {
-      $$ = { function: $1, expression: $2.expression, types: parser.findReturnTypes($1) }
-    } else {
-      $$ = { function: $1, types: parser.findReturnTypes($1) }
-    }
-  }
- | UserDefinedFunction
- | 'NULL'                      -> { types: [ 'NULL' ] }
+ | ColumnOrArbitraryFunctionRef  -> { types: ['COLREF'], columnReference: $1.chain }
+ | 'NULL'                        -> { types: [ 'NULL' ], text: $1 }
  ;
 
 NonParenthesizedValueExpressionPrimary_EDIT
@@ -2266,36 +2157,6 @@ NonParenthesizedValueExpressionPrimary_EDIT
        $$ = { types: ['COLREF'], columnReference: $1 };
      }
    }
- | ColumnOrArbitraryFunctionRef ArbitraryFunctionRightPart_EDIT
-   {
-     var fn = $1.chain[$1.chain.length - 1].name.toLowerCase();
-     $1.lastLoc.type = 'function';
-     $1.lastLoc.function = fn;
-     $1.lastLoc.location = {
-       first_line: $1.lastLoc.location.first_line,
-       last_line: $1.lastLoc.location.last_line,
-       first_column: $1.lastLoc.location.first_column,
-       last_column: $1.lastLoc.location.last_column - 1
-     }
-     if ($1.lastLoc !== $1.firstLoc) {
-        $1.firstLoc.type = 'database';
-     } else {
-       delete $1.lastLoc.identifierChain;
-     }
-     if ($2.position) {
-       parser.applyArgumentTypesToSuggestions(fn, $2.position);
-     }
-     $$ = { types: parser.findReturnTypes(fn) };
-   }
- | ArbitraryFunctionName ArbitraryFunctionRightPart_EDIT
-   {
-     parser.addFunctionLocation(@1, $1);
-     if ($2.position) {
-       parser.applyArgumentTypesToSuggestions($1, $2.position);
-     }
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | UserDefinedFunction_EDIT
  ;
 
 ColumnOrArbitraryFunctionRef
@@ -2337,7 +2198,7 @@ UnsignedValueSpecification_EDIT
  ;
 
 UnsignedLiteral
- : UnsignedNumericLiteral  -> { types: [ 'NUMBER' ] }
+ : UnsignedNumericLiteral  -> { types: [ 'NUMBER' ], text: $1 }
  | GeneralLiteral
  ;
 
@@ -2358,9 +2219,9 @@ ExactNumericLiteral
  ;
 
 ApproximateNumericLiteral
- : UNSIGNED_INTEGER_E 'UNSIGNED_INTEGER'
- | '.' UNSIGNED_INTEGER_E 'UNSIGNED_INTEGER'
- | 'UNSIGNED_INTEGER' '.' UNSIGNED_INTEGER_E 'UNSIGNED_INTEGER'
+ : UNSIGNED_INTEGER_E 'UNSIGNED_INTEGER'                        -> $1 + $2
+ | '.' UNSIGNED_INTEGER_E 'UNSIGNED_INTEGER'                    -> $1 + $2 + $3
+ | 'UNSIGNED_INTEGER' '.' UNSIGNED_INTEGER_E 'UNSIGNED_INTEGER' -> $1 + $2 + $3 + $4
  ;
 
 GeneralLiteral
@@ -2368,7 +2229,7 @@ GeneralLiteral
    {
      if (/\$\{[^}]*\}/.test($1)) {
        parser.addVariableLocation(@1, $1);
-       $$ = { types: [ 'STRING' ], columnReference: [{ name: $1 }] }
+       $$ = { types: [ 'STRING' ], columnReference: [{ name: $1 }], text: "'" + $1 + "'" }
      } else {
        $$ = { types: [ 'STRING' ] }
      }
@@ -2377,12 +2238,12 @@ GeneralLiteral
    {
      if (/\$\{[^}]*\}/.test($1)) {
        parser.addVariableLocation(@1, $1);
-       $$ = { types: [ 'STRING' ], columnReference: [{ name: $1 }] }
+       $$ = { types: [ 'STRING' ], columnReference: [{ name: $1 }], text: '"' + $1 + '"' }
      } else {
-       $$ = { types: [ 'STRING' ] }
+       $$ = { types: [ 'STRING' ], text: '"' + $1 + '"' }
      }
    }
- | TruthValue         -> { types: [ 'BOOLEAN' ] }
+ | TruthValue         -> { types: [ 'BOOLEAN' ], text: $1 }
  ;
 
 GeneralLiteral_EDIT
@@ -2415,7 +2276,7 @@ SelectSpecification
        if (!parser.yy.selectListAliases) {
          parser.yy.selectListAliases = [];
        }
-       parser.yy.selectListAliases.push({ name: $2.alias, types: $1.types || ['T'] });
+       parser.yy.selectListAliases.push($1.function && $1.types && $1.types.length && $1.types[0] === 'UDFREF' ? { name: $2.alias, udfRef: $1.function, types: $1.types } : { name: $2.alias, types: $1.types || ['T'] });
      } else {
        $$ = { valueExpression: $1 }
      }
@@ -2983,152 +2844,6 @@ OptionalLateralViews_EDIT
  : OptionalLateralViews LateralView_EDIT OptionalLateralViews
  ;
 
-UserDefinedFunction
- : AggregateFunction OptionalOverClause
-   {
-     if (!$2) {
-       $1.suggestKeywords = ['OVER'];
-     }
-   }
- | AnalyticFunction OverClause
- | CastFunction
- | ExtractFunction
- ;
-
-UserDefinedFunction_EDIT
- : AggregateFunction_EDIT
- | AggregateFunction OptionalOverClause_EDIT
- | AnalyticFunction_EDIT
- | AnalyticFunction_EDIT OverClause
- | AnalyticFunction 'CURSOR'
-   {
-     parser.suggestKeywords(['OVER']);
-   }
- | AnalyticFunction OverClause_EDIT
- | CastFunction_EDIT
- | ExtractFunction_EDIT
- ;
-
-ArbitraryFunction
- : RegularIdentifier ArbitraryFunctionRightPart
-   {
-     parser.addFunctionLocation(@1, $1);
-     if ($2.expression) {
-       $$ = { function: $1, expression: $2.expression, types: parser.findReturnTypes($1) }
-     } else {
-       $$ = { function: $1, types: parser.findReturnTypes($1) }
-     }
-   }
- | ArbitraryFunctionName ArbitraryFunctionRightPart
-   {
-     parser.addFunctionLocation(@1, $1);
-     if ($2.expression) {
-       $$ = { function: $1, expression: $2.expression, types: parser.findReturnTypes($1) }
-     } else {
-       $$ = { function: $1, types: parser.findReturnTypes($1) }
-     }
-   }
- ;
-
-ArbitraryFunction_EDIT
- : RegularIdentifier ArbitraryFunctionRightPart_EDIT
-   {
-     parser.addFunctionLocation(@1, $1);
-     if ($2.position) {
-       parser.applyArgumentTypesToSuggestions($1, $2.position);
-     }
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | ArbitraryFunctionName ArbitraryFunctionRightPart_EDIT
-   {
-     parser.addFunctionLocation(@1, $1);
-     if ($2.position) {
-       parser.applyArgumentTypesToSuggestions($1, $2.position);
-     }
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- ;
-
-ArbitraryFunctionName
- : 'ARRAY'
- | 'BINARY'
- | 'IF'
- | 'MAP'
- | 'TRUNCATE'
- ;
-
-ArbitraryFunctionRightPart
- : '(' ')'
- | '(' ValueExpressionList ')'  -> { expression: $2 }
- ;
-
-ArbitraryFunctionRightPart_EDIT
- : '(' AnyCursor RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     $$ = { position: 1 }
-   }
- | '(' ValueExpressionList 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($3);
-   }
- | '(' ValueExpressionList_EDIT RightParenthesisOrError      -> $2
- ;
-
-AggregateFunction
- : CountFunction
- | SumFunction
- | OtherAggregateFunction
- ;
-
-AggregateFunction_EDIT
- : CountFunction_EDIT
- | SumFunction_EDIT
- | OtherAggregateFunction_EDIT
- ;
-
-AnalyticFunction
- : 'ANALYTIC' '(' ')'                      -> { types: parser.findReturnTypes($1) }
- | 'ANALYTIC' '(' ValueExpressionList ')'  -> { function: $1, expression: $2, types: parser.findReturnTypes($1) }
- ;
-
-AnalyticFunction_EDIT
- : 'ANALYTIC' '(' AnyCursor RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     parser.applyArgumentTypesToSuggestions($1, 1);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | 'ANALYTIC' '(' ValueExpressionList 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($3);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | 'ANALYTIC' '(' ValueExpressionList_EDIT RightParenthesisOrError
-   {
-     parser.applyArgumentTypesToSuggestions($1, $3.position);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- ;
-
-OptionalOverClause
- :
- | OverClause
- ;
-
-OptionalOverClause_EDIT
- : OverClause_EDIT
- ;
-
-OverClause
- : 'OVER' RegularOrBacktickedIdentifier
- | 'OVER' WindowExpression
- ;
-
-OverClause_EDIT
- : 'OVER' WindowExpression_EDIT
- ;
-
 WindowExpression
  : '(' OptionalPartitionBy OptionalOrderByAndWindow ')'
  ;
@@ -3371,246 +3086,6 @@ WindowClause_EDIT
      parser.suggestKeywords(['AS']);
    }
  | 'WINDOW' RegularOrBacktickedIdentifier 'AS' WindowExpression_EDIT
- ;
-
-CastFunction
- : 'CAST' '(' ValueExpression 'AS' PrimitiveType ')'  -> { types: [ $5.toUpperCase() ] }
- | 'CAST' '(' ')'                                      -> { types: [ 'T' ] }
- ;
-
-CastFunction_EDIT
- : 'CAST' '(' AnyCursor 'AS' PrimitiveType RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     $$ = { types: [ $5.toUpperCase() ] };
-   }
- | 'CAST' '(' AnyCursor 'AS' RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     $$ = { types: [ 'T' ] };
-   }
- | 'CAST' '(' AnyCursor RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     $$ = { types: [ 'T' ] };
-   }
- | 'CAST' '(' ValueExpression_EDIT 'AS' PrimitiveType RightParenthesisOrError  -> { types: [ $5.toUpperCase() ] }
- | 'CAST' '(' ValueExpression_EDIT 'AS' RightParenthesisOrError                -> { types: [ 'T' ] }
- | 'CAST' '(' ValueExpression_EDIT RightParenthesisOrError                      -> { types: [ 'T' ] }
- | 'CAST' '(' ValueExpression 'CURSOR' PrimitiveType RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($3, [{ value: 'AS', weight: 2 }]);
-     $$ =  { types: [ $5.toUpperCase() ] };
-   }
- | 'CAST' '(' ValueExpression 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($3, [{ value: 'AS', weight: 2 }]);
-     $$ = { types: [ 'T' ] };
-   }
- | 'CAST' '(' ValueExpression 'AS' 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestKeywords(parser.getTypeKeywords());
-     $$ = { types: [ 'T' ] };
-   }
- | 'CAST' '(' 'AS' 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestKeywords(parser.getTypeKeywords());
-     $$ = { types: [ 'T' ] };
-   }
- ;
-
-CountFunction
- : 'COUNT' '(' '*' ')'                                        -> { types: parser.findReturnTypes($1) }
- | 'COUNT' '(' ')'                                            -> { types: parser.findReturnTypes($1) }
- | 'COUNT' '(' OptionalAllOrDistinct ValueExpressionList ')'  -> { types: parser.findReturnTypes($1) }
- ;
-
-CountFunction_EDIT
- : 'COUNT' '(' OptionalAllOrDistinct AnyCursor RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     var keywords = parser.getSelectListKeywords();
-     if (!$3) {
-       keywords.push('DISTINCT');
-       if (parser.yy.result.suggestKeywords) {
-         keywords = parser.yy.result.suggestKeywords.concat(keywords);
-       }
-     }
-     parser.suggestKeywords(keywords);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | 'COUNT' '(' OptionalAllOrDistinct ValueExpressionList 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($4);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | 'COUNT' '(' OptionalAllOrDistinct ValueExpressionList_EDIT RightParenthesisOrError
-   {
-     if ($4.cursorAtStart) {
-       var keywords = parser.getSelectListKeywords();
-       if (!$3) {
-         keywords.push('DISTINCT');
-       }
-       parser.suggestKeywords(keywords);
-     }
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- ;
-
-ExtractFunction
- : 'EXTRACT' '(' DateField 'FROM' ValueExpression ')'  -> { types: ['INT', 'INTEGER'] }
- ;
-
-ExtractFunction_EDIT
- : 'EXTRACT' '(' AnyCursor RightParenthesisOrError
-   {
-     parser.suggestKeywords(['DAY', 'DAYOFWEEK', 'HOUR', 'MINUTE', 'MONTH', 'QUARTER', 'SECOND', 'WEEK', 'YEAR']);
-     $$ = { types: ['INT', 'INTEGER'] }
-   }
- | 'EXTRACT' '(' DateField 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestKeywords(['FROM']);
-     $$ = { types: ['INT', 'INTEGER'] }
-   }
- | 'EXTRACT' '(' DateField 'FROM' 'CURSOR' RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     $$ = { types: ['INT', 'INTEGER'] }
-   }
- | 'EXTRACT' '(' DateField 'FROM' ValueExpression_EDIT RightParenthesisOrError  -> { types: ['INT', 'INTEGER'] }
- | 'EXTRACT' '(' AnyCursor 'FROM' ValueExpression RightParenthesisOrError
-   {
-      parser.suggestKeywords(['DAY', 'DAYOFWEEK', 'HOUR', 'MINUTE', 'MONTH', 'QUARTER', 'SECOND', 'WEEK', 'YEAR']);
-      $$ = { types: ['INT', 'INTEGER'] }
-   }
- | 'EXTRACT' '(' DateField 'CURSOR' ValueExpression RightParenthesisOrError
-   {
-     parser.suggestKeywords(['FROM']);
-     $$ = { types: ['INT', 'INTEGER'] }
-   }
- ;
-
-DateField
- : 'DAY'
- | 'DAYOFWEEK'
- | 'HOUR'
- | 'MINUTE'
- | 'MONTH'
- | 'QUARTER'
- | 'SECOND'
- | 'WEEK'
- | 'YEAR'
- ;
-
-OtherAggregateFunction
- : OtherAggregateFunction_Type '(' OptionalAllOrDistinct ')'                      -> { types: parser.findReturnTypes($1) }
- | OtherAggregateFunction_Type '(' OptionalAllOrDistinct ValueExpressionList ')'  -> { types: parser.findReturnTypes($1) }
- ;
-
-OtherAggregateFunction_EDIT
- : OtherAggregateFunction_Type '(' OptionalAllOrDistinct AnyCursor RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     var keywords = parser.getSelectListKeywords(true);
-     if (!$3) {
-       if ($1.toLowerCase() === 'group_concat') {
-         keywords.push('ALL');
-       } else {
-         keywords.push('DISTINCT');
-       }
-     }
-     if (parser.yy.result.suggestKeywords) {
-       keywords = parser.yy.result.suggestKeywords.concat(keywords);
-     }
-     parser.suggestKeywords(keywords);
-     parser.applyArgumentTypesToSuggestions($1, 1);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | OtherAggregateFunction_Type '(' OptionalAllOrDistinct ValueExpressionList 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($4);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | OtherAggregateFunction_Type '(' OptionalAllOrDistinct ValueExpressionList_EDIT RightParenthesisOrError
-   {
-     if ($4.cursorAtStart) {
-       var keywords = parser.getSelectListKeywords(true);
-       if (!$3) {
-         if ($1.toLowerCase() === 'group_concat') {
-           keywords.push('ALL');
-         } else {
-           keywords.push('DISTINCT');
-         }
-       }
-       if (parser.yy.result.suggestKeywords) {
-         keywords = parser.yy.result.suggestKeywords.concat(keywords);
-       }
-       parser.suggestKeywords(keywords);
-     }
-     if (parser.yy.result.suggestFunctions && !parser.yy.result.suggestFunctions.types) {
-       parser.applyArgumentTypesToSuggestions($1, $4.position);
-     }
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- ;
-
-OtherAggregateFunction_Type
- : 'AVG'
- | 'COLLECT_LIST'
- | 'COLLECT_SET'
- | 'CORR'
- | 'COVAR_POP'
- | 'COVAR_SAMP'
- | 'HISTOGRAM_NUMERIC'
- | 'MAX'
- | 'MIN'
- | 'NTILE'
- | 'PERCENTILE'
- | 'PERCENTILE_APPROX'
- | 'STDDEV_POP'
- | 'STDDEV_SAMP'
- | 'VAR_POP'
- | 'VAR_SAMP'
- | 'VARIANCE'
- ;
-
-FromOrComma
- : 'FROM'
- | ','
- ;
-
-SumFunction
- : 'SUM' '(' OptionalAllOrDistinct ValueExpression ')'  -> { types: parser.findReturnTypes($1) }
- | 'SUM' '(' ')'                                        -> { types: parser.findReturnTypes($1) }
- ;
-
-SumFunction_EDIT
- : 'SUM' '(' OptionalAllOrDistinct AnyCursor RightParenthesisOrError
-   {
-     parser.valueExpressionSuggest();
-     parser.applyArgumentTypesToSuggestions($1, 1);
-     var keywords = parser.getSelectListKeywords(true);
-     if (!$3) {
-       keywords.push('DISTINCT');
-     }
-     if (parser.yy.result.suggestKeywords) {
-       keywords = parser.yy.result.suggestKeywords.concat(keywords);
-     }
-     parser.suggestKeywords(keywords);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | 'SUM' '(' OptionalAllOrDistinct ValueExpression 'CURSOR' RightParenthesisOrError
-   {
-     parser.suggestValueExpressionKeywords($4);
-     $$ = { types: parser.findReturnTypes($1) };
-   }
- | 'SUM' '(' OptionalAllOrDistinct ValueExpression_EDIT RightParenthesisOrError
-   {
-     if (parser.yy.result.suggestFunctions && ! parser.yy.result.suggestFunctions.types) {
-       parser.applyArgumentTypesToSuggestions($1, 1);
-     }
-     $$ = { types: parser.findReturnTypes($1) };
-   }
  ;
 
 LateralView

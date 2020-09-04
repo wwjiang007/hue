@@ -19,18 +19,18 @@ import logging
 
 from django.utils.translation import ugettext as _
 
-from desktop.conf import CLUSTER_ID
+from desktop.conf import CLUSTER_ID, has_connectors
 from desktop.lib.exceptions_renderable import PopupException
 from desktop.lib.i18n import smart_str
-from desktop.models import Cluster, ClusterConfig
+from desktop.models import Cluster
 from beeswax.design import hql_query
 from beeswax.models import QUERY_TYPES
 from beeswax.server import dbms
-from beeswax.server.dbms import HiveServer2Dbms, QueryServerException, QueryServerTimeoutException,\
+from beeswax.server.dbms import HiveServer2Dbms, QueryServerException, QueryServerTimeoutException, \
   get_query_server_config as beeswax_query_server_config, get_query_server_config_via_connector
-from notebook.conf import get_ordered_interpreters
 
 from impala import conf
+from impala.impala_flags import get_hs2_http_port
 
 
 LOG = logging.getLogger(__name__)
@@ -40,18 +40,26 @@ def get_query_server_config(connector=None):
   if connector and has_connectors():
     query_server = get_query_server_config_via_connector(connector)
   else:
+    server_port = get_hs2_http_port() if conf.USE_THRIFT_HTTP.get() else conf.SERVER_PORT.get()
     query_server = {
         'server_name': 'impala',
+        'dialect': 'impala',
         'server_host': conf.SERVER_HOST.get(),
-        'server_port': conf.SERVER_PORT.get(),
+        'server_port': server_port,
         'principal': conf.IMPALA_PRINCIPAL.get(),
+        'http_url': '%(protocol)s://%(host)s:%(port)s' % {
+            'protocol': 'https' if conf.SSL.ENABLED.get() else 'http',
+            'host': conf.SERVER_HOST.get(),
+            'port': server_port
+          },
         'impersonation_enabled': conf.IMPERSONATION_ENABLED.get(),
         'querycache_rows': conf.QUERYCACHE_ROWS.get(),
         'QUERY_TIMEOUT_S': conf.QUERY_TIMEOUT_S.get(),
         'SESSION_TIMEOUT_S': conf.SESSION_TIMEOUT_S.get(),
         'auth_username': conf.AUTH_USERNAME.get(),
         'auth_password': conf.AUTH_PASSWORD.get(),
-        'use_sasl': conf.USE_SASL.get()
+        'use_sasl': conf.USE_SASL.get(),
+        'transport_mode': 'http' if conf.USE_THRIFT_HTTP.get() else 'socket',
     }
 
   debug_query_server = query_server.copy()
@@ -96,6 +104,7 @@ class ImpalaDbms(HiveServer2Dbms):
     return 'SELECT histogram(%s) FROM %s' % (select_clause, from_clause)
 
 
+  # Deprecated
   def invalidate(self, database=None, table=None, flush_all=False):
     handle = None
 

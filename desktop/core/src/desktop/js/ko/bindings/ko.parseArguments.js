@@ -18,20 +18,22 @@ import $ from 'jquery';
 import * as ko from 'knockout';
 
 ko.bindingHandlers.parseArguments = {
-  init: function(element, valueAccessor) {
+  init: function (element, valueAccessor) {
     const $el = $(element);
 
     function splitStrings(str) {
       const bits = [];
       let isInQuotes = false;
       let tempStr = '';
+      let charQuote = null;
       str
         .replace(/<\/?arg>|<\/?command>/gi, ' ')
         .replace(/\r?\n|\r/g, '')
         .replace(/\s\s+/g, ' ')
         .split('')
         .forEach(char => {
-          if (char === '"' || char === "'") {
+          if ((char === '"' || char === "'") && (!charQuote || charQuote == char)) {
+            charQuote = isInQuotes ? null : char;
             isInQuotes = !isInQuotes;
           } else if ((char === ' ' || char === '\n') && !isInQuotes && tempStr !== '') {
             bits.push(tempStr);

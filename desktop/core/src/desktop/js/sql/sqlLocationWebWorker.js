@@ -56,11 +56,11 @@ const onMessage = msg => {
   clearTimeout(throttle);
   throttle = setTimeout(() => {
     if (msg.data.statementDetails) {
-      sqlParserRepository.getAutocompleter(msg.data.type).then(parser => {
+      sqlParserRepository.getAutocompleter(msg.data.connector.dialect).then(parser => {
         let locations = [];
         const activeStatementLocations = [];
         msg.data.statementDetails.precedingStatements.forEach(statement => {
-          handleStatement(statement, locations, msg.data.type, false);
+          handleStatement(statement, locations, parser, false);
         });
         if (msg.data.statementDetails.activeStatement) {
           handleStatement(
@@ -72,7 +72,7 @@ const onMessage = msg => {
           locations = locations.concat(activeStatementLocations);
         }
         msg.data.statementDetails.followingStatements.forEach(statement => {
-          handleStatement(statement, locations, msg.data.type, false);
+          handleStatement(statement, locations, parser, false);
         });
 
         // Add databases where missing in the table identifier chains
@@ -102,7 +102,7 @@ const onMessage = msg => {
 
         postMessage({
           id: msg.data.id,
-          sourceType: msg.data.type,
+          connector: msg.data.connector,
           namespace: msg.data.namespace,
           compute: msg.data.compute,
           editorChangeTime: msg.data.statementDetails.editorChangeTime,

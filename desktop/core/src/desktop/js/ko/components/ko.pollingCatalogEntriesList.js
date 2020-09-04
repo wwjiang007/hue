@@ -52,7 +52,7 @@ class PollingCatalogEntriesList {
    *   compute: ko.observable({ id: 'default' }),
    *   path: ko.observable('default.foo'),
    *   refreshSampleInterval: 3000
-   * }}" />
+   * }}"></div>
    *
    * @param params
    * @constructor
@@ -98,7 +98,7 @@ class PollingCatalogEntriesList {
     const self = this;
     window.clearTimeout(self.pollTimeout);
 
-    const pollInternal = function() {
+    const pollInternal = function () {
       self.pollCount++;
       if (self.catalogEntry()) {
         self.lastPollSourceMetaPromise = self
@@ -140,9 +140,9 @@ class PollingCatalogEntriesList {
 
     dataCatalog
       .getEntry({
-        sourceType: ko.unwrap(self.sourceType),
         namespace: ko.unwrap(self.namespace),
         compute: ko.unwrap(self.compute),
+        connector: { id: ko.unwrap(self.sourceType) }, // TODO: Use connectors in polling catalog entries list
         path: ko.unwrap(self.path)
       })
       .done(catalogEntry => {

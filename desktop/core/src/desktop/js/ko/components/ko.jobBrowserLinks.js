@@ -60,7 +60,7 @@ class JobBrowserPanel {
     const $jobsPanel = $('#jobsPanel');
     const $toggle = $('.btn-toggle-jobs-panel');
 
-    const reposition = function() {
+    const reposition = function () {
       $jobsPanel.css('top', $toggle.offset().top + $toggle.height() + 15 + 'px');
       $jobsPanel.css('left', $container.offset().left + $container.width() - 630 + 'px');
     };
@@ -96,7 +96,7 @@ class JobBrowserPanel {
       }
     });
 
-    self.jobCounts = ko.observable({ yarn: 0, schedules: 0 });
+    self.jobCounts = ko.observable({ yarn: 0, schedules: 0, history: 0 });
     self.jobCount = ko.pureComputed(() => {
       let total = 0;
       Object.keys(self.jobCounts()).forEach(value => {
@@ -107,7 +107,7 @@ class JobBrowserPanel {
     self.onePageViewModel = params.onePageViewModel;
 
     let lastYarnBrowserRequest = null;
-    const checkYarnBrowserStatus = function() {
+    const checkYarnBrowserStatus = function () {
       return $.post('/jobbrowser/jobs/', {
         format: 'json',
         state: 'running',
@@ -125,9 +125,9 @@ class JobBrowserPanel {
         });
     };
     let lastScheduleBrowserRequest = undefined;
-    const checkScheduleBrowserStatus = function() {
+    const checkScheduleBrowserStatus = function () {
       return $.post(
-        '/jobbrowser/api/jobs',
+        '/scheduler/api/schedule/list',
         {
           interface: ko.mapping.toJSON('schedules'),
           filters: ko.mapping.toJSON([
@@ -146,16 +146,40 @@ class JobBrowserPanel {
         }
       );
     };
+    let lastHistoryBrowserRequest = null;
+    const checkHistoryBrowserStatus = function () {
+      return $.post('/jobbrowser/api/jobs/history', {
+        interface: ko.mapping.toJSON('history'),
+        filters: ko.mapping.toJSON([
+          { states: ['running'] },
+          { text: 'user:' + window.LOGGED_USERNAME },
+          { time: { time_value: 7, time_unit: 'days' } },
+          { pagination: { page: 1, offset: 1, limit: 1 } }
+        ])
+      })
+        .done(data => {
+          if (data != null && data.apps != null) {
+            self.jobCounts()['history'] = data.apps.length;
+            self.jobCounts.valueHasMutated();
+          }
+        })
+        .fail(response => {
+          console.warn(response);
+        });
+    };
 
     let checkJobBrowserStatusIdx = -1;
-    const checkJobBrowserStatus = function() {
+    const checkJobBrowserStatus = function () {
       lastYarnBrowserRequest = checkYarnBrowserStatus();
       if (window.ENABLE_QUERY_SCHEDULING) {
         lastScheduleBrowserRequest = checkScheduleBrowserStatus();
       }
+      if (window.ENABLE_HISTORY_V2) {
+        lastHistoryBrowserRequest = checkHistoryBrowserStatus();
+      }
 
       $.when
-        .apply($, [lastYarnBrowserRequest, lastScheduleBrowserRequest])
+        .apply($, [lastYarnBrowserRequest, lastScheduleBrowserRequest, lastHistoryBrowserRequest])
         .done(() => {
           window.clearTimeout(checkJobBrowserStatusIdx);
           checkJobBrowserStatusIdx = window.setTimeout(
@@ -171,11 +195,11 @@ class JobBrowserPanel {
     // Load the mini jobbrowser
     $.ajax({
       url: '/jobbrowser/apps?is_embeddable=true&is_mini=true',
-      beforeSend: function(xhr) {
+      beforeSend: function (xhr) {
         xhr.setRequestHeader('X-Requested-With', 'Hue');
       },
       dataType: 'html',
-      success: function(response) {
+      success: function (response) {
         params.onePageViewModel.processHeaders(response).done(rawHtml => {
           $('#mini_jobbrowser').html(rawHtml);
           //ko.bindingHandlers.delayedOverflow.init($('#mini_jobbrowser')[0]);
@@ -188,6 +212,7 @@ class JobBrowserPanel {
 
       huePubSub.subscribe('check.job.browser', checkYarnBrowserStatus);
       huePubSub.subscribe('check.schedules.browser', checkScheduleBrowserStatus);
+      huePubSub.subscribe('check.history.browser', checkHistoryBrowserStatus);
     }
   }
 }

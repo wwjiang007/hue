@@ -22,6 +22,7 @@ const AUTOCOMPLETE_MODULES = {
   calcite: () => import(/* webpackChunkName: "calcite-parser" */ 'parse/sql/calcite/calciteAutocompleteParser'),
   druid: () => import(/* webpackChunkName: "druid-parser" */ 'parse/sql/druid/druidAutocompleteParser'),
   elasticsearch: () => import(/* webpackChunkName: "elasticsearch-parser" */ 'parse/sql/elasticsearch/elasticsearchAutocompleteParser'),
+  flink: () => import(/* webpackChunkName: "flink-parser" */ 'parse/sql/flink/flinkAutocompleteParser'),
   generic: () => import(/* webpackChunkName: "generic-parser" */ 'parse/sql/generic/genericAutocompleteParser'),
   hive: () => import(/* webpackChunkName: "hive-parser" */ 'parse/sql/hive/hiveAutocompleteParser'),
   impala: () => import(/* webpackChunkName: "impala-parser" */ 'parse/sql/impala/impalaAutocompleteParser'),
@@ -33,6 +34,7 @@ const SYNTAX_MODULES = {
   calcite: () => import(/* webpackChunkName: "calcite-parser" */ 'parse/sql/calcite/calciteSyntaxParser'),
   druid: () => import(/* webpackChunkName: "druid-parser" */ 'parse/sql/druid/druidSyntaxParser'),
   elasticsearch: () => import(/* webpackChunkName: "elasticsearch-parser" */ 'parse/sql/elasticsearch/elasticsearchSyntaxParser'),
+  flink: () => import(/* webpackChunkName: "flink-parser" */ 'parse/sql/flink/flinkSyntaxParser'),
   generic: () => import(/* webpackChunkName: "generic-parser" */ 'parse/sql/generic/genericSyntaxParser'),
   hive: () => import(/* webpackChunkName: "hive-parser" */ 'parse/sql/hive/hiveSyntaxParser'),
   impala: () => import(/* webpackChunkName: "impala-parser" */ 'parse/sql/impala/impalaSyntaxParser'),
@@ -47,25 +49,25 @@ class SqlParserRepository {
     this.modulePromises = {};
   }
 
-  async getParser(sourceType, parserType) {
-    if (!this.modulePromises[sourceType + parserType]) {
+  async getParser(dialect, parserType) {
+    if (!this.modulePromises[dialect + parserType]) {
       const modules = parserType === 'Autocomplete' ? AUTOCOMPLETE_MODULES : SYNTAX_MODULES;
-      this.modulePromises[sourceType + parserType] = new Promise((resolve, reject) => {
-        const targetModule = modules[sourceType] || modules.generic;
+      this.modulePromises[dialect + parserType] = new Promise((resolve, reject) => {
+        const targetModule = modules[dialect] || modules.generic;
         targetModule()
           .then(module => resolve(module.default))
           .catch(reject);
       });
     }
-    return this.modulePromises[sourceType + parserType];
+    return this.modulePromises[dialect + parserType];
   }
 
-  async getAutocompleter(sourceType) {
-    return this.getParser(sourceType, 'Autocomplete');
+  async getAutocompleter(dialect) {
+    return this.getParser(dialect, 'Autocomplete');
   }
 
-  async getSyntaxParser(sourceType) {
-    return this.getParser(sourceType, 'Syntax');
+  async getSyntaxParser(dialect) {
+    return this.getParser(dialect, 'Syntax');
   }
 }
 

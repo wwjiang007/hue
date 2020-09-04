@@ -1,19 +1,40 @@
 ---
-title: "Autocompletes"
+title: "SQL Parsers"
 date: 2019-03-13T18:28:09-07:00
 draft: false
-weight: 2
+weight: 4
 ---
 
-This guide goes you through the steps necessary to create an autocompleter for any SQL dialect in Hue. The major benefits are:
+The parsers are the flagship part of Hue and power extremely advanced autocompletes and other [SQL functionalities](/user/querying/#autocomplete). They are running on the client side and comes with just a few megabytes of JavaScript that are cached by the browser. This provides a very reactive experience to the end user and allows to [import them](#using-hue-parsers-in-your-project) as classic JavaScript modules for your own development needs.
 
-* showing only valid syntax in the autocomplete
-* getting the list of tables, columns automatically
-* proper syntax highlighting of the keywords
+While the dynamic content like the list of tables, columns is obviously fetched via [remote endpoints](#sql-querying), all the SQL knowledge of the statements is available.
+
+The main dialects are:
+
+*  Apache Hive
+*  Apache Impala
+*  Presto
+*  Apache Calcite
+
+But there are more! See all the currently shipped [SQL dialects](https://github.com/cloudera/hue/tree/master/desktop/core/src/desktop/js/parse/sql).
+
+This guide takes you through the steps necessary to create an autocompleter for any [SQL dialect](/administrator/configuration/connectors/#databases) in Hue. The major benefits are:
+
+* Proposing only valid syntax in the autocomplete
+* Getting the list of tables, columns, UDFs... automatically
+* Suggesting fixes
+* Diffing, formatting... queries
 
 ## Parser Theory
 
 There are several parsers in Hue already (e.g. one for Impala, one for Hive..) and a generic SQL that is used for other dialects. The parsers are written using a [bison](https://www.gnu.org/software/bison/) grammar and are generated with [jison](https://github.com/zaach/jison). They arere 100% Javascript and live on the client side, this gives the performance of a desktop editor in your browser.
+
+Building a dedicated work is more effort but it then allows a very rich end user experience, e.g.:
+
+* Handle invalid/incomplete queries and propose suggestions/fixes
+* date_column = <Date compatible UDF ...>
+* Language reference or data samples just by pointing the cursor on SQL identifiers
+* Leverage the parser for risk alerts (e.g. adding automatic LIMIT) or proper re-formatting
 
 ### Structure
 
@@ -71,6 +92,37 @@ In reality two parsers are generated per dialect, one for syntax and one for aut
 
 All the jison grammar files can be found [here](https://github.com/cloudera/hue/tree/master/desktop/core/src/desktop/js/parse/jison/sql) and the generated parsers are also committed together with their tests [here](https://github.com/cloudera/hue/tree/master/desktop/core/src/desktop/js/parse/sql).
 
+Parsers are sharing a maximum of the common syntax via some modules so that it is easy to improve the specificness of any of them while not starting from sratch.
+
+e.g. in [structure.json](https://github.com/cloudera/hue/blob/master/desktop/core/src/desktop/js/parse/jison/sql/hive/structure.json):
+
+    {
+      "lexer": "sql.jisonlex",
+      "autocomplete": [
+        "../generic/autocomplete_header.jison",
+        "abort/abort_transactions.jison",
+        "common/table_constraint.jison",
+        "alter/alter_common.jison",
+        "alter/alter_database.jison",
+        "alter/alter_index.jison",
+        "alter/alter_materialized_view.jison",
+        "alter/alter_table.jison",
+        "alter/alter_view.jison",
+        "analyze/analyze_table.jison",
+        ...
+      ],
+      "syntax": [
+        "../generic/syntax_header.jison",
+        "abort/abort_transactions.jison",
+        "common/table_constraint.jison",
+        "alter/alter_common.jison",
+        "alter/alter_database.jison",
+        "alter/alter_index.jison",
+        "alter/alter_materialized_view.jison",
+        ...
+      ]
+    }
+
 ### The grammar
 
 In a regular SQL parser you might define the grammar of a select statement like this:
@@ -108,7 +160,9 @@ For the statement above we’d add an extra rule with an _EDIT postfix like this
 
 So for example if a cursor without any text is encountered, it will tell us to suggest the ‘SELECT’ keyword etc.
 
-## Tutorial: Creating a PostgreSQL parser
+## Tutorial: Creating a parser
+
+The goal is to create from scratch a new parser for the PostgreSQL database.
 
 ### Prerequisites
 
@@ -151,7 +205,7 @@ This gives you an idea on how to add custom syntax to the newly generated postgr
 
 We’ll start by adding a test, in `postgresqlAutocompleteParser.test.js` in the test folder inside the main describe function before the first `it('should...`:
 
-    fdescribe('REINDEX', () => {
+    describe('REINDEX', () => {
       it('should handle "REINDEX TABLE foo FORCE; |"', () => {
         assertAutoComplete({
           beforeCursor: 'REINDEX TABLE foo FORCE;  ',
@@ -177,7 +231,12 @@ We’ll start by adding a test, in `postgresqlAutocompleteParser.test.js` in the
       });
     });
 
-When we now run `npm run test` there should be two failing tests.
+When we now run `npm run test -- postgresqlAutocompleteParser.test.js` there should be two failing tests.
+
+Alternatively, if using Jest directly and working on parsers currently being skipped in the CI, provide matching file names and an empty blacklist file pattern. e.g.:
+
+    jest calciteAutocompleteParser.Select.stream.test.js --testPathIgnorePatterns=[]
+    jest calciteAutocompleteParser --testPathIgnorePatterns=[]
 
 Next we’ll have to add the keyword to the lexer, let’s open `sql.jisonlex` in the jison folder for postgresql and add the following new tokens:
 
@@ -210,7 +269,7 @@ Now let’s add the grammar, starting with the complete specification. For simpl
 
 "DataDefinition" is an existing rule and this extends that rule with "ReindexStatement".
 
-Save the files and first run `node tools/jison/generateParsers.js postgresql` then `npm run test` and we should be down to one failing test.
+Save the files and first run `node tools/jison/generateParsers.js postgresql` then `npm run test -- postgresqlAutocompleteParser.test.js` and we should be down to one failing test.
 
 For the next one we’ll add some keyword suggestions after the user has typed REINDEX, we’ll continue below the ReindexStatement in `sql_main.jison`:
 
@@ -225,7 +284,7 @@ For the next one we’ll add some keyword suggestions after the user has typed R
       }
     ;
 
-Again, run `node tools/jison/generateParsers.js postgresql` then `npm run test` and the tests should both be green.
+Again, run `node tools/jison/generateParsers.js postgresql` then `npm run test -- postgresqlAutocompleteParser.test.js` and the tests should both be green.
 
 We also want the autocompleter to suggest the keyword REINDEX when the user hasn’t typed anything, to do that let’s first add the following test with the other new ones in `postgresqlAutocompleteParser.test.js`:
 
@@ -241,9 +300,9 @@ We also want the autocompleter to suggest the keyword REINDEX when the user hasn
       });
     });
 
-For this to pass we need to add REINDEX to the list of DDL and DML keywords in the file `sqlParseSupport.js` next to the generated parser (`desktop/core/src/desktop/js/parse/sql/postgresql/sqlParseSupport.js/`). Find the function `parser.suggestDdlAndDmlKeywords` and add ‘REINDEX’ to the keywords array. Now run `npm run test` and the three tests should pass.
+For this to pass we need to add REINDEX to the list of DDL and DML keywords in the file `sqlParseSupport.js` next to the generated parser (`desktop/core/src/desktop/js/parse/sql/postgresql/sqlParseSupport.js/`). Find the function `parser.suggestDdlAndDmlKeywords` and add ‘REINDEX’ to the keywords array. Now run `npm run test -- postgresqlAutocompleteParser.test.js` and the three tests should pass.
 
-Before you continue further be sure to remove the ‘f’ from ‘fdescribe’ in the spec to allow all other tests to run. Note that in this case there will be two new failing tests where the keyword ‘REINDEX’ has to be added.
+Before you continue further, note that in this case there will be two new failing tests where the keyword ‘REINDEX’ has to be added.
 
 In order to use the newly generated parsers we have to add them to the webpack bundles:
 
@@ -317,3 +376,7 @@ And cf. above [prerequisites](#prerequisites), any interpreter snippet with `ksq
         interface=ksql
 
 Note: after [HUE-8758](https://issues.cloudera.org/browse/HUE-8758) we will be able to have multiple interpreters on the same dialect (e.g. pointing to two different databases of the same type).
+
+## Reusing a parser in your project
+
+The parsers ship as a pluggable [component](/developer/components/parsers).
